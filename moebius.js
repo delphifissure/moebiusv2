@@ -6308,15 +6308,38 @@ root.MoebiusPlug=API;
 /* ===== RUNG LIVE PLUG: load band + valid masks at startup =============== */
 let bgBandImg = null, bgValidImg = null;
 // How the plug's `valid` (anchor-eligible = true background) mask is built:
-//   'split' — FG/BG split by depth: valid = ~band & (depth < currentInpaintingSplitDepthNorm).
+//   'auto'  — FG/BG split at an Otsu threshold computed from the depth histogram
+//             (over non-band pixels). valid = ~band & (depth < otsuThreshold).
 //             A GLOBAL depth threshold cleanly excludes thick foreground interiors
 //             (the whole troll body), which the shipped defaultBgValid.png and the
-//             locally-far anchor gate do NOT — that leak put ~6% of anchors at
-//             figure depth and pulled the plug toward the troll. Use the app's
-//             manual FG/BG split point as the classifier.
+//             locally-far anchor gate do NOT (that leak put ~6% of anchors at
+//             figure depth and pulled the plug toward the troll). Otsu picks the
+//             split automatically per-asset (no manual slider, no baked PNG) and
+//             separates cleanly on the bimodal figure-in-front-of-wall case.
+//   'split' — same split but from the app's manual point (currentInpaintingSplitDepthNorm).
 //   'png'   — legacy: load defaultBgValid.png (kept for A/B comparison).
-let bgValidMode = 'split';
-let bgSplitDefault = 0.35; // fallback split if currentInpaintingSplitDepthNorm is unset
+let bgValidMode = 'auto';
+let bgSplitDefault = 0.35; // fallback split if a threshold can't be computed
+// Otsu threshold (maximize between-class variance) over a value list in [0,1].
+function bgOtsuThreshold(values, skip) {
+    const B = 256, h = new Float64Array(B); let n = 0;
+    for (let k = 0; k < values.length; k++) {
+        if (skip && skip[k]) continue;
+        let b = (values[k] * B) | 0; if (b < 0) b = 0; else if (b > B - 1) b = B - 1;
+        h[b]++; n++;
+    }
+    if (!n) return bgSplitDefault;
+    let sum = 0; for (let i = 0; i < B; i++) sum += i * h[i];
+    let sumB = 0, wB = 0, mx = -1, thr = 0;
+    for (let i = 0; i < B; i++) {
+        wB += h[i]; if (!wB) continue; const wF = n - wB; if (!wF) break;
+        sumB += i * h[i];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > mx) { mx = between; thr = i; }
+    }
+    return thr / B;
+}
 (function(){
     const bImg = new Image(); bImg.onload = function(){
         bgBandImg = bImg;
@@ -7013,7 +7036,7 @@ function buildBackgroundLayer() {
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
-        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode === 'split')) {
+        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')) {
             try {
                 const t0 = Date.now();
                 // CRITICAL: run the plug at the asset's NATIVE resolution, NOT the
@@ -7071,15 +7094,20 @@ function buildBackgroundLayer() {
                 // build the valid (anchor-eligible = true background) mask
                 const valid = new Uint8Array(PN);
                 let validSrc;
-                if (bgValidMode === 'split') {
+                if (bgValidMode === 'auto' || bgValidMode === 'split') {
                     // FG/BG split by depth. depth is normalized 0=far..1=near, so
                     // background = depth below the split point. A band pixel is never
                     // an anchor (it is a hole being filled). This GLOBAL threshold
                     // excludes the whole foreground body, not just its rim.
-                    const splitNorm = (typeof currentInpaintingSplitDepthNorm === 'number')
-                        ? currentInpaintingSplitDepthNorm : bgSplitDefault;
+                    let splitNorm;
+                    if (bgValidMode === 'auto') {
+                        splitNorm = bgOtsuThreshold(depth, band); // Otsu over non-band depth
+                    } else {
+                        splitNorm = (typeof currentInpaintingSplitDepthNorm === 'number')
+                            ? currentInpaintingSplitDepthNorm : bgSplitDefault;
+                    }
                     for (let i = 0; i < PN; i++) valid[i] = (!band[i] && depth[i] < splitNorm) ? 1 : 0;
-                    validSrc = 'split<' + splitNorm.toFixed(3);
+                    validSrc = (bgValidMode === 'auto' ? 'otsu<' : 'split<') + splitNorm.toFixed(3);
                 } else {
                     // legacy: valid from defaultBgValid.png
                     cx.clearRect(0, 0, pw, ph);
