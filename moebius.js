@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.11-liveplug | VAR: live plug (verified JS port; valid=~fillset)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.11.1-liveplug | VAR: CPU plug from loaded band+valid PNGs', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5578,7 +5578,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.11-liveplug | VAR: CPU plug from verified JS port';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.11.1-liveplug | VAR: CPU plug from loaded PNGs (no GPU readback)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -6241,10 +6241,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = API;
 
 /* === END INLINED MODULE ============================================== */
 
-/* ===== RUNG LIVE: disocclusion plug module (verified JS port) ============
-   Computes the correct non-extruding plug from sharpened depth + band + valid.
-   Root cause of all prior port drift: valid must be ~fillset, NOT ~band.
-   Verified against v5: troll 0.022 (wall 0.000), woman 0.140 (wall 0.122). */
 /* plug_port.js — faithful port of the v5 plug algorithm.
    Requires: sharpened depth (Float32Array), band (Uint8Array), valid (Uint8Array).
    The valid mask = ~fillset, excluding all foreground from anchor selection.
@@ -6309,15 +6305,19 @@ root.MoebiusPlug=API;
 })(typeof self!=='undefined'?self:this);
 
 
-let bgValidImg = null;  // loaded from defaultBgValid.png at startup
+/* ===== RUNG LIVE PLUG: load band + valid masks at startup =============== */
+let bgBandImg = null, bgValidImg = null;
 (function(){
-    const img = new Image();
-    img.onload = function() {
-        bgValidImg = img;
-        console.log('[RUNG-PLUG] valid mask loaded (' + img.naturalWidth + 'x' + img.naturalHeight + ')');
-    };
-    img.onerror = function() { console.warn('[RUNG-PLUG] defaultBgValid.png missing; plug falls back to GPU path'); };
-    img.src = 'defaultBgValid.png';
+    const bImg = new Image(); bImg.onload = function(){
+        bgBandImg = bImg;
+        console.log('[RUNG-PLUG] band mask loaded (' + bImg.naturalWidth + 'x' + bImg.naturalHeight + ')');
+    }; bImg.onerror = function(){ console.warn('[RUNG-PLUG] defaultBgBand.png missing'); };
+    bImg.src = 'defaultBgBand.png';
+    const vImg = new Image(); vImg.onload = function(){
+        bgValidImg = vImg;
+        console.log('[RUNG-PLUG] valid mask loaded (' + vImg.naturalWidth + 'x' + vImg.naturalHeight + ')');
+    }; vImg.onerror = function(){ console.warn('[RUNG-PLUG] defaultBgValid.png missing'); };
+    vImg.src = 'defaultBgValid.png';
 })();
 
 // // RUNG P loader (v3.9.6 identity): the band-of-record loads at STARTUP,
@@ -7000,68 +7000,70 @@ function buildBackgroundLayer() {
         }
         const mat = L.mesh.material.clone();
         mat.uniforms.map.value = bgColorTarget.texture;
-        // RUNG LIVE PLUG: compute the correct plug on CPU from the GPU's
-        // band + the loaded valid mask, then bind as a DataTexture (linear
-        // float, no colorspace issues). Falls back to GPU path if unavailable.
+        // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
+        // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
-        if (typeof MoebiusPlug !== 'undefined' && bgValidImg && srcBandTargetA) {
+        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && bgValidImg) {
             try {
                 const t0 = Date.now();
-                // read sharpened depth from the layer
-                const dImg = L.textures.depth.image || (L.textures.depth.source && L.textures.depth.source.data);
                 const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
                 const cx = cv.getContext('2d', { willReadFrequently: true });
-                // depth
-                if (L.textures.depth.image && L.textures.depth.image.tagName) {
-                    cx.drawImage(L.textures.depth.image, 0, 0, w, h);
+                // read sharpened depth from the layer's depth texture
+                const dSrc = L.textures.depth;
+                if (dSrc.image && dSrc.image.tagName) {
+                    cx.drawImage(dSrc.image, 0, 0, w, h);
                 } else {
-                    // depth might be a DataTexture from live bake — read from its source
+                    // DataTexture from live bake — render to a temp target and read back
                     const rt = new THREE.WebGLRenderTarget(w, h, {type: THREE.UnsignedByteType});
-                    const copyM = new THREE.MeshBasicMaterial({map: L.textures.depth});
-                    const copyQ = new THREE.Mesh(new THREE.PlaneGeometry(2,2), copyM);
-                    const copyS = new THREE.Scene(); copyS.add(copyQ);
-                    const copyC = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-                    renderer.setRenderTarget(rt); renderer.render(copyS, copyC);
+                    const cm = new THREE.ShaderMaterial({uniforms:{t:{value:dSrc}},
+                        vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position,1.0);}',
+                        fragmentShader:'uniform sampler2D t;varying vec2 vUv;void main(){gl_FragColor=texture2D(t,vUv);}'});
+                    const q = new THREE.Mesh(new THREE.PlaneGeometry(2,2), cm);
+                    const s2 = new THREE.Scene(); s2.add(q);
+                    const c2 = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+                    renderer.setRenderTarget(rt); renderer.render(s2, c2);
                     const px = new Uint8Array(w*h*4);
                     renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
-                    rt.dispose(); copyM.dispose();
-                    const id = cx.createImageData(w,h);
-                    for(let i=0;i<w*h*4;i++) id.data[i]=px[i];
+                    rt.dispose(); cm.dispose();
+                    const id = cx.createImageData(w, h);
+                    for (let i = 0; i < w*h*4; i++) id.data[i] = px[i];
                     cx.putImageData(id, 0, 0);
                 }
                 const dpx = cx.getImageData(0, 0, w, h).data;
                 const depth = new Float32Array(w * h);
                 for (let i = 0; i < w * h; i++) depth[i] = dpx[i * 4] / 255;
-                // band from srcBandTargetA (GPU-computed, already correct)
-                const bandPx = new Uint8Array(w*h*4);
-                renderer.readRenderTargetPixels(srcBandTargetA, 0, 0, w, h, bandPx);
-                const band = new Uint8Array(w*h);
-                for (let i = 0; i < w*h; i++) band[i] = bandPx[i*4] > 128 ? 1 : 0;
-                // valid from loaded image
-                cx.clearRect(0,0,w,h);
+                // read band from loaded PNG (no GPU readback)
+                cx.clearRect(0, 0, w, h);
+                cx.drawImage(bgBandImg, 0, 0, w, h);
+                const bpx = cx.getImageData(0, 0, w, h).data;
+                const band = new Uint8Array(w * h);
+                for (let i = 0; i < w * h; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
+                // read valid from loaded PNG
+                cx.clearRect(0, 0, w, h);
                 cx.drawImage(bgValidImg, 0, 0, w, h);
-                const vpx = cx.getImageData(0,0,w,h).data;
-                const valid = new Uint8Array(w*h);
-                for (let i = 0; i < w*h; i++) valid[i] = vpx[i*4] > 128 ? 1 : 0;
+                const vpx = cx.getImageData(0, 0, w, h).data;
+                const valid = new Uint8Array(w * h);
+                for (let i = 0; i < w * h; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                let bandN=0,validN=0;
+                for(let i=0;i<w*h;i++){bandN+=band[i];validN+=valid[i];}
+                console.log('[RUNG-PLUG] inputs: depth ' + w + 'x' + h +
+                    ' band ' + bandN + 'px (' + (100*bandN/(w*h)).toFixed(1) + '%)' +
+                    ' valid ' + validN + 'px (' + (100*validN/(w*h)).toFixed(1) + '%)');
                 // RUN THE PLUG
                 const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, w, h, 220);
-                // write into a DataTexture (Float32, linear, no colorspace games)
-                const plugData = new Float32Array(w*h);
-                for (let i = 0; i < w*h; i++) plugData[i] = plugDepth[i];
-                const plugDT = new THREE.DataTexture(plugData, w, h, THREE.RedFormat, THREE.FloatType);
+                // Float32 DataTexture — no colorspace, no image decode
+                const plugDT = new THREE.DataTexture(plugDepth, w, h, THREE.RedFormat, THREE.FloatType);
                 plugDT.needsUpdate = true;
                 plugDT.minFilter = THREE.LinearFilter;
                 plugDT.magFilter = THREE.LinearFilter;
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
                 _plugTex = plugDT;
-                console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms at ' + w + 'x' + h +
-                    ' (band ' + Array.from(band).reduce((a,b)=>a+b,0) + 'px, valid ' +
-                    Array.from(valid).reduce((a,b)=>a+b,0) + 'px)');
+                console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
             }
         } else {
-            console.log('[RUNG-PLUG] module/valid not available, using GPU depth path');
+            console.log('[RUNG-PLUG] masks not loaded, using GPU depth path');
         }
         mat.uniforms.displacementMap.value = _plugTex;
         mat.uniforms.u_isBackgroundLayer.value = true;
