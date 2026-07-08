@@ -6320,6 +6320,13 @@ let bgBandImg = null, bgValidImg = null;
 //   'png'   — legacy: load defaultBgValid.png (kept for A/B comparison).
 let bgValidMode = 'auto';
 let bgSplitDefault = 0.35; // fallback split if a threshold can't be computed
+// Plug construction:
+//   'directional' — single directional plug: seal every disocclusion at the depth of
+//                   the FAR SIDE of its own edge (revealed rim), grown in by the edge's
+//                   parallax budget. Handles background AND glancing-foreground holes,
+//                   never protrudes, needs no band/valid PNG (band computed from depth).
+//   'global'      — legacy: band(PNG or live) + Otsu valid + harmonic (fg/bg only).
+let bgPlugMode = 'directional';
 // Otsu threshold (maximize between-class variance) over a value list in [0,1].
 function bgOtsuThreshold(values, skip) {
     const B = 256, h = new Float64Array(B); let n = 0;
@@ -6370,6 +6377,38 @@ function bgPullPushFill(cpx, valid, W, H) {
     const out=new Uint8Array(W*H*3), L0=levels[0];
     for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
     return out;
+}
+// DIRECTIONAL PLUG: the single plug that seals every disocclusion at the depth of
+// the FAR SIDE of its own edge (revealed rim) — background behind figures, nearer
+// surface for glancing foreground overlaps. Extrudes from the far background, grows
+// each edge's near-side strip in by that edge's parallax budget, caps at the rim,
+// harmonic-smooths, and is transparent outside the strips. depth = normalized
+// 0=far..1=near. Returns { plug: Float32Array, band: Uint8Array }.
+function bgDirectionalPlug(depth, W, H, opts) {
+    opts = opts || {};
+    const N = W*H, STEP = opts.step || 0.06, DELTA = opts.delta || 0.12, SWEEPS = opts.sweeps || 120;
+    // parallax px LUT (matches the app's parallaxCurve), used for per-edge budget
+    const lut = new Float32Array(1024);
+    for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
+        const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
+    const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
+    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), q = [];
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
+        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, isE=false;
+        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar)bestFar=depth[j]; } }
+        if (isE){ band[i]=1; rim[i]=bestFar; budget[i]=Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2; q.push(i); } }
+    for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
+        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
+        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; budget[j]=budget[i]-1; q.push(j); } } }
+    const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
+    const ring = new Uint8Array(N);
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
+        if((x>0&&!band[i-1])||(x<W-1&&!band[i+1])||(y>0&&!band[i-W])||(y<H-1&&!band[i+W])) ring[i]=1; }
+    let A=plug.slice(), B=plug.slice();
+    for (let s=0;s<SWEEPS;s++){ for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]){B[i]=A[i];continue;}
+        B[i]=0.25*(A[y*W+Math.max(0,x-1)]+A[y*W+Math.min(W-1,x+1)]+A[Math.max(0,y-1)*W+x]+A[Math.min(H-1,y+1)*W+x]); } const t=A;A=B;B=t; }
+    for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+    return { plug, band };
 }
 (function(){
     const bImg = new Image(); bImg.onload = function(){
@@ -7068,7 +7107,8 @@ function buildBackgroundLayer() {
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
-        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')) {
+        const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
+        if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
             try {
                 const t0 = Date.now();
                 // CRITICAL: run the plug at the asset's NATIVE resolution, NOT the
@@ -7082,8 +7122,8 @@ function buildBackgroundLayer() {
                 // depth image (== band/valid PNG native = 851x1023 on the reference).
                 const dSrc = L.textures.depth;
                 const dImg = dSrc.image;
-                const pw = (dImg && (dImg.naturalWidth || dImg.width)) || bgBandImg.naturalWidth;
-                const ph = (dImg && (dImg.naturalHeight || dImg.height)) || bgBandImg.naturalHeight;
+                const pw = (dImg && (dImg.naturalWidth || dImg.width)) || (bgBandImg && bgBandImg.naturalWidth) || w;
+                const ph = (dImg && (dImg.naturalHeight || dImg.height)) || (bgBandImg && bgBandImg.naturalHeight) || h;
                 const PN = pw * ph;
                 const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
                 const cx = cv.getContext('2d', { willReadFrequently: true });
@@ -7117,53 +7157,46 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
-                // read band from loaded PNG (no GPU readback)
-                cx.clearRect(0, 0, pw, ph);
-                cx.drawImage(bgBandImg, 0, 0, pw, ph);
-                const bpx = cx.getImageData(0, 0, pw, ph).data;
-                const band = new Uint8Array(PN);
-                for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
-                // Seam overlap: dilate the band a few px so the plug extends UNDER the
-                // figure's silhouette edge. When the figure parallaxes, the plug is
-                // already present beneath its (black ink) contour, so no thin dark seam
-                // opens between the cut FG edge and the BG plug (the §4.7 seam cut).
-                const SEAM_DILATE = 3;
-                for (let it = 0; it < SEAM_DILATE; it++) { const nb = band.slice();
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (band[i]) continue;
-                        if ((x>0&&band[i-1])||(x<pw-1&&band[i+1])||(y>0&&band[i-pw])||(y<ph-1&&band[i+pw])) nb[i]=1; }
-                    band.set(nb); }
-                // build the valid (anchor-eligible = true background) mask
-                const valid = new Uint8Array(PN);
-                let validSrc;
-                if (bgValidMode === 'auto' || bgValidMode === 'split') {
-                    // FG/BG split by depth. depth is normalized 0=far..1=near, so
-                    // background = depth below the split point. A band pixel is never
-                    // an anchor (it is a hole being filled). This GLOBAL threshold
-                    // excludes the whole foreground body, not just its rim.
-                    let splitNorm;
-                    if (bgValidMode === 'auto') {
-                        splitNorm = bgOtsuThreshold(depth, band); // Otsu over non-band depth
-                    } else {
-                        splitNorm = (typeof currentInpaintingSplitDepthNorm === 'number')
-                            ? currentInpaintingSplitDepthNorm : bgSplitDefault;
-                    }
-                    for (let i = 0; i < PN; i++) valid[i] = (!band[i] && depth[i] < splitNorm) ? 1 : 0;
-                    validSrc = (bgValidMode === 'auto' ? 'otsu<' : 'split<') + splitNorm.toFixed(3);
+                let band, plugDepth;
+                if (bgPlugMode === 'directional') {
+                    // Single directional plug computed straight from the depth: seal each
+                    // disocclusion at the far side of its own edge, grown in by the edge's
+                    // parallax budget. No band/valid PNG needed.
+                    const dr = bgDirectionalPlug(depth, pw, ph, {});
+                    band = dr.band; plugDepth = dr.plug;
+                    let bandN = 0; for (let i = 0; i < PN; i++) bandN += band[i];
+                    console.log('[RUNG-PLUG] inputs: directional plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
+                        ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)');
                 } else {
-                    // legacy: valid from defaultBgValid.png
+                    // legacy global fg/bg plug: band (PNG) + Otsu valid + harmonic
                     cx.clearRect(0, 0, pw, ph);
-                    cx.drawImage(bgValidImg, 0, 0, pw, ph);
-                    const vpx = cx.getImageData(0, 0, pw, ph).data;
-                    for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
-                    validSrc = 'png';
+                    cx.drawImage(bgBandImg, 0, 0, pw, ph);
+                    const bpx = cx.getImageData(0, 0, pw, ph).data;
+                    band = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
+                    const SEAM_DILATE = 3;
+                    for (let it = 0; it < SEAM_DILATE; it++) { const nb = band.slice();
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (band[i]) continue;
+                            if ((x>0&&band[i-1])||(x<pw-1&&band[i+1])||(y>0&&band[i-pw])||(y<ph-1&&band[i+pw])) nb[i]=1; }
+                        band.set(nb); }
+                    const valid = new Uint8Array(PN); let validSrc;
+                    if (bgValidMode === 'auto' || bgValidMode === 'split') {
+                        let splitNorm = (bgValidMode === 'auto') ? bgOtsuThreshold(depth, band)
+                            : ((typeof currentInpaintingSplitDepthNorm === 'number') ? currentInpaintingSplitDepthNorm : bgSplitDefault);
+                        for (let i = 0; i < PN; i++) valid[i] = (!band[i] && depth[i] < splitNorm) ? 1 : 0;
+                        validSrc = (bgValidMode === 'auto' ? 'otsu<' : 'split<') + splitNorm.toFixed(3);
+                    } else {
+                        cx.clearRect(0, 0, pw, ph); cx.drawImage(bgValidImg, 0, 0, pw, ph);
+                        const vpx = cx.getImageData(0, 0, pw, ph).data;
+                        for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                        validSrc = 'png';
+                    }
+                    let bandN=0,validN=0; for(let i=0;i<PN;i++){bandN+=band[i];validN+=valid[i];}
+                    console.log('[RUNG-PLUG] inputs: plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
+                        ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
+                        ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
+                    plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
                 }
-                let bandN=0,validN=0;
-                for(let i=0;i<PN;i++){bandN+=band[i];validN+=valid[i];}
-                console.log('[RUNG-PLUG] inputs: plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
-                    ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
-                    ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
-                // RUN THE PLUG
-                const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
                 // displacementMap is an image/canvas THREE.Texture (flipY=true), and
                 // this BG mesh reuses the FG geometry/UVs — so the plug must present
@@ -7198,7 +7231,7 @@ function buildBackgroundLayer() {
                     cx.drawImage(cImg2, 0, 0, pw, ph);
                     const cpx = cx.getImageData(0, 0, pw, ph).data;
                     const fillValid = new Uint8Array(PN);
-                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillValid[i] = (valid[i] && lum>=45) ? 1 : 0; }
+                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillValid[i] = (!band[i] && lum>=45) ? 1 : 0; }
                     const frgb = bgPullPushFill(cpx, fillValid, pw, ph);
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
