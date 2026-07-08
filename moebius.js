@@ -6340,6 +6340,37 @@ function bgOtsuThreshold(values, skip) {
     }
     return thr / B;
 }
+// Pull-push (pyramid) fill: diffuse the color of `valid` pixels into the rest,
+// streak-free (used to fill plug holes). cpx = RGBA source bytes, valid = Uint8
+// mask of usable source pixels. Returns a Uint8Array RGB (all pixels filled).
+function bgPullPushFill(cpx, valid, W, H) {
+    let levels = [];
+    let cw = new Float32Array(W*H*3), ww = new Float32Array(W*H);
+    for (let i=0;i<W*H;i++){ if(valid[i]){ ww[i]=1; cw[i*3]=cpx[i*4]; cw[i*3+1]=cpx[i*4+1]; cw[i*3+2]=cpx[i*4+2]; } }
+    levels.push({cw, ww, W, H});
+    while (levels[levels.length-1].W > 1 && levels[levels.length-1].H > 1) {
+        const p = levels[levels.length-1]; const nW=Math.max(1,p.W>>1), nH=Math.max(1,p.H>>1);
+        const ncw=new Float32Array(nW*nH*3), nww=new Float32Array(nW*nH);
+        for (let y=0;y<nH;y++) for (let x=0;x<nW;x++){ let sw=0,sr=0,sg=0,sb=0;
+            for (let dy=0;dy<2;dy++) for (let dx=0;dx<2;dx++){ const sx=Math.min(p.W-1,x*2+dx), sy=Math.min(p.H-1,y*2+dy); const si=sy*p.W+sx;
+                const w=p.ww[si]; sw+=w; sr+=p.cw[si*3]; sg+=p.cw[si*3+1]; sb+=p.cw[si*3+2]; }
+            const o=y*nW+x, wc=Math.min(1,sw); nww[o]=wc; if(sw>0){ ncw[o*3]=sr/sw*wc; ncw[o*3+1]=sg/sw*wc; ncw[o*3+2]=sb/sw*wc; } }
+        levels.push({cw:ncw, ww:nww, W:nW, H:nH});
+    }
+    function sample(c, fx, fy){ const x0=Math.floor(fx), y0=Math.floor(fy), x1=Math.min(c.W-1,x0+1), y1=Math.min(c.H-1,y0+1);
+        const tx=fx-x0, ty=fy-y0; let r=0,g=0,b=0,ws=0;
+        for (const [xx,yy,wt] of [[x0,y0,(1-tx)*(1-ty)],[x1,y0,tx*(1-ty)],[x0,y1,(1-tx)*ty],[x1,y1,tx*ty]]){
+            const o=Math.max(0,yy)*c.W+Math.max(0,xx), w=c.ww[o]; if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; } }
+        return ws>0 ? [r/ws,g/ws,b/ws] : null; }
+    for (let l=levels.length-2; l>=0; l--){ const fine=levels[l], coarse=levels[l+1];
+        for (let y=0;y<fine.H;y++) for (let x=0;x<fine.W;x++){ const o=y*fine.W+x;
+            if (fine.ww[o] < 0.999){ const s=sample(coarse,(x-0.5)/2,(y-0.5)/2); if(s){ const a=fine.ww[o];
+                fine.cw[o*3]+=s[0]*(1-a); fine.cw[o*3+1]+=s[1]*(1-a); fine.cw[o*3+2]+=s[2]*(1-a); fine.ww[o]=1; } } }
+    }
+    const out=new Uint8Array(W*H*3), L0=levels[0];
+    for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
+    return out;
+}
 (function(){
     const bImg = new Image(); bImg.onload = function(){
         bgBandImg = bImg;
@@ -7092,6 +7123,15 @@ function buildBackgroundLayer() {
                 const bpx = cx.getImageData(0, 0, pw, ph).data;
                 const band = new Uint8Array(PN);
                 for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
+                // Seam overlap: dilate the band a few px so the plug extends UNDER the
+                // figure's silhouette edge. When the figure parallaxes, the plug is
+                // already present beneath its (black ink) contour, so no thin dark seam
+                // opens between the cut FG edge and the BG plug (the §4.7 seam cut).
+                const SEAM_DILATE = 3;
+                for (let it = 0; it < SEAM_DILATE; it++) { const nb = band.slice();
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (band[i]) continue;
+                        if ((x>0&&band[i-1])||(x<pw-1&&band[i+1])||(y>0&&band[i-pw])||(y<ph-1&&band[i+pw])) nb[i]=1; }
+                    band.set(nb); }
                 // build the valid (anchor-eligible = true background) mask
                 const valid = new Uint8Array(PN);
                 let validSrc;
@@ -7145,30 +7185,25 @@ function buildBackgroundLayer() {
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
 
-                // --- FILL COLOR (Law 4): copy the nearest VALID background color into
-                // each band hole (2-pass chamfer over the source color). Keeps the
-                // painting's own pixels at the rim instead of the dark default wash /
-                // black holes. Alpha = band, so the BG material discards outside the
-                // plug (map.a < 0.01 -> discard). Rows flipped to match the plug.
+                // --- FILL COLOR (Law 4): pull-push (pyramid) fill diffuses the VALID
+                // background color into each hole — smooth, no streaks (the nearest-
+                // valid copy smeared a rim pixel down its column). Dark ink-contour
+                // pixels (Moebius ligne-claire outlines just outside the silhouette)
+                // are excluded from the fill SOURCE so they don't bleed a black halo
+                // into the reveal. Alpha = band, so the BG material discards outside
+                // the plug (map.a < 0.01). Rows flipped to match the plug orientation.
                 const cImg2 = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
                 if (cImg2) {
                     cx.clearRect(0, 0, pw, ph);
                     cx.drawImage(cImg2, 0, 0, pw, ph);
                     const cpx = cx.getImageData(0, 0, pw, ph).data;
-                    // nearest-valid source index via 2-pass 4-connected chamfer
-                    const src = new Int32Array(PN), cdst = new Float32Array(PN);
-                    for (let i = 0; i < PN; i++) { if (valid[i]) { cdst[i] = 0; src[i] = i; } else { cdst[i] = 1e9; src[i] = -1; } }
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        if (x>0){const j=i-1; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}}
-                        if (y>0){const j=i-pw; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}} }
-                    for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) { const i = y*pw+x;
-                        if (x<pw-1){const j=i+1; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}}
-                        if (y<ph-1){const j=i+pw; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}} }
+                    const fillValid = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillValid[i] = (valid[i] && lum>=45) ? 1 : 0; }
+                    const frgb = bgPullPushFill(cpx, fillValid, pw, ph);
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
-                        if (band[i]) { const s = (src[i] >= 0 ? src[i] : i) * 4;
-                            fill[o]=cpx[s]; fill[o+1]=cpx[s+1]; fill[o+2]=cpx[s+2]; fill[o+3]=255; }
+                        if (band[i]) { fill[o]=frgb[i*3]; fill[o+1]=frgb[i*3+1]; fill[o+2]=frgb[i*3+2]; fill[o+3]=255; }
                         // else leave alpha 0 (transparent -> discarded by the BG material)
                     }
                     const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -7177,7 +7212,7 @@ function buildBackgroundLayer() {
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
                     if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
                     _fillTex = fillDT;
-                    console.log('[RUNG-PLUG] fill: nearest-valid color built');
+                    console.log('[RUNG-PLUG] fill: pull-push (ink-excluded) built');
                 }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
