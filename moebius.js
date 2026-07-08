@@ -7036,6 +7036,7 @@ function buildBackgroundLayer() {
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
+        let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
         if (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')) {
             try {
                 const t0 = Date.now();
@@ -7143,6 +7144,41 @@ function buildBackgroundLayer() {
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
+
+                // --- FILL COLOR (Law 4): copy the nearest VALID background color into
+                // each band hole (2-pass chamfer over the source color). Keeps the
+                // painting's own pixels at the rim instead of the dark default wash /
+                // black holes. Alpha = band, so the BG material discards outside the
+                // plug (map.a < 0.01 -> discard). Rows flipped to match the plug.
+                const cImg2 = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
+                if (cImg2) {
+                    cx.clearRect(0, 0, pw, ph);
+                    cx.drawImage(cImg2, 0, 0, pw, ph);
+                    const cpx = cx.getImageData(0, 0, pw, ph).data;
+                    // nearest-valid source index via 2-pass 4-connected chamfer
+                    const src = new Int32Array(PN), cdst = new Float32Array(PN);
+                    for (let i = 0; i < PN; i++) { if (valid[i]) { cdst[i] = 0; src[i] = i; } else { cdst[i] = 1e9; src[i] = -1; } }
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                        if (x>0){const j=i-1; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}}
+                        if (y>0){const j=i-pw; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}} }
+                    for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) { const i = y*pw+x;
+                        if (x<pw-1){const j=i+1; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}}
+                        if (y<ph-1){const j=i+pw; if(cdst[j]+1<cdst[i]){cdst[i]=cdst[j]+1;src[i]=src[j];}} }
+                    const fill = new Uint8Array(PN * 4);
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
+                        if (band[i]) { const s = (src[i] >= 0 ? src[i] : i) * 4;
+                            fill[o]=cpx[s]; fill[o+1]=cpx[s+1]; fill[o+2]=cpx[s+2]; fill[o+3]=255; }
+                        // else leave alpha 0 (transparent -> discarded by the BG material)
+                    }
+                    const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    fillDT.needsUpdate = true; fillDT.flipY = false;
+                    fillDT.minFilter = THREE.LinearFilter; fillDT.magFilter = THREE.LinearFilter;
+                    if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
+                    if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
+                    _fillTex = fillDT;
+                    console.log('[RUNG-PLUG] fill: nearest-valid color built');
+                }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
             }
@@ -7150,6 +7186,7 @@ function buildBackgroundLayer() {
             console.log('[RUNG-PLUG] masks not loaded, using GPU depth path');
         }
         mat.uniforms.displacementMap.value = _plugTex;
+        if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
         // Tiny push back so the BG never z-fights the FG where their depths match.
