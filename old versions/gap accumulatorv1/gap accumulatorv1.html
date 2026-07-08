@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Moebius Strip with Face Tracking & Gyro</title>
+  <meta http-equiv="Content-Security-Policy"
+      content="script-src 'self' 'unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; worker-src blob:;">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <button id="toggleLeftMenuButton" title="Toggle Menu">✕</button>
+  
+  <div id="leftAccordionMenu">
+
+   <button class="accordion-button" title="Controls for the physical user and their environment.">👁️ Viewer Setup</button>
+    <div class="accordion-panel">
+      <div id="viewerControls" class="scrollable-panel-content">
+        <div class="video-container">
+          <video id="video" autoplay muted playsinline></video>
+          <canvas id="faceOverlayCanvas"></canvas>
+        </div>
+        <div id="transform" title="Displays face tracking coordinates or status."></div>
+
+        <h4 class="control-header">Headtracking</h4>
+        <div class="slider-container" title="Adjusts the sensitivity of camera movement based on face tracking.">
+          <label for="facetrackingScalarSlider">Facetracking Scalar:</label>
+          <input type="range" id="facetrackingScalarSlider" min="0" max="50" step="0.1" value="1">
+          <input type="number" id="facetrackingScalarInput" min="0" max="50" step="0.1" value="1" style="width: 60px; text-align: center;">
+          <span id="facetrackingScalarValue">1.00</span>
+        </div>
+
+        <h4 class="control-header">Screen</h4>
+        <div class="slider-container" style="flex-direction: column; align-items: flex-start;" title="Select a preset or enter your screen's physical diagonal size for accurate parallax scaling.">
+          <label for="screenSizePreset">Screen Size:</label>
+          
+          <div style="width: 100%;">
+            <select id="screenSizePreset" style="padding: 6px; border-radius: 0.25rem; border: 1px solid #ced4da; width: 100%;">
+              <optgroup label="Laptops">
+                <option value="16.2">MacBook Pro 16″</option>
+                <option value="15.3">MacBook Air 15″</option>
+                <option value="14.2">MacBook Pro 14″</option>
+                <option value="13.6">MacBook Air 13″</option>
+                <option value="15.6" selected>Laptop 15.6″ (Common)</option>
+                <option value="13.3">Laptop 13.3″ (Common)</option>
+              </optgroup>
+              <optgroup label="Tablets & Phones">
+                <option value="12.9">iPad Pro 12.9″</option>
+                <option value="11.0">iPad Pro 11″</option>
+                <option value="10.9">iPad Air 10.9″</option>
+                <option value="6.7">iPhone Pro Max</option>
+                <option value="6.1">iPhone Pro</option>
+              </optgroup>
+              <optgroup label="Displays & TVs">
+                <option value="27">Monitor 27″</option>
+                <option value="32">Monitor 32″</option>
+                <option value="55">TV 55″</option>
+                <option value="65">TV 65″</option>
+                <option value="75">TV 75″</option>
+              </optgroup>
+              <option value="custom">Custom...</option>
+            </select>
+          </div>
+          
+          <div style="width: 100%; padding-left: 10px; box-sizing: border-box; margin-top: 8px;">
+            <label for="screenDiagonalOverride" style="font-size: 0.85em; margin-bottom: 4px; display: block;">Custom (inches):</label>
+            <input type="number" id="screenDiagonalOverride" step="0.1" value="15.6" style="width: 120px; margin-top: 0; padding: 6px;">
+          </div>
+        </div>
+        </div>
+    </div>
+
+    <button class="accordion-button" title="Load and manage media layers.">🎬 Media</button>
+    <div class="accordion-panel">
+      <div id="mediaControls" class="scrollable-panel-content">
+        <button id="loadLayersButton" class="control-button" title="Load multiple composited media layers">Load Media Layers</button>
+      </div>
+    </div>
+
+    <button class="accordion-button" title="Controls for the virtual scene's 3D properties.">🏞️ Scene & Depth</button>
+    <div class="accordion-panel">
+      <div id="sceneControls" class="scrollable-panel-content">
+        <h4 class="control-header">Virtual Camera</h4>
+        <div class="slider-container" title="Enter camera properties to set a realistic baseline FOV.">
+          <label for="focalLengthInput">Camera Intrinsics:</label>
+          <div class="intrinsics-grid">
+            <span>Focal (mm):</span><input type="number" id="focalLengthInput" value="50" style="width: 80px;" title="35mm equivalent focal length">
+            <span>Sensor (mm):</span><input type="number" id="sensorWidthInput" value="36" style="width: 80px;" title="Sensor width in mm (36 for full frame)">
+            <span>vFOV (°):</span><input type="number" id="fovInput" value="27" style="width: 80px;" title="Vertical Field of View in degrees">
+          </div>
+        </div>
+
+        <h4 class="control-header">Scene Scale</h4>
+        <button id="setScaleButton" class="control-button" title="Click to define a real-world scale for the scene.">Set Scale</button>
+
+        <h4 class="control-header">Depth & Parallax</h4>
+        <div class="slider-container" title="Controls depth 'into' the screen from the portal plane.">
+          <label for="innerDepthSlider">Inner Depth:</label>
+          <input type="range" id="innerDepthSlider" min="0.001" max="0.3" step="0.001" value="0.04">
+          <span id="innerDepthSliderValue">0.040</span>
+        </div>
+        <div class="slider-container" title="Controls depth 'out of' the screen from the portal plane.">
+          <label for="outerDepthSlider">Outer Depth:</label>
+          <input type="range" id="outerDepthSlider" min="0.001" max="0.3" step="0.001" value="0.02">
+          <span id="outerDepthSliderValue">0.020</span>
+        </div>
+
+        <h4 class="control-header">Portal Controls</h4>
+        <div class="slider-container" title="Sets the normalized depth plane (0-1) that acts as the reference for the 3D effect.">
+          <label for="depthMidpointSlider">Norm. Portal (0-1):</label>
+          <input type="range" id="depthMidpointSlider" min="0" max="1" step="0.01" value="0.5">
+          <span id="depthMidpointValue">0.50</span>
+        </div>
+        <div class="slider-container" title="Adjusts the Z-position of the main portal plane.">
+          <label for="portalPlaneZSlider">Portal Z:</label>
+          <input type="range" id="portalPlaneZSlider" min="-0.2" max="0.2" step="0.001" value="0.0">
+          <span id="portalPlaneZSliderValue">0.000</span>
+        </div>
+        <div class="slider-container" title="Sets Z-position of subject's focal plane for dolly zoom subject lock.">
+          <label for="subjectFocalZSlider">Subject Focus Z:</label>
+          <input type="range" id="subjectFocalZSlider" min="-0.2" max="0.2" step="0.001" value="0.0">
+          <span id="subjectFocalZSliderValue">0.000</span>
+        </div>
+
+        <h4 class="control-header">Tools</h4>
+        <div class="slider-container depth-peek-section" title="Tools for inspecting and using specific depth values from the media.">
+          <label style="font-weight: bold;"><input type="checkbox" id="depthPeekActiveChk"> Enable Depth Peek</label>
+          <div class="slider-container">
+            <label for="depthPeekValueSlider">Peek Value:</label>
+            <input type="range" id="depthPeekValueSlider" min="0" max="1" step="0.005" value="0.5">
+            <span id="depthPeekValueSliderValue">0.500</span>
+          </div>
+          <div class="slider-container">
+            <label for="depthPeekToleranceSlider">Peek Tolerance:</label>
+            <input type="range" id="depthPeekToleranceSlider" min="0.001" max="0.05" step="0.001" value="0.02">
+            <span id="depthPeekToleranceSliderValue">0.020</span>
+          </div>
+          <button id="setPortalZFromPeek" class="control-button">Set Norm. Portal from Peek</button>
+          <button id="setSubjectFocusZFromPeek" class="control-button">Set Subject Focus from Peek</button>
+          <button id="setInpaintingSplitFromPeek" class="control-button" title="Set the Inpainting Split threshold to the current Peek Value.">Set Inpainting Split from Peek</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="accordion-button" title="Configure how gaps (disocclusions) are detected in the shader.">✂️ Gap Detection</button>
+    <div class="accordion-panel">
+      <div id="gapStrategyControls" class="scrollable-panel-content">
+        <p style="font-size: 0.9em; color: #666; margin-bottom: 10px;">
+          <strong>Generators</strong> create gaps. <strong>Inhibitors</strong> prevent them on continuous surfaces.
+        </p>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Fastest method. Uses hardware derivatives of depth.">
+            <input type="checkbox" id="useDepthGradCheck" checked> Depth Gradient (Basic)
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="depthGradThresholdSlider" min="0.001" max="0.2" step="0.001" value="0.02">
+            <span id="depthGradThresholdSliderValue">0.020</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Higher quality depth edge detection. Slower than gradient.">
+            <input type="checkbox" id="useSobelCheck"> 3x3 Sobel Depth
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="sobelThresholdSlider" min="0.01" max="1.0" step="0.01" value="0.1">
+            <span id="sobelThresholdSliderValue">0.10</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Detects sharp brightness changes in the texture itself.">
+            <input type="checkbox" id="useLumaCheck"> Luma Derivative (Detail)
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="lumaThresholdSlider" min="0.01" max="0.5" step="0.01" value="0.1">
+            <span id="lumaThresholdSliderValue">0.10</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Detects color edges even if brightness is similar.">
+            <input type="checkbox" id="useChromaCheck"> Chroma Derivative (Color)
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="chromaThresholdSlider" min="0.01" max="0.5" step="0.01" value="0.1">
+            <span id="chromaThresholdSliderValue">0.10</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Finds sharp internal creases or folds in the geometry.">
+            <input type="checkbox" id="useCreaseCheck"> Crease (Normals)
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="creaseThresholdSlider" min="0.01" max="1.0" step="0.01" value="0.2">
+            <span id="creaseThresholdSliderValue">0.20</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group generator">
+          <label class="gap-checkbox-label" title="Finds highly rounded ridges or valleys.">
+            <input type="checkbox" id="useCurvatureCheck"> Curvature
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="curvatureThresholdSlider" min="0.1" max="5.0" step="0.1" value="1.0">
+            <span id="curvatureThresholdSliderValue">1.0</span>
+          </div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+
+        <div class="gap-control-group inhibitor">
+          <label class="gap-checkbox-label" title="Prevents gaps on highly slanted surfaces (floors/walls).">
+            <input type="checkbox" id="useUVStretchCheck"> INHIBIT on UV Stretch
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="uvStretchThresholdSlider" min="0.01" max="2.0" step="0.01" value="0.5">
+            <span id="uvStretchThresholdSliderValue">0.50</span>
+          </div>
+        </div>
+
+        <div class="gap-control-group inhibitor">
+          <label class="gap-checkbox-label" title="Prevents gaps when viewing a surface edge-on.">
+            <input type="checkbox" id="useGrazingAngleCheck"> INHIBIT on Grazing Angle
+          </label>
+          <div class="slider-container compact">
+            <input type="range" id="grazingAngleThresholdSlider" min="0.01" max="1.0" step="0.01" value="0.2">
+            <span id="grazingAngleThresholdSliderValue">0.20</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button class="accordion-button" title="Controls for filling gaps created by parallax.">🖌️ Inpainting & Fill</button>
+    <div class="accordion-panel">
+      <div id="inpaintingControls" class="scrollable-panel-content">
+        <div class="slider-container" title="Enable/disable depth-aware inpainting to fill parallax gaps.">
+          <label style="font-weight: bold;"><input type="checkbox" id="useInpaintingCheckbox" checked> Enable Inpainting</label>
+        </div>
+
+        <div class="slider-container">
+          <label for="inpaintingMethodSelect">Inpainting Method:</label>
+          <select id="inpaintingMethodSelect" style="width: 100%; padding: 8px;">
+            <option value="pullpush" selected>Pull-Push (Depth-Aware)</option>
+            <option value="jfa">Jump Flood (JFA) - Fast</option>
+            <option value="dilation">Iterative Dilation - Legacy</option>
+            <option value="cutoff">Displacement Cutoff</option>
+            <option value="displacement">Displacement (No Fill)</option>
+          </select>
+        </div>
+        
+        <div class="slider-container" title="Displays the FG/BG split point (raw hardware depth). Hold SHIFT and click-drag on the scene to set this value.">
+          <label for="inpaintingSplitDepthNormSlider">Inpainting Split (Raw):</label>
+          <input type="range" id="inpaintingSplitDepthNormSlider" min="0" max="1" step="0.001" value="0.5">
+          <span id="inpaintingSplitDepthNormSliderValue">0.500</span>
+        </div>
+
+        <div class="slider-container">
+          <label for="debugViewSelect">Debug View:</label>
+          <select id="debugViewSelect">
+            <option value="final" selected>Final Result</option>
+            <option value="layer_mask">Show FG/BG Mask</option>
+            <option value="gaps">Show Gaps</option>
+            <option value="fg_layer">Show FG Layer (Raw)</option>
+            <option value="bg_layer">Show BG Layer (Raw)</option>
+            <option value="fg_inpainted">Show FG Layer (Inpainted)</option>
+            <option value="bg_inpainted">Show BG Layer (Inpainted)</option>
+            <option value="depth">Show Depth (Linearized)</option>
+            <option value="jfa">JFA Debug</option>
+            <option value="jfa_tolerance">JFA Tolerance Debug</option>
+            <option value="jfa_depth_compare">JFA Depth Compare</option>
+            <option value="pull_coarsest">PullPush Coarsest</option>
+            <option value="push_final">PullPush Final</option>
+          </select>
+        </div>
+
+        <h4 class="control-header">Gap Accumulation & Bake</h4>
+        <p style="font-size: 0.9em; color: #666; margin-bottom: 10px;">
+          Create a static, 3D infill atlas to replace real-time inpainting and eliminate shimmering.
+        </p>
+        
+        <button id="manualAccumulationButton" class="control-button" title="Manually 'paint' gaps by moving your head, then click again to bake." style="background-color: #17a2b8;">Start Live Sweep</button>
+        
+        <div class="slider-container" title="Max horizontal angle for auto-sweep.">
+          <label for="autoSweepAngleHorizSlider">Auto H-Angle (±):</label>
+          <input type="range" id="autoSweepAngleHorizSlider" min="30" max="90" step="1" value="45">
+          <span id="autoSweepAngleHorizSliderValue">45</span>
+        </div>
+        <div class="slider-container" title="Max vertical angle for auto-sweep.">
+          <label for="autoSweepAngleVertSlider">Auto V-Angle (±):</label>
+          <input type="range" id="autoSweepAngleVertSlider" min="10" max="30" step="1" value="20">
+          <span id="autoSweepAngleVertSliderValue">20</span>
+        </div>
+        
+        <button id="autoSweepQuickButton" class="control-button" title="Run a 5x5 grid sweep and bake.">Run Quick Bake (Grid)</button>
+        <button id="autoSweepFullButton" class="control-button" title="Run a 3-second continuous sweep and bake.">Run Full Bake (Continuous)</button>
+        <h4 class="control-header">Method-Specific Controls</h4>
+
+        <div id="dilationControls" style="display: none;">
+          <div class="slider-container" title="Controls how many passes the dilation algorithm makes. Higher values fill larger gaps but are slower.">
+            <label for="dilationIterationsSlider">Dilation Iterations:</label>
+            <input type="range" id="dilationIterationsSlider" min="1" max="32" step="1" value="16">
+            <span id="dilationIterationsSliderValue">16</span>
+          </div>
+        </div>
+        
+        <div id="cutoffControls" style="display: none;">
+          <div class="slider-container" title="Pixels displaced further than this distance (in meters) will be discarded.">
+            <label for="cutoffThresholdSlider">Cutoff Threshold (m):</label>
+            <input type="range" id="cutoffThresholdSlider" min="0.001" max="0.2" step="0.001" value="0.05">
+            <span id="cutoffThresholdSliderValue">0.050</span>
+          </div>
+        </div>
+
+        <div id="jfaControls" style="display: block;"> <div class="slider-container" title="Controls how strictly the inpainting respects depth differences. Lower values create more gaps/use less info.">
+            <label for="linearDepthToleranceSlider">JFA Depth Tolerance:</label>
+            <input type="range" id="linearDepthToleranceSlider" min="0.0" max="0.2" step="0.001" value="0.03">
+            <span id="linearDepthToleranceSliderValue">0.030</span>
+          </div>
+          <div id="pullPushSpecificControls" style="display: block;"> <div class="slider-container" title="Blends between blurry (0.0) and sharp (1.0) inpainting data.">
+              <label for="pushBlendSlider">Pull/Push Blend:</label>
+              <input type="range" id="pushBlendSlider" min="0.0" max="1.0" step="0.01" value="1.0">
+              <span id="pushBlendSliderValue">1.00</span>
+            </div>
+            <div class="slider-container" title="Limits the number of pyramid levels for inpainting. Fewer levels are faster but fill smaller gaps.">
+              <label for="maxPyramidLevelsSlider">Max Fill Levels:</label>
+              <input type="range" id="maxPyramidLevelsSlider" min="2" max="12" step="1" value="10">
+              <span id="maxPyramidLevelsSliderValue">10</span>
+            </div>
+            <div class="slider-container" title="Controls the inpainting fill quality kernel. 2 = 4-tap (Fast), 3 = 9-tap (Good), 4 = 16-tap (High), 5 = 25-tap (Ultra). Higher values are much slower.">
+              <label for="fillQualitySlider">Pull (Fill) Kernel:</label>
+              <input type="range" id="fillQualitySlider" min="2" max="5" step="1" value="3">
+              <span id="fillQualitySliderValue">3</span>
+            </div>
+            <div class="slider-container" title="Controls the falloff curve for depth weighting. > 1.0 = sharp falloff, < 1.0 = soft falloff.">
+              <label for="depthWeightPowerSlider">Depth Weight Power:</label>
+              <input type="range" id="depthWeightPowerSlider" min="0.1" max="5.0" step="0.1" value="1.0">
+              <span id="depthWeightPowerSliderValue">1.00</span>
+            </div>
+          </div>
+          <div id="jfaSpecificControls" style="display: none;"> <div class="slider-container" title="Controls the percentage of valid pixels used as JFA seeds. Lower values are faster but may reduce quality.">
+              <label for="jfaSeedDensitySlider">JFA Seed Density:</label>
+              <input type="range" id="jfaSeedDensitySlider" min="0.01" max="1.0" step="0.01" value="0.25">
+              <span id="jfaSeedDensitySliderValue">0.25</span>
+            </div>
+            <div class="slider-container" title="Controls the size of the initial JFA seeds in pixels. Larger seeds can improve performance but may look blocky.">
+              <label for="jfaSeedSizeSlider">JFA Seed Size (px):</label>
+              <input type="range" id="jfaSeedSizeSlider" min="1" max="16" step="1" value="1">
+              <span id="jfaSeedSizeSliderValue">1</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <button class="accordion-button" title="Controls for final image polish and effects.">✨ Post-Processing</button>
+    <div class="accordion-panel">
+      <div id="postProcessingControls" class="scrollable-panel-content">
+        <div class="slider-container" title="Toggles FXAA anti-aliasing to smooth jagged edges.">
+          <label style="font-weight: bold;">
+            <input type="checkbox" id="useAACheckbox" checked> Enable Anti-Aliasing (FXAA)
+          </label>
+        </div>
+        <div class="slider-container" title="Sharpens the image to counteract AA blur. 0=off, 1=normal.">
+          <label for="sharpenStrengthSlider">Sharpen Strength:</label>
+          <input type="range" id="sharpenStrengthSlider" min="0.0" max="2.0" step="0.05" value="1.0">
+          <span id="sharpenStrengthSliderValue">1.00</span>
+        </div>
+        <div class="slider-container" title="Blends edge mask with last frame to reduce flicker. 0 = Off, 0.95 = Very Smooth.">
+          <label for="temporalFeedbackSlider">Edge TAA (Stability):</label>
+          <input type="range" id="temporalFeedbackSlider" min="0.0" max="0.99" step="0.01" value="0.9">
+          <span id="temporalFeedbackSliderValue">0.90</span>
+        </div>
+        <div class="slider-container" title="Adds noise to final image to reduce color banding." style="border-top: 1px solid #ddd; padding-top: 10px; margin-top: 10px;">
+          <label for="ditherStrengthSlider">Dither Strength:</label>
+          <input type="range" id="ditherStrengthSlider" min="0.0" max="10.0" step="0.1" value="0.0">
+          <span id="ditherStrengthSliderValue">0.0</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div class="main-content">
+    <div id="setScaleInstructions" class="instructions-panel"></div>
+    <div class="frame">
+      <canvas id="canvas"></canvas>
+      </div>
+    <div id="infoAndControlsContainer">
+      <div id="debugInfoPanel">
+        <span>FPS: <span id="fpsDisplay">-</span></span>
+        <span>Actual Vertices: <span id="actualVerticesDisplay">-</span></span>
+        <span>Optimal Vertices: <span id="optimalVerticesDisplay">-</span></span>
+        <span>Source Res: <span id="sourceResolutionDisplay">-</span></span>
+      </div>
+      <div id="videoControls">
+        <button id="playPauseButton" title="Play or pause the currently loaded video.">Play</button>
+        <button id="loopButton" title="Toggle looping for the currently loaded video.">Loop: On</button>
+        
+        <button id="muteButton" title="Mute/Unmute Video">🔇</button>
+        <input type="range" id="volumeSlider" min="0" max="1" step="0.05" value="1" title="Volume" style="max-width: 80px; margin: 0 5px;">
+        
+        <button id="resetViewButton" title="Reset view to current face position and recalibrate gyro if active.">Reset View</button>
+        <button id="dollyZoomButton" title="Toggle the dolly zoom camera effect.">Dolly Zoom: Off</button>
+        <button id="subjectLockToggleButton" title="Toggle camera lock onto the subject's focal plane during dolly zoom.">Subject Lock: On</button>
+        
+        <button id="wireframeButton" title="Load a wireframe test scene to visualize depth volumes.">Wireframe</button>
+        <button id="showInstructionsButton" title="Show the recommended workflow instructions.">Instructions</button>
+        <button id="fullscreenButtonBottom" title="Toggle fullscreen mode">Full Screen</button>
+      </div>
+      </div>
+  </div>
+
+  <div id="permissionModalOverlay">
+    <div id="permissionModal">
+      <p>Allow access to the camera and orientation lock?</p>
+      <button id="allowPermissionsButton">Allow</button>
+    </div>
+  </div>
+
+  <div id="gyroInstructionsModalOverlay">
+    <div id="gyroInstructionsModal">
+      <h3>Gyroscope Access Denied</h3>
+      <p>To use this feature, please enable Motion & Orientation Access in your settings:</p>
+      <ol class="instructions-list">
+        <li>Open the <strong>Settings</strong> app.</li>
+        <li>Scroll down and tap on <strong>Safari</strong>.</li>
+        <li>Find <strong>Motion & Orientation Access</strong> and turn it ON.</li>
+        <li>Return to this page and tap the 'Enable Gyro' button again.</li>
+      </ol>
+      <button id="closeGyroInstructionsButton">OK</button>
+    </div>
+  </div>
+
+  <div id="workflowInstructionsModalOverlay">
+    <div id="workflowInstructionsModal">
+      <h3>Recommended Workflow</h3>
+      <p>Follow these steps for the best experience:</p>
+      <ol class="instructions-list">
+        <li><strong>Set Your Environment</strong>: Use the 'Screen Size' and 'Camera Intrinsics' controls to match your physical setup.</li>
+        <li><strong>Load Content</strong>: Click "Load Media Layers" to add and configure your scene.</li>
+        <li><strong>Calibrate 3D Scene</strong>: Click 'Set Scale', then measure a reference object in the scene (like a person) whose real-world size you know.</li>
+        <li><strong>Enter Real Size</strong>: When prompted, enter the object's size in meters to automatically set the parallax effect.</li>
+        <li><strong>Fine-Tune</strong>: Use the other sliders for artistic adjustments.</li>
+      </ol>
+      <button id="closeWorkflowInstructionsButton">Got It</button>
+    </div>
+  </div>
+
+  <div id="layerModalOverlay">
+    <div id="layerModal">
+      <h3>Media Layers</h3>
+      <p>Manage layers from foreground (top) to background (bottom).</p>
+      
+      <div id="layerListContainer">
+        </div>
+      
+      <div class="layer-modal-controls">
+        <button id="addNewLayerButton" title="Add a new layer to the bottom of the list">+ Add Layer</button>
+        <div>
+          <button id="closeLayerModalButton">Cancel</button>
+          <button id="applyLayersButton" class="control-button">Apply Layers</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@latest/dist/tf-backend-webgl.min.js"></script>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@latest/dist/face-landmarks-detection.min.js"></script>
+
+<script src="moebius.js?v=7"></script> </body>
+</html>

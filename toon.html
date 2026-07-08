@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TOON Narrative Engine (Temple of Doom Edition)</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* =========================================
+       1. GLOBAL THEME
+       ========================================= */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg: #0a0a0a;
+      --bg-elevated: #111;
+      --bg-hover: #1a1a1a;
+      --border: #222;
+      --border-active: #333;
+      --text: #c8c8c8;
+      --text-dim: #888;
+      --text-muted: #555;
+      
+      /* Semantic Colors */
+      --character: #f472b6;
+      --object: #fbbf24;
+      --environment: #34d399;
+      --force: #a78bfa;
+      
+      /* POV Colors */
+      --omniscient: #60a5fa;
+      --audience: #f59e0b;
+      --pov-char: #ec4899;
+      
+      /* Status Colors */
+      --verified: #22c55e;
+      --unverified: #eab308;
+      --conflict: #ef4444;
+      --lacuna: #6b7280;
+    }
+    
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    
+    .mono { font-family: 'IBM Plex Mono', monospace; }
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+    
+    /* =========================================
+       2. LAYOUT & HEADER
+       ========================================= */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 20px; border-bottom: 1px solid var(--border);
+      background: var(--bg-elevated); position: sticky; top: 0; z-index: 100;
+    }
+    .logo { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 600; color: var(--text); }
+    .logo span { color: var(--text-muted); font-weight: 400; }
+    .header-actions { display: flex; gap: 8px; align-items: center; }
+    
+    .btn {
+      font-family: inherit; font-size: 11px; padding: 6px 12px;
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text-dim); cursor: pointer; transition: all 0.2s;
+    }
+    .btn:hover { border-color: var(--text-dim); color: var(--text); }
+    .btn.primary { background: var(--omniscient); color: var(--bg); border-color: var(--omniscient); }
+    .btn.primary:hover { opacity: 0.9; }
+    
+    .main { padding: 20px; max-width: 1400px; margin: 0 auto; width: 100%; flex: 1; display: flex; flex-direction: column; }
+    
+    /* =========================================
+       3. SCRIPT VIEW (Industry Standard CSS)
+       ========================================= */
+    .script-view-container {
+        background: #151515;
+        border: 1px solid var(--border);
+        padding: 60px;
+        max-width: 850px;
+        margin: 20px auto;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        /* Allow it to grow, but min-height for looks */
+        min-height: 800px; 
+    }
+
+    .script-line {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 14px;
+        line-height: 1.1;
+        color: #e0e0e0;
+        white-space: pre-wrap;
+    }
+
+    /* Formatting Rules: 
+       Key fix: Added margin-bottom to s-dialogue so it separates from the next action.
+    */
+    .s-scene-heading { 
+        font-weight: bold; 
+        text-transform: uppercase; 
+        margin-top: 32px; 
+        margin-bottom: 16px; 
+    }
+    
+    .s-action { 
+        margin-bottom: 24px; /* Space after action block */
+    }
+    
+    .s-character { 
+        margin-top: 24px; 
+        margin-left: 37%; 
+        margin-bottom: 0px; /* Keep tight to dialogue */
+        text-transform: uppercase; 
+    }
+    
+    .s-dialogue { 
+        margin-left: 25%; 
+        margin-right: 25%; 
+        margin-bottom: 24px; /* Fix: Added space after dialogue block */
+    }
+    
+    .s-parenthetical { 
+        margin-left: 31%; 
+        margin-right: 30%; 
+        margin-bottom: 0px; /* Keep tight to dialogue */
+        font-style: italic; 
+    }
+    
+    .s-transition { 
+        text-align: right; 
+        margin-top: 24px; 
+        margin-bottom: 24px; 
+        text-transform: uppercase; 
+    }
+
+    /* =========================================
+       4. DASHBOARD COMPONENTS
+       ========================================= */
+    
+    /* Upload */
+    .upload-container { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 400px; }
+    .upload-box { width: 100%; max-width: 600px; }
+    .upload-zone {
+      border: 2px dashed var(--border); padding: 40px; text-align: center; cursor: pointer; transition: border-color 0.2s;
+    }
+    .upload-zone:hover { border-color: var(--omniscient); background: var(--bg-hover); }
+    
+    /* Pipeline */
+    .pipeline-section {
+      background: var(--bg-elevated); border: 1px solid var(--border); padding: 20px; margin-bottom: 20px;
+    }
+    .pipeline-steps { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 16px; }
+    .pipeline-step {
+      padding: 12px; background: var(--bg); border: 1px solid var(--border); text-align: center; transition: all 0.3s ease;
+    }
+    .pipeline-step.active { border-color: var(--omniscient); background: rgba(96, 165, 250, 0.05); }
+    .pipeline-step.done { border-color: var(--verified); }
+    .pipeline-progress-bar { height: 4px; background: var(--omniscient); transition: width 0.3s; }
+    
+    /* Tabs */
+    .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+    .tab {
+      padding: 10px 16px; background: transparent; border: none; border-bottom: 2px solid transparent;
+      color: var(--text-dim); cursor: pointer; font-family: inherit; font-size: 11px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--omniscient); border-bottom-color: var(--omniscient); }
+    
+    /* Entity Grid */
+    .entity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .entity-card { background: var(--bg); border: 1px solid var(--border); padding: 12px; }
+    .entity-type { font-size: 9px; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.05em; }
+    .entity-type.character { color: var(--character); }
+    .entity-type.object { color: var(--object); }
+    .entity-type.environment { color: var(--environment); }
+    .entity-name { font-size: 13px; font-weight: 500; margin-bottom: 8px; }
+    
+    /* Timeline */
+    .timeline-event {
+      display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer;
+    }
+    .timeline-event:hover { background: var(--bg-hover); }
+    .event-time { font-family: 'IBM Plex Mono'; font-size: 10px; color: var(--text-muted); min-width: 50px; }
+    .event-type { font-size: 9px; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; display: inline-block; margin-bottom: 4px; }
+    .event-source { margin-top: 8px; padding: 8px; background: var(--bg-elevated); border-left: 2px solid var(--border); font-family: 'IBM Plex Mono'; font-size: 10px; color: var(--text-muted); }
+
+    /* Knowledge */
+    .knowledge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+    .knowledge-card { background: var(--bg); border: 1px solid var(--border); padding: 12px; }
+    .knowledge-item { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; font-size: 10px; }
+    
+    /* Treatment */
+    .pov-selector { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .pov-btn { padding: 6px 12px; background: var(--bg); border: 1px solid var(--border); color: var(--text-dim); cursor: pointer; font-size: 10px; }
+    .pov-btn.active { border-color: var(--omniscient); color: var(--omniscient); }
+    .treatment { background: var(--bg-elevated); border: 1px solid var(--border); padding: 24px; line-height: 1.8; }
+    
+    /* Verify */
+    .verify-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .verify-pane { background: var(--bg); border: 1px solid var(--border); padding: 16px; }
+    .status-badge { font-size: 9px; padding: 2px 6px; border-radius: 2px; }
+    .status-badge.verified { background: rgba(34, 197, 94, 0.2); color: var(--verified); }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useCallback, useRef, useEffect } = React;
+
+    // ============================================================
+    // 1. RAW DATA (Temple of Doom)
+    // ============================================================
+    
+    const TEMPLE_OF_DOOM_SCRIPT = [
+        { type: 'Scene Heading', text: 'EXT. ROPE BRIDGE - DAY' },
+        { type: 'Action', text: 'Wind howls through the canyon. The alligator-infested river rages 200 feet below.' },
+        { type: 'Action', text: 'INDIANA JONES (40s, battered, bleeding) stands in the center of the swaying bridge. One hand clutches the SANKARA STONES. The other holds a machete against the thick support rope.' },
+        { type: 'Action', text: 'MOLA RAM (50s, demonic) guards one end. Thuggee guards block the other.' },
+        { type: 'Character', text: 'MOLA RAM' },
+        { type: 'Dialogue', text: 'Drop them, Dr. Jones! They will be found! You won\'t!' },
+        { type: 'Action', text: 'Indy looks at SHORT ROUND (11) and WILLIE clinging to the ropes behind him.' },
+        { type: 'Character', text: 'INDY' },
+        { type: 'Parenthetical', text: '(shouting in Chinese)' },
+        { type: 'Dialogue', text: 'Hang on, Shorty! Hang on lady! We going for a ride!' },
+        { type: 'Action', text: 'Mola Ram laughs, confident. He steps onto the bridge.' },
+        { type: 'Character', text: 'MOLA RAM' },
+        { type: 'Dialogue', text: 'You betray Shiva! You will not cut the rope! You want the stones too much!' },
+        { type: 'Action', text: 'Indy tightens his grip on the machete. His eyes go cold. He isn\'t bluffing.' },
+        { type: 'Character', text: 'INDY' },
+        { type: 'Dialogue', text: 'Prepare to meet Kali... in Hell!' },
+        { type: 'Action', text: 'Indy SWINGS the machete. The rope SNAPS. The bridge collapses into the abyss.' }
+    ];
+
+    // ============================================================
+    // 2. MOCK LOGIC
+    // ============================================================
+
+    const simulateUpload = (setParsedScript) => {
+        // Map raw lines to TOON segments
+        const segments = TEMPLE_OF_DOOM_SCRIPT.map((line, i) => ({
+            t: i,
+            type: line.type,
+            text: line.text,
+            speaker: line.type === 'Dialogue' || line.type === 'Parenthetical' 
+                ? (TEMPLE_OF_DOOM_SCRIPT[i-1].type === 'Character' ? TEMPLE_OF_DOOM_SCRIPT[i-1].text : TEMPLE_OF_DOOM_SCRIPT[i-2]?.text)
+                : null
+        }));
+
+        setParsedScript({
+            meta: { title: "Temple of Doom: The Bridge", timestamp: new Date().toISOString() },
+            segments: segments,
+            speakers: ['INDY', 'MOLA RAM'],
+            scenes: ['EXT. ROPE BRIDGE - DAY']
+        });
+    };
+
+    const generateMockData = (script) => {
+        // ENTITIES
+        const entities = {
+            characters: [
+                { id: 'c1', name: 'Indiana Jones', description: 'Archaeologist, battered, defiant.', firstAppearance: 2 },
+                { id: 'c2', name: 'Mola Ram', description: 'Thuggee High Priest, arrogant.', firstAppearance: 4 },
+                { id: 'c3', name: 'Short Round', description: 'Indy\'s sidekick, terrified.', firstAppearance: 6 }
+            ],
+            objects: [
+                { id: 'o1', name: 'Sankara Stones', description: 'Sacred Shiva Lingams. Glowing.', significance: 'The MacGuffin' },
+                { id: 'o2', name: 'The Machete', description: 'Rusted blade.', significance: 'The Tool of Destruction' }
+            ],
+            environments: [
+                { id: 'e1', name: 'Rope Bridge', description: 'Suspended over alligator river. Structural failure imminent.' }
+            ],
+            forces: [
+                { id: 'f1', name: 'Gravity', type: 'Physical Law', description: 'The primary threat.' }
+            ]
+        };
+
+        // EVENTS (Linked to Script Segments)
+        const events = [
+            { 
+                id: 'evt_1', t: 2, type: 'action', 
+                description: 'Indy threatens the structural integrity of the bridge.', 
+                entities: ['Indiana Jones', 'The Machete', 'Rope Bridge'],
+                source: script.segments[2]
+            },
+            { 
+                id: 'evt_2', t: 5, type: 'dialogue', 
+                description: 'Mola Ram demands the Stones, assuming Indy wants to live.', 
+                entities: ['Mola Ram', 'Indiana Jones'],
+                source: script.segments[5]
+            },
+            { 
+                id: 'evt_3', t: 9, type: 'dialogue', 
+                description: 'Indy warns his allies (in code) to brace for impact.', 
+                entities: ['Indiana Jones', 'Short Round'],
+                source: script.segments[9]
+            },
+            { 
+                id: 'evt_4', t: 12, type: 'dialogue', 
+                description: 'Mola Ram bets on Indy\'s greed over his resolve.', 
+                entities: ['Mola Ram', 'Indiana Jones'],
+                source: script.segments[12]
+            },
+            { 
+                id: 'evt_5', t: 16, type: 'action', 
+                description: 'Indy cuts the rope. The bridge collapses.', 
+                entities: ['Indiana Jones', 'Rope Bridge', 'Gravity'],
+                source: script.segments[16]
+            }
+        ];
+
+        // KNOWLEDGE STATES
+        const knowledgeStates = {
+            'c1': [
+                { t: 2, learns: 'I am trapped.', how: 'observed', fromEvent: 'evt_1' },
+                { t: 9, learns: 'I am willing to die to stop Mola Ram.', how: 'decided', fromEvent: 'evt_3' }
+            ],
+            'c2': [
+                { t: 5, learns: 'Indy is trapped.', how: 'observed', fromEvent: 'evt_1' },
+                { t: 12, learns: 'Indy values the Stones/Life above all.', how: 'inferred (incorrectly)', fromEvent: 'evt_4' },
+                { t: 16, learns: 'Indy is crazy.', how: 'witnessed', fromEvent: 'evt_5' }
+            ],
+            'audience': [
+                { t: 2, learns: 'Indy is cornered.', how: 'shown', fromEvent: 'evt_1' },
+                { t: 9, learns: 'Indy has a plan (to cut the rope).', how: 'inferred (translation)', fromEvent: 'evt_3' }
+            ]
+        };
+
+        // RASHOMON NARRATIVES
+        const povLayers = {
+            omniscient: {
+                narrative: "Trapped on a swaying rope bridge, Indiana Jones faced the Thuggee cult on both sides. Realizing escape was impossible, he chose mutual destruction. He warned his allies in Chinese, then defied Mola Ram's arrogance by cutting the support cable, sending the entire structure crashing into the cliffside."
+            },
+            audience: {
+                narrative: "The tension is unbearable. We see Indy battered and bloody. When he speaks Chinese to Short Round, we realize he's planning something drastic. Mola Ram's arrogance makes him blind to Indy's resolve. The cut is visceral—a sudden snap that releases all the tension into chaos."
+            },
+            characters: {
+                'c1': {
+                    narrative: "Nowhere to go. They had us on both sides. Mola Ram wanted the stones? Fine. He could come get them. I told Shorty to hold on. Mola Ram laughed—he thought I was a treasure hunter. He didn't know I was done playing. I swung the machete. Best bad idea I ever had.",
+                    knowledge: knowledgeStates['c1']
+                },
+                'c2': {
+                    narrative: "The American was a fool. Trapped like a rat. He held the stones, and I knew he coveted them. Men like him do not destroy prizes; they hoard them. I stepped onto the bridge to take what was mine. Then... his eyes changed. He did not look at the stones. He looked at the rope. Madness.",
+                    knowledge: knowledgeStates['c2']
+                },
+                'c3': {
+                    narrative: "Dr. Jones looked scary. He shouted in Chinese—'Hang on!' I knew that look. It meant big trouble. I grabbed the ropes tight. The bad man laughed, but he didn't know Dr. Jones like I do. Then the world turned upside down.",
+                    knowledge: []
+                }
+            }
+        };
+
+        // OUTPUTS
+        const outputs = {
+            logline: "Surrounded by cultists on a precarious rope bridge, an archaeologist must choose between the sacred stones he recovered or sacrificing everything to save his friends.",
+            plotSummary: "Indiana Jones is cornered on a rope bridge. Mola Ram demands the Sankara stones. Indy realizes escape is impossible. He warns Short Round to hold on. Mola Ram mocks him, believing Indy's greed will stay his hand. Indy invokes Kali and cuts the support rope, collapsing the bridge.",
+            treatment: povLayers.omniscient.narrative
+        };
+
+        const verification = { coverage: 1.0, issues: [] };
+
+        return {
+            meta: script.meta,
+            segments: script.segments,
+            entities,
+            events,
+            knowledgeStates,
+            povLayers,
+            outputs,
+            verification
+        };
+    };
+
+    // ============================================================
+    // 3. UI COMPONENTS
+    // ============================================================
+
+    function ScriptView({ segments }) {
+        if (!segments) return <div>No script loaded</div>;
+        return (
+            <div className="script-view-container">
+                {segments.map((seg, i) => {
+                    let className = "script-line";
+                    if (seg.type === 'Scene Heading') className += " s-scene-heading";
+                    if (seg.type === 'Action') className += " s-action";
+                    if (seg.type === 'Character') className += " s-character";
+                    if (seg.type === 'Dialogue') className += " s-dialogue";
+                    if (seg.type === 'Parenthetical') className += " s-parenthetical";
+                    if (seg.type === 'Transition') className += " s-transition";
+                    return <div key={i} className={className}>{seg.text}</div>;
+                })}
+            </div>
+        );
+    }
+
+    function PipelineProgress({ progress }) {
+      const steps = [
+        { key: 'entities', icon: '👤', label: 'Entities' },
+        { key: 'events', icon: '⚡', label: 'Events' },
+        { key: 'knowledge', icon: '🧠', label: 'Knowledge' },
+        { key: 'pov', icon: '👁', label: 'POV Layers' },
+        { key: 'outputs', icon: '📄', label: 'Outputs' },
+        { key: 'verify', icon: '✓', label: 'Verify' }
+      ];
+      const currentIdx = steps.findIndex(s => s.key === progress?.step);
+      
+      return (
+        <div className="pipeline-section">
+          <div className="pipeline-title">TOON Analysis Pipeline</div>
+          <div className="pipeline-steps">
+            {steps.map((step, i) => (
+              <div key={step.key} className={`pipeline-step ${i < currentIdx ? 'done' : ''} ${i === currentIdx ? 'active' : ''}`}>
+                <div className="step-icon">{step.icon}</div>
+                <div className="step-num">Step {i + 1}</div>
+                <div className="step-label">{step.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{height:'4px', background:'var(--border)', marginBottom:'12px'}}>
+            <div className="pipeline-progress-bar" style={{ width: `${((currentIdx + 1) / steps.length) * 100}%` }} />
+          </div>
+          <div className="pipeline-status">{progress?.phase || 'Ready'}</div>
+        </div>
+      );
+    }
+
+    function EntityGrid({ entities }) {
+      if (!entities) return null;
+      const all = [
+        ...entities.characters.map(e => ({...e, t:'character'})),
+        ...entities.objects.map(e => ({...e, t:'object'})),
+        ...entities.environments.map(e => ({...e, t:'environment'})),
+        ...entities.forces.map(e => ({...e, t:'force'}))
+      ];
+      return (
+        <div className="entity-grid">
+          {all.map(e => (
+            <div key={e.id} className="entity-card">
+              <div className={`entity-type ${e.t}`}>{e.t}</div>
+              <div className="entity-name">{e.name}</div>
+              <div className="entity-meta">{e.description}</div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function EventTimeline({ events }) {
+      const [expanded, setExpanded] = useState(null);
+      return (
+        <div className="timeline">
+          {events.map(evt => (
+            <div key={evt.id} className="timeline-event" onClick={() => setExpanded(expanded === evt.id ? null : evt.id)}>
+              <div className="event-time mono">T{evt.t}</div>
+              <div style={{flex:1}}>
+                <span className={`event-type ${evt.type}`} style={{background:'#222', color: evt.type==='action'?'#60a5fa':'#f472b6'}}>{evt.type}</span>
+                <div style={{fontSize:'12px', color:'var(--text)'}}>{evt.description}</div>
+                <div style={{fontSize:'10px', color:'var(--text-dim)', marginTop:'4px'}}>{evt.entities?.join(', ')}</div>
+                {expanded === evt.id && evt.source && (
+                   <div className="event-source">SOURCE: "{evt.source.text}"</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function KnowledgeView({ knowledgeStates, entities }) {
+      return (
+        <div className="knowledge-grid">
+          {entities?.characters?.map(char => (
+            <div key={char.id} className="knowledge-card">
+              <div className="knowledge-entity">{char.name}</div>
+              {(knowledgeStates?.[char.id] || []).map((k, i) => (
+                <div key={i} className="knowledge-item">
+                  <span className="knowledge-when mono">T{k.t}</span>
+                  <span className="knowledge-what">{k.learns}</span>
+                  <span className="knowledge-how">{k.how}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function TreatmentView({ groundTruth, selectedPOV, setSelectedPOV }) {
+      const povOptions = [
+        { id: 'omniscient', label: 'Omniscient', type: 'omniscient' },
+        { id: 'audience', label: 'Audience', type: 'audience' },
+        ...(groundTruth?.entities?.characters || []).map(c => ({ id: c.id, label: c.name, type: 'character' }))
+      ];
+      
+      const txt = selectedPOV === 'omniscient' ? groundTruth?.povLayers?.omniscient?.narrative
+        : selectedPOV === 'audience' ? groundTruth?.povLayers?.audience?.narrative
+        : groundTruth?.povLayers?.characters?.[selectedPOV]?.narrative;
+      
+      return (
+        <div>
+          <div className="pov-selector">
+            {povOptions.map(pov => (
+              <button key={pov.id} className={`pov-btn ${selectedPOV === pov.id ? 'active' : ''}`} onClick={() => setSelectedPOV(pov.id)}>
+                {pov.label}
+              </button>
+            ))}
+          </div>
+          <div className="treatment"><p>{txt}</p></div>
+        </div>
+      );
+    }
+
+    function OutputsView({ outputs }) {
+      const [format, setFormat] = useState('logline');
+      return (
+        <div>
+          <div className="output-selector">
+            {['logline','plotSummary','treatment'].map(f => (
+               <button key={f} className={`output-btn ${format===f?'active':''}`} onClick={()=>setFormat(f)} style={{marginRight:'8px'}}>
+                 {f.charAt(0).toUpperCase() + f.slice(1)}
+               </button>
+            ))}
+          </div>
+          {format === 'logline' && <div className="logline">{outputs.logline}</div>}
+          {format === 'plotSummary' && <div className="plot-summary">{outputs.plotSummary}</div>}
+          {format === 'treatment' && <div className="treatment">{outputs.treatment}</div>}
+        </div>
+      );
+    }
+
+    function VerificationView({ verification }) {
+        return (
+            <div className="verify-grid">
+                <div className="verify-pane">
+                    <div className="status-badge verified">Coverage: {verification.coverage * 100}%</div>
+                    <div style={{marginTop:'12px', fontSize:'11px'}}>No contradictions detected between Script Actions and Extracted Events.</div>
+                </div>
+            </div>
+        );
+    }
+
+    // ============================================================
+    // 4. MAIN CONTROLLER
+    // ============================================================
+
+    function App() {
+      const [parsedScript, setParsedScript] = useState(null);
+      const [groundTruth, setGroundTruth] = useState(null);
+      const [progress, setProgress] = useState(null);
+      const [running, setRunning] = useState(false);
+      const [tab, setTab] = useState('pipeline');
+      const [selectedPOV, setSelectedPOV] = useState('omniscient');
+
+      const runSimulation = async () => {
+        setRunning(true);
+        const steps = ['entities', 'events', 'knowledge', 'pov', 'outputs', 'verify'];
+        for (let i = 0; i < steps.length; i++) {
+            setProgress({ step: steps[i], phase: `Running ${steps[i]}...`, current: 1, total: 1 });
+            await new Promise(r => setTimeout(r, 400));
+        }
+        setGroundTruth(generateMockData(parsedScript));
+        setRunning(false);
+        setTab('script'); // Auto-switch to Script tab on completion
+      };
+
+      if (!parsedScript) {
+        return (
+          <div className="app">
+            <header className="header"><div className="logo">TOON <span>Narrative Engine</span></div></header>
+            <div className="upload-container">
+              <div className="upload-box">
+                <div className="upload-zone" onClick={() => simulateUpload(setParsedScript)}>
+                  <div className="upload-title">Click to Load "The Bridge" Script</div>
+                  <div className="upload-sub">Simulation Mode: Temple of Doom</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="app">
+          <header className="header">
+            <div className="logo">TOON <span>· {parsedScript.meta.title}</span></div>
+            <div className="header-actions">
+               {groundTruth && <span style={{fontSize:'10px', color:'var(--verified)'}}>✓ Graph Built</span>}
+              <button className="btn" onClick={() => { setParsedScript(null); setGroundTruth(null); }}>New</button>
+            </div>
+          </header>
+          
+          <div className="main">
+            {(running || !groundTruth) && <PipelineProgress progress={progress} />}
+            
+            {!groundTruth && !running && (
+              <div style={{ textAlign: 'center', padding: '20px' }}>
+                <div style={{ marginBottom: '16px', color: 'var(--text-dim)' }}>Script Loaded: 17 Lines / 3 Characters</div>
+                 {/* PREVIEW CONTAINER - NOW SCROLLABLE */}
+                 <div style={{
+                    marginBottom:'20px', 
+                    maxHeight:'300px', 
+                    overflowY:'auto', 
+                    background: '#111', 
+                    padding: '10px',
+                    border: '1px solid #333',
+                    opacity: 1
+                 }}>
+                    <ScriptView segments={parsedScript.segments} />
+                 </div>
+                <button className="btn primary" onClick={runSimulation}>Run Full Analysis</button>
+              </div>
+            )}
+            
+            {groundTruth && (
+              <>
+                <div className="tabs">
+                  <button className={`tab ${tab === 'pipeline' ? 'active' : ''}`} onClick={() => setTab('pipeline')}>Overview</button>
+                  <button className={`tab ${tab === 'script' ? 'active' : ''}`} onClick={() => setTab('script')}>Script</button>
+                  <button className={`tab ${tab === 'entities' ? 'active' : ''}`} onClick={() => setTab('entities')}>Entities</button>
+                  <button className={`tab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>Events</button>
+                  <button className={`tab ${tab === 'knowledge' ? 'active' : ''}`} onClick={() => setTab('knowledge')}>Knowledge</button>
+                  <button className={`tab ${tab === 'treatment' ? 'active' : ''}`} onClick={() => setTab('treatment')}>POV</button>
+                  <button className={`tab ${tab === 'outputs' ? 'active' : ''}`} onClick={() => setTab('outputs')}>Outputs</button>
+                  <button className={`tab ${tab === 'verify' ? 'active' : ''}`} onClick={() => setTab('verify')}>Verify</button>
+                </div>
+                
+                {tab === 'pipeline' && <div style={{padding:'40px', textAlign:'center', color:'var(--verified)'}}><h3>Analysis Complete</h3><p style={{color:'var(--text-dim)'}}>Graph verification passed with 100% coverage.</p></div>}
+                {tab === 'script' && <ScriptView segments={groundTruth.segments} />}
+                {tab === 'entities' && <EntityGrid entities={groundTruth.entities} />}
+                {tab === 'events' && <EventTimeline events={groundTruth.events} />}
+                {tab === 'knowledge' && <KnowledgeView knowledgeStates={groundTruth.knowledgeStates} entities={groundTruth.entities} />}
+                {tab === 'treatment' && <TreatmentView groundTruth={groundTruth} selectedPOV={selectedPOV} setSelectedPOV={setSelectedPOV} />}
+                {tab === 'outputs' && <OutputsView outputs={groundTruth.outputs} />}
+                {tab === 'verify' && <VerificationView verification={groundTruth.verification} />}
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+    
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>

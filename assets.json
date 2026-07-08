@@ -1,0 +1,23 @@
+{
+    "assets": [
+      {
+        "id": "defaultImage",
+        "type": "image",
+        "rgbSrc": "octopusImg.png",
+        "depthSrc": "octopusDepth.png",
+        "alpha": 1.0,
+        "depthLayer": 0.0,
+        "threshold": 0.5
+      },
+      {
+        "id": "defaultVideo",
+        "type": "video",
+        "rgbSrc": "video-depth.mp4",
+        "depthSrc": "video-depth.mp4",
+        "alpha": 1.0,
+        "depthLayer": 0.0,
+        "threshold": 0.5
+      }
+    ]
+  }
+  
