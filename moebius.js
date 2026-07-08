@@ -7006,15 +7006,31 @@ function buildBackgroundLayer() {
         if (typeof MoebiusPlug !== 'undefined' && bgBandImg && bgValidImg) {
             try {
                 const t0 = Date.now();
-                const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-                const cx = cv.getContext('2d', { willReadFrequently: true });
-                // read sharpened depth from the layer's depth texture
+                // CRITICAL: run the plug at the asset's NATIVE resolution, NOT the
+                // renderer canvas size (w/h). renderer.domElement is sized to the
+                // window (e.g. 860x484 landscape) while the asset is 851x1023
+                // portrait; drawing the band/valid/depth into a canvas of the wrong
+                // size resamples the masks onto an aspect-distorted grid, so the
+                // isotropic boxMin(21)/Jacobi run on a stretched field and the plug
+                // extrudes. The mesh samples displacementMap by UV, so a native-res
+                // texture aligns regardless of canvas size. Native dims come from the
+                // depth image (== band/valid PNG native = 851x1023 on the reference).
                 const dSrc = L.textures.depth;
-                if (dSrc.image && dSrc.image.tagName) {
-                    cx.drawImage(dSrc.image, 0, 0, w, h);
+                const dImg = dSrc.image;
+                const pw = (dImg && (dImg.naturalWidth || dImg.width)) || bgBandImg.naturalWidth;
+                const ph = (dImg && (dImg.naturalHeight || dImg.height)) || bgBandImg.naturalHeight;
+                const PN = pw * ph;
+                const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
+                const cx = cv.getContext('2d', { willReadFrequently: true });
+                // read sharpened depth from the layer's depth texture (img/canvas =
+                // top-row-first, matching the band/valid PNGs read below)
+                if (dImg && dImg.tagName) {
+                    cx.drawImage(dImg, 0, 0, pw, ph);
                 } else {
-                    // DataTexture from live bake — render to a temp target and read back
-                    const rt = new THREE.WebGLRenderTarget(w, h, {type: THREE.UnsignedByteType});
+                    // DataTexture fallback — render to a temp target and read back.
+                    // readRenderTargetPixels is bottom-row-first (GL origin), so flip
+                    // vertically into the canvas to keep it top-row-first like the PNGs.
+                    const rt = new THREE.WebGLRenderTarget(pw, ph, {type: THREE.UnsignedByteType});
                     const cm = new THREE.ShaderMaterial({uniforms:{t:{value:dSrc}},
                         vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position,1.0);}',
                         fragmentShader:'uniform sampler2D t;varying vec2 vUv;void main(){gl_FragColor=texture2D(t,vUv);}'});
@@ -7022,38 +7038,54 @@ function buildBackgroundLayer() {
                     const s2 = new THREE.Scene(); s2.add(q);
                     const c2 = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
                     renderer.setRenderTarget(rt); renderer.render(s2, c2);
-                    const px = new Uint8Array(w*h*4);
-                    renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
+                    const px = new Uint8Array(PN*4);
+                    renderer.readRenderTargetPixels(rt, 0, 0, pw, ph, px);
+                    renderer.setRenderTarget(null);
                     rt.dispose(); cm.dispose();
-                    const id = cx.createImageData(w, h);
-                    for (let i = 0; i < w*h*4; i++) id.data[i] = px[i];
+                    const id = cx.createImageData(pw, ph);
+                    for (let y = 0; y < ph; y++) {
+                        const s = (ph-1-y)*pw*4, d = y*pw*4;
+                        for (let k = 0; k < pw*4; k++) id.data[d+k] = px[s+k];
+                    }
                     cx.putImageData(id, 0, 0);
                 }
-                const dpx = cx.getImageData(0, 0, w, h).data;
-                const depth = new Float32Array(w * h);
-                for (let i = 0; i < w * h; i++) depth[i] = dpx[i * 4] / 255;
+                const dpx = cx.getImageData(0, 0, pw, ph).data;
+                const depth = new Float32Array(PN);
+                for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
                 // read band from loaded PNG (no GPU readback)
-                cx.clearRect(0, 0, w, h);
-                cx.drawImage(bgBandImg, 0, 0, w, h);
-                const bpx = cx.getImageData(0, 0, w, h).data;
-                const band = new Uint8Array(w * h);
-                for (let i = 0; i < w * h; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
+                cx.clearRect(0, 0, pw, ph);
+                cx.drawImage(bgBandImg, 0, 0, pw, ph);
+                const bpx = cx.getImageData(0, 0, pw, ph).data;
+                const band = new Uint8Array(PN);
+                for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
                 // read valid from loaded PNG
-                cx.clearRect(0, 0, w, h);
-                cx.drawImage(bgValidImg, 0, 0, w, h);
-                const vpx = cx.getImageData(0, 0, w, h).data;
-                const valid = new Uint8Array(w * h);
-                for (let i = 0; i < w * h; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                cx.clearRect(0, 0, pw, ph);
+                cx.drawImage(bgValidImg, 0, 0, pw, ph);
+                const vpx = cx.getImageData(0, 0, pw, ph).data;
+                const valid = new Uint8Array(PN);
+                for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
                 let bandN=0,validN=0;
-                for(let i=0;i<w*h;i++){bandN+=band[i];validN+=valid[i];}
-                console.log('[RUNG-PLUG] inputs: depth ' + w + 'x' + h +
-                    ' band ' + bandN + 'px (' + (100*bandN/(w*h)).toFixed(1) + '%)' +
-                    ' valid ' + validN + 'px (' + (100*validN/(w*h)).toFixed(1) + '%)');
+                for(let i=0;i<PN;i++){bandN+=band[i];validN+=valid[i];}
+                console.log('[RUNG-PLUG] inputs: plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
+                    ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
+                    ' valid ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
                 // RUN THE PLUG
-                const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, w, h, 220);
+                const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
+                // The plug array is top-row-first (like an <img>). The FG mesh's own
+                // displacementMap is an image/canvas THREE.Texture (flipY=true), and
+                // this BG mesh reuses the FG geometry/UVs — so the plug must present
+                // the same orientation. flipY is a no-op for DataTexture in WebGL
+                // (UNPACK_FLIP_Y_WEBGL ignores ArrayBufferView uploads), so flip the
+                // rows in data to match the flipY=true image convention.
+                const plugFlipped = new Float32Array(PN);
+                for (let y = 0; y < ph; y++) {
+                    const s = y*pw, d = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) plugFlipped[d+x] = plugDepth[s+x];
+                }
                 // Float32 DataTexture — no colorspace, no image decode
-                const plugDT = new THREE.DataTexture(plugDepth, w, h, THREE.RedFormat, THREE.FloatType);
+                const plugDT = new THREE.DataTexture(plugFlipped, pw, ph, THREE.RedFormat, THREE.FloatType);
                 plugDT.needsUpdate = true;
+                plugDT.flipY = false; // orientation handled in data above
                 plugDT.minFilter = THREE.LinearFilter;
                 plugDT.magFilter = THREE.LinearFilter;
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
