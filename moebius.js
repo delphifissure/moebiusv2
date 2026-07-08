@@ -6307,6 +6307,16 @@ root.MoebiusPlug=API;
 
 /* ===== RUNG LIVE PLUG: load band + valid masks at startup =============== */
 let bgBandImg = null, bgValidImg = null;
+// How the plug's `valid` (anchor-eligible = true background) mask is built:
+//   'split' — FG/BG split by depth: valid = ~band & (depth < currentInpaintingSplitDepthNorm).
+//             A GLOBAL depth threshold cleanly excludes thick foreground interiors
+//             (the whole troll body), which the shipped defaultBgValid.png and the
+//             locally-far anchor gate do NOT — that leak put ~6% of anchors at
+//             figure depth and pulled the plug toward the troll. Use the app's
+//             manual FG/BG split point as the classifier.
+//   'png'   — legacy: load defaultBgValid.png (kept for A/B comparison).
+let bgValidMode = 'split';
+let bgSplitDefault = 0.35; // fallback split if currentInpaintingSplitDepthNorm is unset
 (function(){
     const bImg = new Image(); bImg.onload = function(){
         bgBandImg = bImg;
@@ -7003,7 +7013,7 @@ function buildBackgroundLayer() {
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
-        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && bgValidImg) {
+        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode === 'split')) {
             try {
                 const t0 = Date.now();
                 // CRITICAL: run the plug at the asset's NATIVE resolution, NOT the
@@ -7058,17 +7068,31 @@ function buildBackgroundLayer() {
                 const bpx = cx.getImageData(0, 0, pw, ph).data;
                 const band = new Uint8Array(PN);
                 for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
-                // read valid from loaded PNG
-                cx.clearRect(0, 0, pw, ph);
-                cx.drawImage(bgValidImg, 0, 0, pw, ph);
-                const vpx = cx.getImageData(0, 0, pw, ph).data;
+                // build the valid (anchor-eligible = true background) mask
                 const valid = new Uint8Array(PN);
-                for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                let validSrc;
+                if (bgValidMode === 'split') {
+                    // FG/BG split by depth. depth is normalized 0=far..1=near, so
+                    // background = depth below the split point. A band pixel is never
+                    // an anchor (it is a hole being filled). This GLOBAL threshold
+                    // excludes the whole foreground body, not just its rim.
+                    const splitNorm = (typeof currentInpaintingSplitDepthNorm === 'number')
+                        ? currentInpaintingSplitDepthNorm : bgSplitDefault;
+                    for (let i = 0; i < PN; i++) valid[i] = (!band[i] && depth[i] < splitNorm) ? 1 : 0;
+                    validSrc = 'split<' + splitNorm.toFixed(3);
+                } else {
+                    // legacy: valid from defaultBgValid.png
+                    cx.clearRect(0, 0, pw, ph);
+                    cx.drawImage(bgValidImg, 0, 0, pw, ph);
+                    const vpx = cx.getImageData(0, 0, pw, ph).data;
+                    for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                    validSrc = 'png';
+                }
                 let bandN=0,validN=0;
                 for(let i=0;i<PN;i++){bandN+=band[i];validN+=valid[i];}
                 console.log('[RUNG-PLUG] inputs: plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
                     ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
-                    ' valid ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
+                    ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
                 // RUN THE PLUG
                 const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
