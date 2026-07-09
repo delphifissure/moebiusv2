@@ -6380,6 +6380,19 @@ let bgSceneExtend = true;
 let bgStreakFadeNearPx = 4;    // reach <= this: fully opaque coarse fill (tight near-rim only)
 let bgStreakFadeFarPx  = 20;   // reach >= this: fully transparent (defer to SD)
 let bgMarginFadeStartFrac = 0.5; // margin stays opaque until this fraction out, then fades to the edge
+// Disocclusion band width cap. The band grows from each silhouette edge INTO the
+// occluder by the local parallax budget so the BG layer holds real background
+// exactly where the foreground will slide away. Uncapped, a large depth jump
+// yields a ~400px budget that floods the whole figure body (the inpaint region
+// stops being a clean silhouette strip). Cap it to the disocclusion actually
+// revealed at a typical head excursion — a tight strip hugging the silhouette.
+// Tune up if you head-track far; the SD plate covers anything past it.
+let bgBandMaxGrowPx = 28;
+// Seed threshold: a silhouette is only a disocclusion edge if the depth cliff
+// to the neighbour exceeds this. Low values (0.06) also fire on internal folds
+// and depth-map noise inside the figure, tiling the whole body with band seeds;
+// raise it so only genuine figure->background cliffs seed a strip.
+let bgBandStep = 0.10;
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -6443,7 +6456,7 @@ function bgPullPushFill(cpx, valid, W, H) {
 // 0=far..1=near. Returns { plug: Float32Array, band: Uint8Array }.
 function bgDirectionalPlug(depth, W, H, opts) {
     opts = opts || {};
-    const N = W*H, STEP = opts.step || 0.06, DELTA = opts.delta || 0.12, SWEEPS = opts.sweeps || 120;
+    const N = W*H, STEP = opts.step || bgBandStep || 0.06, DELTA = opts.delta || 0.12, SWEEPS = opts.sweeps || 120;
     // parallax px LUT (matches the app's parallaxCurve), used for per-edge budget
     const lut = new Float32Array(1024);
     for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
@@ -6453,7 +6466,9 @@ function bgDirectionalPlug(depth, W, H, opts) {
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
         const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, bestJ=-1, isE=false;
         for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
-        if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ; budget[i]=Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2; q.push(i); } }
+        if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ;
+            const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
+            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2); q.push(i); } }
     for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
         const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
         for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; rimSrc[j]=rimSrc[i]; budget[j]=budget[i]-1; q.push(j); } } }
