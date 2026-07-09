@@ -6377,8 +6377,8 @@ let bgSceneExtend = true;
 // fade the fill's ALPHA out with it — short reach stays opaque, long reach goes
 // transparent (revealing nothing rather than a smear, and deferred to the SD
 // plate, whose masks already cover the whole gap). Tunable in px of source res.
-let bgStreakFadeNearPx = 10;   // reach <= this: fully opaque coarse fill
-let bgStreakFadeFarPx  = 55;   // reach >= this: fully transparent (defer to SD)
+let bgStreakFadeNearPx = 4;    // reach <= this: fully opaque coarse fill (tight near-rim only)
+let bgStreakFadeFarPx  = 20;   // reach >= this: fully transparent (defer to SD)
 let bgMarginFadeStartFrac = 0.5; // margin stays opaque until this fraction out, then fades to the edge
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
