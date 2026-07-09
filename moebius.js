@@ -6371,6 +6371,15 @@ let bgPlugMode = 'directional';
 // exports a proper outpaint plate (mask + extended colour + extended depth) to
 // replace it. Set false to keep the BG layer flush with the image rectangle.
 let bgSceneExtend = true;
+// Streak suppression: the coarse fill copies real background across a gap, but
+// where it has to travel far from any real pixel it degrades into a 1-D smear
+// (the horizontal streaks). That travel distance IS a confidence signal, so we
+// fade the fill's ALPHA out with it — short reach stays opaque, long reach goes
+// transparent (revealing nothing rather than a smear, and deferred to the SD
+// plate, whose masks already cover the whole gap). Tunable in px of source res.
+let bgStreakFadeNearPx = 10;   // reach <= this: fully opaque coarse fill
+let bgStreakFadeFarPx  = 55;   // reach >= this: fully transparent (defer to SD)
+let bgMarginFadeStartFrac = 0.5; // margin stays opaque until this fraction out, then fades to the edge
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -7298,6 +7307,9 @@ function buildBackgroundLayer() {
                     // the foreground and never a muddy blend. Fall back to the smooth base only
                     // where the reflected sample isn't valid background.
                     const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+                    // bandReach[i] = px the fill had to travel to reach real background at i
+                    // (the streak signal). 1e6 = none found -> pull-push ghost -> transparent.
+                    const bandReach = new Float32Array(PN);
                     for (let i = 0; i < PN; i++){ if(!band[i])continue; const x=i%pw,y=(i/pw)|0;
                         let bestSteps=1e9,bxx=0,byy=0,rX=0,rY=0;
                         for (const d of DIRS){ const dx=d[0],dy=d[1]; let cxp=x,cyp=y,st=0;
@@ -7305,9 +7317,22 @@ function buildBackgroundLayer() {
                             if(st<bestSteps && st<1e9 && fillSrc[cyp*pw+cxp]){ bestSteps=st;bxx=dx;byy=dy;rX=cxp;rY=cyp; } }
                         if(bestSteps<1e9){ const sxp=rX+bxx*bestSteps, syp=rY+byy*bestSteps;
                             if(sxp>=0&&sxp<pw&&syp>=0&&syp<ph && fillSrc[syp*pw+sxp]){ const s=syp*pw+sxp; fillRGB[i*3]=cpx[s*4];fillRGB[i*3+1]=cpx[s*4+1];fillRGB[i*3+2]=cpx[s*4+2]; }
-                            else { const r=rY*pw+rX; fillRGB[i*3]=cpx[r*4];fillRGB[i*3+1]=cpx[r*4+1];fillRGB[i*3+2]=cpx[r*4+2]; } }
-                        else { fillRGB[i*3]=smoothBase[i*3];fillRGB[i*3+1]=smoothBase[i*3+1];fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                            else { const r=rY*pw+rX; fillRGB[i*3]=cpx[r*4];fillRGB[i*3+1]=cpx[r*4+1];fillRGB[i*3+2]=cpx[r*4+2]; }
+                            bandReach[i]=bestSteps; }
+                        else { fillRGB[i*3]=smoothBase[i*3];fillRGB[i*3+1]=smoothBase[i*3+1];fillRGB[i*3+2]=smoothBase[i*3+2];
+                            bandReach[i]=1e6; }
                     }
+                    // reach -> alpha: opaque for short reach, faded to transparent for long
+                    // (streaks). smoothstep between the two configured thresholds.
+                    const _reachAlpha = (r) => {
+                        if (r >= 1e6) return 0;
+                        if (r <= bgStreakFadeNearPx) return 255;
+                        if (r >= bgStreakFadeFarPx) return 0;
+                        const t = (r - bgStreakFadeNearPx) / (bgStreakFadeFarPx - bgStreakFadeNearPx);
+                        return Math.round(255 * (1 - t*t*(3-2*t)));
+                    };
+                    const bandAlpha = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) bandAlpha[i] = band[i] ? _reachAlpha(bandReach[i]) : 0;
                     const order = { length: 0 }; // (retained name for the log below)
                     for (let i = 0; i < PN; i++) if (band[i]) order.length++;
                     // Stash directional gap data for the SD-export bundle (native res, top-row-first)
@@ -7328,9 +7353,10 @@ function buildBackgroundLayer() {
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
                         // RGB written everywhere (fill inside band, bled colour just
-                        // outside, source elsewhere); alpha = band drives the discard.
+                        // outside, source elsewhere); alpha = reach-confidence (streaks
+                        // fade out), 0 outside the band.
                         fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2];
-                        fill[o+3] = band[i] ? 255 : 0;
+                        fill[o+3] = bandAlpha[i];
                     }
                     const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
                     fillDT.needsUpdate = true; fillDT.flipY = false;
@@ -7394,15 +7420,30 @@ function buildBackgroundLayer() {
                             eplugDT.minFilter = THREE.LinearFilter; eplugDT.magFilter = THREE.LinearFilter;
                             if ('colorSpace' in eplugDT) eplugDT.colorSpace = THREE.NoColorSpace;
                             _plugTex = eplugDT;
-                            // extended fill texture: centre alpha = band (FG shows in front),
-                            // margin alpha = 255 (opaque backdrop). Rows flipped for GL.
+                            // extended fill texture. Centre alpha = the interior reach
+                            // confidence (streaks fade, FG shows in front). Margin alpha
+                            // stays opaque near the frame then fades to transparent toward
+                            // the outer edge (the far, purely-stretched reach — no smear at
+                            // the rim; the SD outpaint plate fills it solid). Rows flipped.
                             const efill = new Uint8Array(EPN*4);
                             for (let Y = 0; Y < EPH; Y++) { const inRowY = (Y>=my && Y<my+ph);
+                                const dY = (Y<my)?(my-Y):(Y>=my+ph?(Y-(my+ph)+1):0);
+                                const fracY = my>0 ? dY/my : 0;
                                 for (let X = 0; X < EPW; X++) {
                                     const si = Y*EPW+X, o = ((EPH-1-Y)*EPW+X)*4;
                                     const inCenter = inRowY && (X>=mx && X<mx+pw);
                                     efill[o]=extFill[si*3]; efill[o+1]=extFill[si*3+1]; efill[o+2]=extFill[si*3+2];
-                                    efill[o+3] = inCenter ? (band[(cY(Math.floor(Y-my)))*pw + cX(Math.floor(X-mx))] ? 255 : 0) : 255;
+                                    let a;
+                                    if (inCenter) { a = bandAlpha[(Y-my)*pw + (X-mx)]; }
+                                    else {
+                                        const dX = (X<mx)?(mx-X):(X>=mx+pw?(X-(mx+pw)+1):0);
+                                        const fracX = mx>0 ? dX/mx : 0;
+                                        const frac = Math.max(fracX, fracY);        // Chebyshev reach into margin
+                                        if (frac <= bgMarginFadeStartFrac) a = 255;
+                                        else { const t=(frac-bgMarginFadeStartFrac)/(1-bgMarginFadeStartFrac);
+                                               a = Math.round(255*(1 - t*t*(3-2*t))); }
+                                    }
+                                    efill[o+3] = a;
                                 }
                             }
                             const efillDT = new THREE.DataTexture(efill, EPW, EPH, THREE.RGBAFormat, THREE.UnsignedByteType);
