@@ -5909,6 +5909,38 @@ function exportSDBundle() {
         } else {
             console.warn('[SD-BUNDLE] no BG layer built yet — bundle contains screen-space files only');
         }
+        // DIRECTIONAL plug bundle — native resolution, view-independent, the exact
+        // gap the diffusion stage should inpaint (mask + completed depth + coarse fill).
+        if (bgDirectionalExport) {
+            const dE = bgDirectionalExport, dpw = dE.pw, dph = dE.ph, dN = dpw*dph;
+            const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = dpw; cv.height = dph;
+                const cc = cv.getContext('2d'); const id = cc.createImageData(dpw, dph); drawFn(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+            files.push({ name: 'dir_mask_inpaint.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=dE.band[i]?255:0; d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'dir_bg_depth_completed.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=Math.max(0,Math.min(255,(dE.plug[i]*255)|0)); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'dir_bg_color_coarse.png', bytes: mk(d => { for (let i=0;i<dN;i++){ d[i*4]=dE.fill[i*3];d[i*4+1]=dE.fill[i*3+1];d[i*4+2]=dE.fill[i*3+2];d[i*4+3]=255; } }) });
+            meta.files['dir_mask_inpaint.png'] = 'DIRECTIONAL plug gap mask (white = disocclusion to inpaint), native res';
+            meta.files['dir_bg_depth_completed.png'] = 'DIRECTIONAL completed BG depth (holes capped at far-side rim), native res — ControlNet depth conditioning';
+            meta.files['dir_bg_color_coarse.png'] = 'DIRECTIONAL coarse BG fill (replace with diffusion output), native res';
+            meta.directionalNativeRes = [dpw, dph];
+        }
+        // SCENE-EXTENSION / OUTPAINT plate — enlarged canvas (image centred, margin =
+        // beyond-frame region the head-tracked view reveals). The diffusion stage should
+        // OUTPAINT the white margin using out_color_coarse as seed and out_depth_completed
+        // as ControlNet depth, then the result is imported back onto the extended BG layer.
+        if (bgExtendExport) {
+            const xE = bgExtendExport, xw = xE.EPW, xh = xE.EPH, xN = xw*xh;
+            const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = xw; cv.height = xh;
+                const cc = cv.getContext('2d'); const id = cc.createImageData(xw, xh); drawFn(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+            files.push({ name: 'out_mask_outpaint.png', bytes: mk(d => { for (let i=0;i<xN;i++){ const v=xE.mask[i]?255:0; d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'out_color_coarse.png', bytes: mk(d => { for (let i=0;i<xN;i++){ d[i*4]=xE.fill[i*3];d[i*4+1]=xE.fill[i*3+1];d[i*4+2]=xE.fill[i*3+2];d[i*4+3]=255; } }) });
+            files.push({ name: 'out_depth_completed.png', bytes: mk(d => { for (let i=0;i<xN;i++){ const v=Math.max(0,Math.min(255,(xE.depth[i]*255)|0)); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            meta.files['out_mask_outpaint.png'] = 'SCENE-EXTENSION outpaint mask (white = beyond-frame margin to generate), extended res';
+            meta.files['out_color_coarse.png'] = 'SCENE-EXTENSION coarse colour (image centred, margin edge-extended) — outpaint seed, extended res';
+            meta.files['out_depth_completed.png'] = 'SCENE-EXTENSION completed depth (margin edge-extended) — ControlNet depth conditioning, extended res';
+            meta.outpaintExtendedRes = [xw, xh];
+            meta.outpaintMarginPx = [xE.mx, xE.my];
+            meta.outpaintSourceRes = [xE.pw, xE.ph];
+        }
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -5949,6 +5981,10 @@ function exportSDBundle() {
 //      BG layer is already there, at plug depth, with baked color.
 // ============================================================================
 let bgLayerMesh = null;
+// Directional plug data stashed at BG-build for the SD-export bundle (native res,
+// top-row-first): the exact gap mask + completed BG depth + coarse fill the
+// diffusion stage should consume. { band:Uint8, plug:Float32, fill:Uint8(RGB), pw, ph }
+let bgDirectionalExport = null;
 let srcBandTargetA = null, srcBandTargetB = null;
 let bgDepthTarget = null, bgColorTarget = null;
 let bgBuildStamp = null; // last successful BG bake (footer provenance)
@@ -6307,6 +6343,162 @@ root.MoebiusPlug=API;
 
 /* ===== RUNG LIVE PLUG: load band + valid masks at startup =============== */
 let bgBandImg = null, bgValidImg = null;
+// How the plug's `valid` (anchor-eligible = true background) mask is built:
+//   'auto'  — FG/BG split at an Otsu threshold computed from the depth histogram
+//             (over non-band pixels). valid = ~band & (depth < otsuThreshold).
+//             A GLOBAL depth threshold cleanly excludes thick foreground interiors
+//             (the whole troll body), which the shipped defaultBgValid.png and the
+//             locally-far anchor gate do NOT (that leak put ~6% of anchors at
+//             figure depth and pulled the plug toward the troll). Otsu picks the
+//             split automatically per-asset (no manual slider, no baked PNG) and
+//             separates cleanly on the bimodal figure-in-front-of-wall case.
+//   'split' — same split but from the app's manual point (currentInpaintingSplitDepthNorm).
+//   'png'   — legacy: load defaultBgValid.png (kept for A/B comparison).
+let bgValidMode = 'auto';
+let bgSplitDefault = 0.35; // fallback split if a threshold can't be computed
+// Plug construction:
+//   'directional' — single directional plug: seal every disocclusion at the depth of
+//                   the FAR SIDE of its own edge (revealed rim), grown in by the edge's
+//                   parallax budget. Handles background AND glancing-foreground holes,
+//                   never protrudes, needs no band/valid PNG (band computed from depth).
+//   'global'      — legacy: band(PNG or live) + Otsu valid + harmonic (fg/bg only).
+let bgPlugMode = 'directional';
+// Scene extension / outpaint (coarse live pass): grow the BG layer beyond the
+// image rectangle so the off-axis frustum, as the head sweeps, finds background
+// out to the terrarium frame and past it, instead of clear-color void. The
+// margin is sized automatically (pillarbox/letterbox gap + max-parallax reveal).
+// The coarse pass edge-extends colour+depth into the margin; the SD bundle
+// exports a proper outpaint plate (mask + extended colour + extended depth) to
+// replace it. Set false to keep the BG layer flush with the image rectangle.
+let bgSceneExtend = true;
+// Band fill opacity. With the band tightened to a silhouette strip the fill is
+// short-range, so it should read as a SOLID, complete inpaint — no streaks AND
+// no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
+// (The reach->alpha fade below is retained for the case where the band is
+//  widened well past the reveal; it fades the far, purely-stretched reach so it
+//  degrades to transparent instead of a smear. Off by default now.)
+let bgFillSolid = true;
+// Band fill method:
+//   'smooth'  — pull-push (pyramid diffusion) from the surrounding real background.
+//               Solid and streak-free; for smooth backgrounds (sky, desert) it is
+//               near-perfect. The tight band keeps any blur to a few px. DEFAULT.
+//   'reflect' — copy/reflect real background across the rim into the gap. Preserves
+//               texture (stars, stroke) but striates when the reach is long.
+let bgFillMode = 'smooth';
+// Streak suppression (only used when bgFillSolid = false): fade the fill's alpha
+// with the distance it had to travel from real background (the streak signal).
+let bgStreakFadeNearPx = 8;    // reach <= this: fully opaque coarse fill
+let bgStreakFadeFarPx  = 40;   // reach >= this: fully transparent (defer to SD)
+let bgMarginFadeStartFrac = 0.5; // margin stays opaque until this fraction out, then fades to the edge
+// Disocclusion band width cap. The band grows from each silhouette edge INTO the
+// occluder by the local parallax budget so the BG layer holds real background
+// exactly where the foreground will slide away. Uncapped, a large depth jump
+// yields a ~400px budget that floods the whole figure body (the inpaint region
+// stops being a clean silhouette strip). Cap it to the disocclusion actually
+// revealed at a typical head excursion — a tight strip hugging the silhouette.
+// Tune up if you head-track far; the SD plate covers anything past it.
+let bgBandMaxGrowPx = 28;
+// Seed threshold: a silhouette is only a disocclusion edge if the depth cliff
+// to the neighbour exceeds this. Low values (0.06) also fire on internal folds
+// and depth-map noise inside the figure, tiling the whole body with band seeds;
+// raise it so only genuine figure->background cliffs seed a strip.
+let bgBandStep = 0.10;
+// Cut the foreground at disocclusions in the scene pass when the BG plug is live,
+// so the FG opens the hole onto the stable plug instead of stretching over it
+// (the reveal-side streak). UV-stretch targets smeared triangles; the depth-grad
+// cut catches sharp depth cliffs. Tune the thresholds if the FG over-/under-cuts.
+let bgCutFGOnPlug = true;
+let bgFGCutUVStretch = 0.5;   // lower = cut more stretched FG triangles
+let bgFGCutDepthGrad = 0.02;  // lower = cut at gentler depth cliffs
+// Coarse-extension data stashed at BG-build for the SD outpaint bundle
+// (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
+//  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
+let bgExtendExport = null;
+// Otsu threshold (maximize between-class variance) over a value list in [0,1].
+function bgOtsuThreshold(values, skip) {
+    const B = 256, h = new Float64Array(B); let n = 0;
+    for (let k = 0; k < values.length; k++) {
+        if (skip && skip[k]) continue;
+        let b = (values[k] * B) | 0; if (b < 0) b = 0; else if (b > B - 1) b = B - 1;
+        h[b]++; n++;
+    }
+    if (!n) return bgSplitDefault;
+    let sum = 0; for (let i = 0; i < B; i++) sum += i * h[i];
+    let sumB = 0, wB = 0, mx = -1, thr = 0;
+    for (let i = 0; i < B; i++) {
+        wB += h[i]; if (!wB) continue; const wF = n - wB; if (!wF) break;
+        sumB += i * h[i];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > mx) { mx = between; thr = i; }
+    }
+    return thr / B;
+}
+// Pull-push (pyramid) fill: diffuse the color of `valid` pixels into the rest,
+// streak-free (used to fill plug holes). cpx = RGBA source bytes, valid = Uint8
+// mask of usable source pixels. Returns a Uint8Array RGB (all pixels filled).
+function bgPullPushFill(cpx, valid, W, H) {
+    let levels = [];
+    let cw = new Float32Array(W*H*3), ww = new Float32Array(W*H);
+    for (let i=0;i<W*H;i++){ if(valid[i]){ ww[i]=1; cw[i*3]=cpx[i*4]; cw[i*3+1]=cpx[i*4+1]; cw[i*3+2]=cpx[i*4+2]; } }
+    levels.push({cw, ww, W, H});
+    while (levels[levels.length-1].W > 1 && levels[levels.length-1].H > 1) {
+        const p = levels[levels.length-1]; const nW=Math.max(1,p.W>>1), nH=Math.max(1,p.H>>1);
+        const ncw=new Float32Array(nW*nH*3), nww=new Float32Array(nW*nH);
+        for (let y=0;y<nH;y++) for (let x=0;x<nW;x++){ let sw=0,sr=0,sg=0,sb=0;
+            for (let dy=0;dy<2;dy++) for (let dx=0;dx<2;dx++){ const sx=Math.min(p.W-1,x*2+dx), sy=Math.min(p.H-1,y*2+dy); const si=sy*p.W+sx;
+                const w=p.ww[si]; sw+=w; sr+=p.cw[si*3]; sg+=p.cw[si*3+1]; sb+=p.cw[si*3+2]; }
+            const o=y*nW+x, wc=Math.min(1,sw); nww[o]=wc; if(sw>0){ ncw[o*3]=sr/sw*wc; ncw[o*3+1]=sg/sw*wc; ncw[o*3+2]=sb/sw*wc; } }
+        levels.push({cw:ncw, ww:nww, W:nW, H:nH});
+    }
+    function sample(c, fx, fy){ const x0=Math.floor(fx), y0=Math.floor(fy), x1=Math.min(c.W-1,x0+1), y1=Math.min(c.H-1,y0+1);
+        const tx=fx-x0, ty=fy-y0; let r=0,g=0,b=0,ws=0;
+        for (const [xx,yy,wt] of [[x0,y0,(1-tx)*(1-ty)],[x1,y0,tx*(1-ty)],[x0,y1,(1-tx)*ty],[x1,y1,tx*ty]]){
+            const o=Math.max(0,yy)*c.W+Math.max(0,xx), w=c.ww[o]; if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; } }
+        return ws>0 ? [r/ws,g/ws,b/ws] : null; }
+    for (let l=levels.length-2; l>=0; l--){ const fine=levels[l], coarse=levels[l+1];
+        for (let y=0;y<fine.H;y++) for (let x=0;x<fine.W;x++){ const o=y*fine.W+x;
+            if (fine.ww[o] < 0.999){ const s=sample(coarse,(x-0.5)/2,(y-0.5)/2); if(s){ const a=fine.ww[o];
+                fine.cw[o*3]+=s[0]*(1-a); fine.cw[o*3+1]+=s[1]*(1-a); fine.cw[o*3+2]+=s[2]*(1-a); fine.ww[o]=1; } } }
+    }
+    const out=new Uint8Array(W*H*3), L0=levels[0];
+    for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
+    return out;
+}
+// DIRECTIONAL PLUG: the single plug that seals every disocclusion at the depth of
+// the FAR SIDE of its own edge (revealed rim) — background behind figures, nearer
+// surface for glancing foreground overlaps. Extrudes from the far background, grows
+// each edge's near-side strip in by that edge's parallax budget, caps at the rim,
+// harmonic-smooths, and is transparent outside the strips. depth = normalized
+// 0=far..1=near. Returns { plug: Float32Array, band: Uint8Array }.
+function bgDirectionalPlug(depth, W, H, opts) {
+    opts = opts || {};
+    const N = W*H, STEP = opts.step || bgBandStep || 0.06, DELTA = opts.delta || 0.12, SWEEPS = opts.sweeps || 120;
+    // parallax px LUT (matches the app's parallaxCurve), used for per-edge budget
+    const lut = new Float32Array(1024);
+    for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
+        const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
+    const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
+    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1), q = [];
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
+        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, bestJ=-1, isE=false;
+        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ;
+            const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
+            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2); q.push(i); } }
+    for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
+        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
+        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; rimSrc[j]=rimSrc[i]; budget[j]=budget[i]-1; q.push(j); } } }
+    const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
+    const ring = new Uint8Array(N);
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
+        if((x>0&&!band[i-1])||(x<W-1&&!band[i+1])||(y>0&&!band[i-W])||(y<H-1&&!band[i+W])) ring[i]=1; }
+    let A=plug.slice(), B=plug.slice();
+    for (let s=0;s<SWEEPS;s++){ for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]){B[i]=A[i];continue;}
+        B[i]=0.25*(A[y*W+Math.max(0,x-1)]+A[y*W+Math.min(W-1,x+1)]+A[Math.max(0,y-1)*W+x]+A[Math.min(H-1,y+1)*W+x]); } const t=A;A=B;B=t; }
+    for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+    return { plug, band, rimSrc };
+}
 (function(){
     const bImg = new Image(); bImg.onload = function(){
         bgBandImg = bImg;
@@ -6996,6 +7188,8 @@ function buildBackgroundLayer() {
         if (bgLayerMesh) {
             scene.remove(bgLayerMesh);
             bgLayerMesh.material.dispose();
+            // dispose our own oversized geometry, but never the shared FG geometry
+            if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
             bgLayerMesh = null;
         }
         const mat = L.mesh.material.clone();
@@ -7003,18 +7197,38 @@ function buildBackgroundLayer() {
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
-        if (typeof MoebiusPlug !== 'undefined' && bgBandImg && bgValidImg) {
+        let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
+        let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
+        bgExtendExport = null;
+        const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
+        if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
             try {
                 const t0 = Date.now();
-                const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-                const cx = cv.getContext('2d', { willReadFrequently: true });
-                // read sharpened depth from the layer's depth texture
+                // CRITICAL: run the plug at the asset's NATIVE resolution, NOT the
+                // renderer canvas size (w/h). renderer.domElement is sized to the
+                // window (e.g. 860x484 landscape) while the asset is 851x1023
+                // portrait; drawing the band/valid/depth into a canvas of the wrong
+                // size resamples the masks onto an aspect-distorted grid, so the
+                // isotropic boxMin(21)/Jacobi run on a stretched field and the plug
+                // extrudes. The mesh samples displacementMap by UV, so a native-res
+                // texture aligns regardless of canvas size. Native dims come from the
+                // depth image (== band/valid PNG native = 851x1023 on the reference).
                 const dSrc = L.textures.depth;
-                if (dSrc.image && dSrc.image.tagName) {
-                    cx.drawImage(dSrc.image, 0, 0, w, h);
+                const dImg = dSrc.image;
+                const pw = (dImg && (dImg.naturalWidth || dImg.width)) || (bgBandImg && bgBandImg.naturalWidth) || w;
+                const ph = (dImg && (dImg.naturalHeight || dImg.height)) || (bgBandImg && bgBandImg.naturalHeight) || h;
+                const PN = pw * ph;
+                const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
+                const cx = cv.getContext('2d', { willReadFrequently: true });
+                // read sharpened depth from the layer's depth texture (img/canvas =
+                // top-row-first, matching the band/valid PNGs read below)
+                if (dImg && dImg.tagName) {
+                    cx.drawImage(dImg, 0, 0, pw, ph);
                 } else {
-                    // DataTexture from live bake — render to a temp target and read back
-                    const rt = new THREE.WebGLRenderTarget(w, h, {type: THREE.UnsignedByteType});
+                    // DataTexture fallback — render to a temp target and read back.
+                    // readRenderTargetPixels is bottom-row-first (GL origin), so flip
+                    // vertically into the canvas to keep it top-row-first like the PNGs.
+                    const rt = new THREE.WebGLRenderTarget(pw, ph, {type: THREE.UnsignedByteType});
                     const cm = new THREE.ShaderMaterial({uniforms:{t:{value:dSrc}},
                         vertexShader:'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position,1.0);}',
                         fragmentShader:'uniform sampler2D t;varying vec2 vUv;void main(){gl_FragColor=texture2D(t,vUv);}'});
@@ -7022,43 +7236,273 @@ function buildBackgroundLayer() {
                     const s2 = new THREE.Scene(); s2.add(q);
                     const c2 = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
                     renderer.setRenderTarget(rt); renderer.render(s2, c2);
-                    const px = new Uint8Array(w*h*4);
-                    renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
+                    const px = new Uint8Array(PN*4);
+                    renderer.readRenderTargetPixels(rt, 0, 0, pw, ph, px);
+                    renderer.setRenderTarget(null);
                     rt.dispose(); cm.dispose();
-                    const id = cx.createImageData(w, h);
-                    for (let i = 0; i < w*h*4; i++) id.data[i] = px[i];
+                    const id = cx.createImageData(pw, ph);
+                    for (let y = 0; y < ph; y++) {
+                        const s = (ph-1-y)*pw*4, d = y*pw*4;
+                        for (let k = 0; k < pw*4; k++) id.data[d+k] = px[s+k];
+                    }
                     cx.putImageData(id, 0, 0);
                 }
-                const dpx = cx.getImageData(0, 0, w, h).data;
-                const depth = new Float32Array(w * h);
-                for (let i = 0; i < w * h; i++) depth[i] = dpx[i * 4] / 255;
-                // read band from loaded PNG (no GPU readback)
-                cx.clearRect(0, 0, w, h);
-                cx.drawImage(bgBandImg, 0, 0, w, h);
-                const bpx = cx.getImageData(0, 0, w, h).data;
-                const band = new Uint8Array(w * h);
-                for (let i = 0; i < w * h; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
-                // read valid from loaded PNG
-                cx.clearRect(0, 0, w, h);
-                cx.drawImage(bgValidImg, 0, 0, w, h);
-                const vpx = cx.getImageData(0, 0, w, h).data;
-                const valid = new Uint8Array(w * h);
-                for (let i = 0; i < w * h; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
-                let bandN=0,validN=0;
-                for(let i=0;i<w*h;i++){bandN+=band[i];validN+=valid[i];}
-                console.log('[RUNG-PLUG] inputs: depth ' + w + 'x' + h +
-                    ' band ' + bandN + 'px (' + (100*bandN/(w*h)).toFixed(1) + '%)' +
-                    ' valid ' + validN + 'px (' + (100*validN/(w*h)).toFixed(1) + '%)');
-                // RUN THE PLUG
-                const plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, w, h, 220);
+                const dpx = cx.getImageData(0, 0, pw, ph).data;
+                const depth = new Float32Array(PN);
+                for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                let band, plugDepth, rimSrc = null;
+                if (bgPlugMode === 'directional') {
+                    // Single directional plug computed straight from the depth: seal each
+                    // disocclusion at the far side of its own edge, grown in by the edge's
+                    // parallax budget. No band/valid PNG needed.
+                    const dr = bgDirectionalPlug(depth, pw, ph, {});
+                    band = dr.band; plugDepth = dr.plug; rimSrc = dr.rimSrc;
+                    let bandN = 0; for (let i = 0; i < PN; i++) bandN += band[i];
+                    console.log('[RUNG-PLUG] inputs: directional plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
+                        ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)');
+                } else {
+                    // legacy global fg/bg plug: band (PNG) + Otsu valid + harmonic
+                    cx.clearRect(0, 0, pw, ph);
+                    cx.drawImage(bgBandImg, 0, 0, pw, ph);
+                    const bpx = cx.getImageData(0, 0, pw, ph).data;
+                    band = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) band[i] = bpx[i * 4] > 128 ? 1 : 0;
+                    const SEAM_DILATE = 3;
+                    for (let it = 0; it < SEAM_DILATE; it++) { const nb = band.slice();
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (band[i]) continue;
+                            if ((x>0&&band[i-1])||(x<pw-1&&band[i+1])||(y>0&&band[i-pw])||(y<ph-1&&band[i+pw])) nb[i]=1; }
+                        band.set(nb); }
+                    const valid = new Uint8Array(PN); let validSrc;
+                    if (bgValidMode === 'auto' || bgValidMode === 'split') {
+                        let splitNorm = (bgValidMode === 'auto') ? bgOtsuThreshold(depth, band)
+                            : ((typeof currentInpaintingSplitDepthNorm === 'number') ? currentInpaintingSplitDepthNorm : bgSplitDefault);
+                        for (let i = 0; i < PN; i++) valid[i] = (!band[i] && depth[i] < splitNorm) ? 1 : 0;
+                        validSrc = (bgValidMode === 'auto' ? 'otsu<' : 'split<') + splitNorm.toFixed(3);
+                    } else {
+                        cx.clearRect(0, 0, pw, ph); cx.drawImage(bgValidImg, 0, 0, pw, ph);
+                        const vpx = cx.getImageData(0, 0, pw, ph).data;
+                        for (let i = 0; i < PN; i++) valid[i] = vpx[i * 4] > 128 ? 1 : 0;
+                        validSrc = 'png';
+                    }
+                    let bandN=0,validN=0; for(let i=0;i<PN;i++){bandN+=band[i];validN+=valid[i];}
+                    console.log('[RUNG-PLUG] inputs: plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
+                        ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
+                        ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
+                    plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
+                }
+                // The plug array is top-row-first (like an <img>). The FG mesh's own
+                // displacementMap is an image/canvas THREE.Texture (flipY=true), and
+                // this BG mesh reuses the FG geometry/UVs — so the plug must present
+                // the same orientation. flipY is a no-op for DataTexture in WebGL
+                // (UNPACK_FLIP_Y_WEBGL ignores ArrayBufferView uploads), so flip the
+                // rows in data to match the flipY=true image convention.
+                const plugFlipped = new Float32Array(PN);
+                for (let y = 0; y < ph; y++) {
+                    const s = y*pw, d = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) plugFlipped[d+x] = plugDepth[s+x];
+                }
                 // Float32 DataTexture — no colorspace, no image decode
-                const plugDT = new THREE.DataTexture(plugDepth, w, h, THREE.RedFormat, THREE.FloatType);
+                const plugDT = new THREE.DataTexture(plugFlipped, pw, ph, THREE.RedFormat, THREE.FloatType);
                 plugDT.needsUpdate = true;
+                plugDT.flipY = false; // orientation handled in data above
                 plugDT.minFilter = THREE.LinearFilter;
                 plugDT.magFilter = THREE.LinearFilter;
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
+
+                // --- FILL COLOR (Law 4): DEPTH-GUIDED EXEMPLAR (onion-peel). Fill each
+                // hole rim-first by copying the best-matching REAL background patch (SSD
+                // over known neighbours; sources restricted to true background at similar
+                // depth). Preserves the painting's texture (stars, stroke) instead of a
+                // smooth ghost, and only ever samples background — never the foreground.
+                // This is the LIVE preview fill; the SD-export plate is the high-quality
+                // replacement. Alpha = band (BG material discards outside). Rows flipped.
+                const cImg2 = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
+                if (cImg2) {
+                    cx.clearRect(0, 0, pw, ph);
+                    cx.drawImage(cImg2, 0, 0, pw, ph);
+                    const cpx = cx.getImageData(0, 0, pw, ph).data;
+                    // fill SOURCE = background only (exclude band, dark ink, occluder bodies)
+                    const fillSrc = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillSrc[i] = (!band[i] && lum>=45) ? 1 : 0; }
+                    if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
+                        const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
+                        for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
+                    const tF = Date.now();
+                    const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
+                    const fillRGB = new Float32Array(PN * 3);
+                    for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
+                    // DIRECTIONAL BACKGROUND EXTENSION: for each hole, march to the nearest
+                    // far-side background rim, then REFLECT the real background across the rim
+                    // into the hole — copies actual sky/desert texture (stars, stroke), never
+                    // the foreground and never a muddy blend. Fall back to the smooth base only
+                    // where the reflected sample isn't valid background.
+                    const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+                    // bandReach[i] = px the fill had to travel to reach real background at i
+                    // (the streak signal). 1e6 = none found -> pull-push ghost -> transparent.
+                    const bandReach = new Float32Array(PN);
+                    for (let i = 0; i < PN; i++){ if(!band[i])continue; const x=i%pw,y=(i/pw)|0;
+                        let bestSteps=1e9,bxx=0,byy=0,rX=0,rY=0;
+                        for (const d of DIRS){ const dx=d[0],dy=d[1]; let cxp=x,cyp=y,st=0;
+                            while(st<400){ cxp+=dx;cyp+=dy;st++; if(cxp<0||cxp>=pw||cyp<0||cyp>=ph){st=1e9;break;} if(!band[cyp*pw+cxp])break; }
+                            if(st<bestSteps && st<1e9 && fillSrc[cyp*pw+cxp]){ bestSteps=st;bxx=dx;byy=dy;rX=cxp;rY=cyp; } }
+                        if(bestSteps<1e9){ const sxp=rX+bxx*bestSteps, syp=rY+byy*bestSteps;
+                            if(sxp>=0&&sxp<pw&&syp>=0&&syp<ph && fillSrc[syp*pw+sxp]){ const s=syp*pw+sxp; fillRGB[i*3]=cpx[s*4];fillRGB[i*3+1]=cpx[s*4+1];fillRGB[i*3+2]=cpx[s*4+2]; }
+                            else { const r=rY*pw+rX; fillRGB[i*3]=cpx[r*4];fillRGB[i*3+1]=cpx[r*4+1];fillRGB[i*3+2]=cpx[r*4+2]; }
+                            bandReach[i]=bestSteps; }
+                        else { fillRGB[i*3]=smoothBase[i*3];fillRGB[i*3+1]=smoothBase[i*3+1];fillRGB[i*3+2]=smoothBase[i*3+2];
+                            bandReach[i]=1e6; }
+                    }
+                    // 'smooth' mode: replace the band colour with the pull-push diffusion
+                    // fill — solid and streak-free (the reflection above only sets bandReach,
+                    // used by the optional fade). Keeps the interior clean, no striation.
+                    if (bgFillMode === 'smooth') {
+                        for (let i = 0; i < PN; i++) if (band[i]) { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                    }
+                    // reach -> alpha: opaque for short reach, faded to transparent for long
+                    // (streaks). smoothstep between the two configured thresholds.
+                    const _reachAlpha = (r) => {
+                        if (bgFillSolid) return 255;                 // solid fill: no gaps inside the silhouette
+                        if (r >= 1e6) return 255;                    // ghost (smooth-filled) still solid, not empty
+                        if (r <= bgStreakFadeNearPx) return 255;
+                        if (r >= bgStreakFadeFarPx) return 0;
+                        const t = (r - bgStreakFadeNearPx) / (bgStreakFadeFarPx - bgStreakFadeNearPx);
+                        return Math.round(255 * (1 - t*t*(3-2*t)));
+                    };
+                    const bandAlpha = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) bandAlpha[i] = band[i] ? _reachAlpha(bandReach[i]) : 0;
+                    const order = { length: 0 }; // (retained name for the log below)
+                    for (let i = 0; i < PN; i++) if (band[i]) order.length++;
+                    // Stash directional gap data for the SD-export bundle (native res, top-row-first)
+                    if (bgPlugMode === 'directional') {
+                        const fillU8 = new Uint8Array(PN*3);
+                        for (let k = 0; k < PN*3; k++) fillU8[k] = Math.max(0, Math.min(255, fillRGB[k]|0));
+                        bgDirectionalExport = { band: band, plug: plugDepth, fill: fillU8, pw: pw, ph: ph };
+                    }
+                    // Bleed the band's fill colour a few px OUT into the surrounding
+                    // non-band so the fill texture's bilinear edge blends fill->fill,
+                    // not fill->black. Alpha stays sharp (= band); only RGB is bled.
+                    { let filled = new Uint8Array(PN); for (let i=0;i<PN;i++) filled[i]=band[i]?1:0;
+                      for (let p=0;p<3;p++){ const prev=filled.slice();
+                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(prev[i])continue;
+                          const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
+                          for (const j of nb){ if(j>=0&&prev[j]){ fillRGB[i*3]=fillRGB[j*3];fillRGB[i*3+1]=fillRGB[j*3+1];fillRGB[i*3+2]=fillRGB[j*3+2]; filled[i]=1; break; } } } } }
+                    const fill = new Uint8Array(PN * 4);
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
+                        // RGB written everywhere (fill inside band, bled colour just
+                        // outside, source elsewhere); alpha = reach-confidence (streaks
+                        // fade out), 0 outside the band.
+                        fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2];
+                        fill[o+3] = bandAlpha[i];
+                    }
+                    const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    fillDT.needsUpdate = true; fillDT.flipY = false;
+                    fillDT.minFilter = THREE.LinearFilter; fillDT.magFilter = THREE.LinearFilter;
+                    if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
+                    if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
+                    _fillTex = fillDT;
+                    console.log('[RUNG-PLUG] fill: directional bg extension/reflection (' + order.length + ' holes, ' + (Date.now()-tF) + 'ms)');
+
+                    // ---- SCENE EXTENSION / OUTPAINT (coarse live pass) ----
+                    // Grow the BG layer past the image rectangle so the off-axis frustum,
+                    // as the head sweeps, finds background out to the terrarium frame and
+                    // a little beyond, not clear-color void. Margin (auto) = the fixed
+                    // pillarbox/letterbox gap between the image and the frame, PLUS the
+                    // max-parallax reveal of the far plane across the head-track range:
+                    // a far point (z = portal - sOuter) shifts on the portal by
+                    // dEx * sOuter/(Ez + sOuter). Coarse fill = edge-replicate colour+depth
+                    // into the margin (SD plate replaces it). Centre keeps band alpha so the
+                    // FG still shows in front; the margin is opaque scene backdrop.
+                    if (bgSceneExtend && L.mesh && L.mesh.geometry && L.mesh.geometry.parameters) {
+                        const gp = L.mesh.geometry.parameters;
+                        const origW = gp.width, origH = gp.height;
+                        const segW0 = gp.widthSegments || 1, segH0 = gp.heightSegments || 1;
+                        const ax = origW / pw, ay = origH / ph;               // world units / source texel
+                        const hAngle = parseFloat(document.getElementById('autoSweepAngleHorizSlider')?.value || 45) / 400.0;
+                        const vAngle = parseFloat(document.getElementById('autoSweepAngleVertSlider')?.value  || 45) / 400.0;
+                        const Ez = Math.max(1e-3, Math.abs(((camera && camera.position) ? camera.position.z : 0.17) - portalPlaneWorldZ));
+                        const sOuter = Math.max(1e-4, outerVolumeDepth * metricScaleFactor);
+                        const parX = sOuter / (Ez + sOuter);                  // portal shift per unit eye-x
+                        const PAD = 1.15;
+                        // margin in WORLD units from the image edge: pillarbox gap + parallax reveal
+                        const mWx = Math.max(0, (terrariumWidth  - origW) / 2) + hAngle * parX;
+                        const mWy = Math.max(0, (terrariumHeight - origH) / 2) + vAngle * parX;
+                        let mx = Math.ceil((mWx / ax) * PAD), my = Math.ceil((mWy / ay) * PAD);
+                        mx = Math.max(0, Math.min(mx, pw));  my = Math.max(0, Math.min(my, ph)); // sane clamp
+                        if (mx > 0 || my > 0) {
+                            const tX = Date.now();
+                            const EPW = pw + 2*mx, EPH = ph + 2*my, EPN = EPW*EPH;
+                            const cX = v => v < 0 ? 0 : (v >= pw ? pw-1 : v);
+                            const cY = v => v < 0 ? 0 : (v >= ph ? ph-1 : v);
+                            const extDepth = new Float32Array(EPN);   // top-row-first
+                            const extFill  = new Uint8Array(EPN*3);   // top-row-first RGB
+                            const extMask  = new Uint8Array(EPN);     // 1 = margin (outpaint region)
+                            for (let Y = 0; Y < EPH; Y++) { const sy = cY(Y-my), inRowY = (Y>=my && Y<my+ph);
+                                for (let X = 0; X < EPW; X++) { const sx = cX(X-mx);
+                                    const si = sy*pw+sx, di = Y*EPW+X;
+                                    const inCenter = inRowY && (X>=mx && X<mx+pw);
+                                    extDepth[di] = plugDepth[si];             // edge-replicated depth
+                                    extFill[di*3]   = fillRGB[si*3];
+                                    extFill[di*3+1] = fillRGB[si*3+1];
+                                    extFill[di*3+2] = fillRGB[si*3+2];
+                                    extMask[di] = inCenter ? 0 : 1;
+                                }
+                            }
+                            // extended plug-depth texture (RedFloat, rows flipped for GL like the native one)
+                            const eplug = new Float32Array(EPN);
+                            for (let y = 0; y < EPH; y++) { const s = y*EPW, d = (EPH-1-y)*EPW;
+                                for (let x = 0; x < EPW; x++) eplug[d+x] = extDepth[s+x]; }
+                            const eplugDT = new THREE.DataTexture(eplug, EPW, EPH, THREE.RedFormat, THREE.FloatType);
+                            eplugDT.needsUpdate = true; eplugDT.flipY = false;
+                            eplugDT.minFilter = THREE.LinearFilter; eplugDT.magFilter = THREE.LinearFilter;
+                            if ('colorSpace' in eplugDT) eplugDT.colorSpace = THREE.NoColorSpace;
+                            _plugTex = eplugDT;
+                            // extended fill texture. Centre alpha = the interior reach
+                            // confidence (streaks fade, FG shows in front). Margin alpha
+                            // stays opaque near the frame then fades to transparent toward
+                            // the outer edge (the far, purely-stretched reach — no smear at
+                            // the rim; the SD outpaint plate fills it solid). Rows flipped.
+                            const efill = new Uint8Array(EPN*4);
+                            for (let Y = 0; Y < EPH; Y++) { const inRowY = (Y>=my && Y<my+ph);
+                                const dY = (Y<my)?(my-Y):(Y>=my+ph?(Y-(my+ph)+1):0);
+                                const fracY = my>0 ? dY/my : 0;
+                                for (let X = 0; X < EPW; X++) {
+                                    const si = Y*EPW+X, o = ((EPH-1-Y)*EPW+X)*4;
+                                    const inCenter = inRowY && (X>=mx && X<mx+pw);
+                                    efill[o]=extFill[si*3]; efill[o+1]=extFill[si*3+1]; efill[o+2]=extFill[si*3+2];
+                                    let a;
+                                    if (inCenter) { a = bandAlpha[(Y-my)*pw + (X-mx)]; }
+                                    else {
+                                        const dX = (X<mx)?(mx-X):(X>=mx+pw?(X-(mx+pw)+1):0);
+                                        const fracX = mx>0 ? dX/mx : 0;
+                                        const frac = Math.max(fracX, fracY);        // Chebyshev reach into margin
+                                        if (frac <= bgMarginFadeStartFrac) a = 255;
+                                        else { const t=(frac-bgMarginFadeStartFrac)/(1-bgMarginFadeStartFrac);
+                                               a = Math.round(255*(1 - t*t*(3-2*t))); }
+                                    }
+                                    efill[o+3] = a;
+                                }
+                            }
+                            const efillDT = new THREE.DataTexture(efill, EPW, EPH, THREE.RGBAFormat, THREE.UnsignedByteType);
+                            efillDT.needsUpdate = true; efillDT.flipY = false;
+                            efillDT.minFilter = THREE.LinearFilter; efillDT.magFilter = THREE.LinearFilter;
+                            if ('encoding' in efillDT) efillDT.encoding = THREE.sRGBEncoding;
+                            if ('colorSpace' in efillDT) efillDT.colorSpace = THREE.SRGBColorSpace;
+                            _fillTex = efillDT;
+                            // oversized geometry, same vertex density, centred on the portal
+                            const gW = origW + 2*mx*ax, gH = origH + 2*my*ay;
+                            const segW = Math.max(1, Math.round(segW0 * gW / origW));
+                            const segH = Math.max(1, Math.round(segH0 * gH / origH));
+                            bgExtGeom = new THREE.PlaneGeometry(gW, gH, segW, segH);
+                            // stash for the SD outpaint bundle (top-row-first, extended res)
+                            bgExtendExport = { mx, my, pw, ph, EPW, EPH, depth: extDepth, fill: extFill, mask: extMask };
+                            console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
+                                EPW + 'x' + EPH + ' (' + (Date.now()-tX) + 'ms)');
+                        }
+                    }
+                }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
             }
@@ -7066,11 +7510,12 @@ function buildBackgroundLayer() {
             console.log('[RUNG-PLUG] masks not loaded, using GPU depth path');
         }
         mat.uniforms.displacementMap.value = _plugTex;
+        if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
         // Tiny push back so the BG never z-fights the FG where their depths match.
         mat.uniforms.displacementBias.value = (mat.uniforms.displacementBias.value || 0) - 0.004;
-        bgLayerMesh = new THREE.Mesh(L.mesh.geometry, mat);
+        bgLayerMesh = new THREE.Mesh(bgExtGeom || L.mesh.geometry, mat);
         bgLayerMesh.position.copy(L.mesh.position);
         bgLayerMesh.rotation.copy(L.mesh.rotation);
         bgLayerMesh.scale.copy(L.mesh.scale);
@@ -9665,16 +10110,27 @@ function render() {
     }
 
     // --- PASS: Generate Gaps/Edges ---
-    setAllLayerUniforms('u_useDepthGrad', document.getElementById('useDepthGradCheck')?.checked || false);
+    // When the BG plug layer is live, force the FG depth/stretch cut ON for this
+    // scene render regardless of the UI toggles: the final composite expects the
+    // scene render to already hold BG at plug depth in the disocclusions (see
+    // finalCompositeMaterial u_bgLayerActive). Without the cut the FG stretches
+    // across the gap and covers the plug — the reveal-side streak. The BG mesh
+    // itself never discards (u_isBackgroundLayer), so only the foreground cuts.
+    const _bgCut = bgCutFGOnPlug && (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.visible);
+    setAllLayerUniforms('u_useDepthGrad', _bgCut || (document.getElementById('useDepthGradCheck')?.checked || false));
     setAllLayerUniforms('u_useSobel', document.getElementById('useSobelCheck')?.checked || false);
     setAllLayerUniforms('u_useLuma', document.getElementById('useLumaCheck')?.checked || false);
     setAllLayerUniforms('u_useChroma', document.getElementById('useChromaCheck')?.checked || false);
     setAllLayerUniforms('u_useCrease', document.getElementById('useCreaseCheck')?.checked || false);
     setAllLayerUniforms('u_useCurvature', document.getElementById('useCurvatureCheck')?.checked || false);
-    setAllLayerUniforms('u_useUVStretch', document.getElementById('useUVStretchCheck')?.checked || false);
+    setAllLayerUniforms('u_useUVStretch', _bgCut || (document.getElementById('useUVStretchCheck')?.checked || false));
     setAllLayerUniforms('u_useGrazingAngle', document.getElementById('useGrazingAngleCheck')?.checked || false);
     setAllLayerUniforms('u_useEdgeMask', false);
-    
+    if (_bgCut) {
+        setAllLayerUniforms('u_depthGradThreshold', bgFGCutDepthGrad);
+        setAllLayerUniforms('u_uvStretchThreshold', bgFGCutUVStretch);
+    }
+
     if (!pingPongRenderTargetB) { console.error("pingPongRenderTargetB not initialized!"); return; }
     renderer.setRenderTarget(pingPongRenderTargetB); renderer.clear();
     renderer.render(scene, camera);
