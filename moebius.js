@@ -5909,6 +5909,20 @@ function exportSDBundle() {
         } else {
             console.warn('[SD-BUNDLE] no BG layer built yet — bundle contains screen-space files only');
         }
+        // DIRECTIONAL plug bundle — native resolution, view-independent, the exact
+        // gap the diffusion stage should inpaint (mask + completed depth + coarse fill).
+        if (bgDirectionalExport) {
+            const dE = bgDirectionalExport, dpw = dE.pw, dph = dE.ph, dN = dpw*dph;
+            const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = dpw; cv.height = dph;
+                const cc = cv.getContext('2d'); const id = cc.createImageData(dpw, dph); drawFn(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+            files.push({ name: 'dir_mask_inpaint.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=dE.band[i]?255:0; d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'dir_bg_depth_completed.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=Math.max(0,Math.min(255,(dE.plug[i]*255)|0)); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'dir_bg_color_coarse.png', bytes: mk(d => { for (let i=0;i<dN;i++){ d[i*4]=dE.fill[i*3];d[i*4+1]=dE.fill[i*3+1];d[i*4+2]=dE.fill[i*3+2];d[i*4+3]=255; } }) });
+            meta.files['dir_mask_inpaint.png'] = 'DIRECTIONAL plug gap mask (white = disocclusion to inpaint), native res';
+            meta.files['dir_bg_depth_completed.png'] = 'DIRECTIONAL completed BG depth (holes capped at far-side rim), native res — ControlNet depth conditioning';
+            meta.files['dir_bg_color_coarse.png'] = 'DIRECTIONAL coarse BG fill (replace with diffusion output), native res';
+            meta.directionalNativeRes = [dpw, dph];
+        }
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -5949,6 +5963,10 @@ function exportSDBundle() {
 //      BG layer is already there, at plug depth, with baked color.
 // ============================================================================
 let bgLayerMesh = null;
+// Directional plug data stashed at BG-build for the SD-export bundle (native res,
+// top-row-first): the exact gap mask + completed BG depth + coarse fill the
+// diffusion stage should consume. { band:Uint8, plug:Float32, fill:Uint8(RGB), pw, ph }
+let bgDirectionalExport = null;
 let srcBandTargetA = null, srcBandTargetB = null;
 let bgDepthTarget = null, bgColorTarget = null;
 let bgBuildStamp = null; // last successful BG bake (footer provenance)
@@ -7218,40 +7236,49 @@ function buildBackgroundLayer() {
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
 
-                // --- FILL COLOR (Law 4): pull-push (pyramid) fill diffuses the VALID
-                // background color into each hole — smooth, no streaks (the nearest-
-                // valid copy smeared a rim pixel down its column). Dark ink-contour
-                // pixels (Moebius ligne-claire outlines just outside the silhouette)
-                // are excluded from the fill SOURCE so they don't bleed a black halo
-                // into the reveal. Alpha = band, so the BG material discards outside
-                // the plug (map.a < 0.01). Rows flipped to match the plug orientation.
+                // --- FILL COLOR (Law 4): DEPTH-GUIDED EXEMPLAR (onion-peel). Fill each
+                // hole rim-first by copying the best-matching REAL background patch (SSD
+                // over known neighbours; sources restricted to true background at similar
+                // depth). Preserves the painting's texture (stars, stroke) instead of a
+                // smooth ghost, and only ever samples background — never the foreground.
+                // This is the LIVE preview fill; the SD-export plate is the high-quality
+                // replacement. Alpha = band (BG material discards outside). Rows flipped.
                 const cImg2 = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
                 if (cImg2) {
                     cx.clearRect(0, 0, pw, ph);
                     cx.drawImage(cImg2, 0, 0, pw, ph);
                     const cpx = cx.getImageData(0, 0, pw, ph).data;
-                    // Fill SOURCE = true background only. Exclude the band, dark ink, and
-                    // (directional) OCCLUDER BODIES — non-band pixels nearer than a band
-                    // strip they border — so the foreground (e.g. the astronaut's gear)
-                    // can't bleed into the reveal. Then start each band pixel at the exact
-                    // revealed rim colour (rimSrc, the far side of ITS edge) and pull-push
-                    // the rest; a light blur removes rim-copy streaks.
+                    // fill SOURCE = background only (exclude band, dark ink, occluder bodies)
                     const fillSrc = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillSrc[i] = (!band[i] && lum>=45) ? 1 : 0; }
                     if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
                         const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
                         for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
-                    const frgb = bgPullPushFill(cpx, fillSrc, pw, ph);
+                    const tF = Date.now();
                     const fillRGB = new Float32Array(PN * 3);
-                    for (let i = 0; i < PN; i++) {
-                        if (band[i] && rimSrc && rimSrc[i] >= 0) { const s = rimSrc[i]; fillRGB[i*3]=cpx[s*4]; fillRGB[i*3+1]=cpx[s*4+1]; fillRGB[i*3+2]=cpx[s*4+2]; }
-                        else { fillRGB[i*3]=frgb[i*3]; fillRGB[i*3+1]=frgb[i*3+1]; fillRGB[i*3+2]=frgb[i*3+2]; }
+                    for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
+                    const known = new Uint8Array(PN); for (let i = 0; i < PN; i++) known[i] = band[i]?0:1;
+                    // distance-from-rim ordering (fill rim-first)
+                    const dist = new Int32Array(PN).fill(-1), qd = [];
+                    for (let i = 0; i < PN; i++){ if(band[i]){ const x=i%pw,y=(i/pw)|0; const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1]; for(const j of nb){ if(j>=0&&!band[j]){dist[i]=0;qd.push(i);break;} } } }
+                    for (let h = 0; h < qd.length; h++){ const i=qd[h]; const x=i%pw,y=(i/pw)|0; const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1]; for(const j of nb){ if(j>=0&&band[j]&&dist[j]<0){dist[j]=dist[i]+1;qd.push(j);} } }
+                    const order = []; for (let i = 0; i < PN; i++) if(band[i]) order.push(i); order.sort((a,b)=>dist[a]-dist[b]);
+                    const EP = 2, EWIN = 12;
+                    for (const i of order){ const x=i%pw,y=(i/pw)|0; const targetD = plugDepth[i];
+                        let bestErr = 1e18, bestS = (rimSrc && rimSrc[i]>=0) ? rimSrc[i] : i;
+                        const sx0=Math.max(EP,x-EWIN), sx1=Math.min(pw-1-EP,x+EWIN), sy0=Math.max(EP,y-EWIN), sy1=Math.min(ph-1-EP,y+EWIN);
+                        for (let sy=sy0;sy<=sy1;sy++) for (let sx=sx0;sx<=sx1;sx++){ const s=sy*pw+sx; if(!fillSrc[s])continue; if(Math.abs(depth[s]-targetD)>0.12)continue;
+                            let err=0,cnt=0; for(let dy=-EP;dy<=EP;dy++)for(let dx=-EP;dx<=EP;dx++){ const tx=x+dx,ty=y+dy; if(tx<0||tx>=pw||ty<0||ty>=ph)continue; const ti=ty*pw+tx; if(!known[ti])continue;
+                                const si=(sy+dy)*pw+(sx+dx); const dr=fillRGB[ti*3]-cpx[si*4],dg=fillRGB[ti*3+1]-cpx[si*4+1],db=fillRGB[ti*3+2]-cpx[si*4+2]; err+=dr*dr+dg*dg+db*db; cnt++; }
+                            if(cnt>0){ err/=cnt; if(err<bestErr){bestErr=err;bestS=s;} } }
+                        fillRGB[i*3]=cpx[bestS*4]; fillRGB[i*3+1]=cpx[bestS*4+1]; fillRGB[i*3+2]=cpx[bestS*4+2]; known[i]=1;
                     }
-                    // light smoothing of the fill inside the band (reduce rim-copy streaks)
-                    let SB = fillRGB.slice();
-                    for (let p = 0; p < 8; p++) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!band[i])continue;
-                        let r=0,g=0,b=0,n=0; for (const [dx,dy] of [[0,0],[-1,0],[1,0],[0,-1],[0,1]]){ const xx=x+dx,yy=y+dy; if(xx<0||xx>=pw||yy<0||yy>=ph)continue; const j=yy*pw+xx; r+=fillRGB[j*3];g+=fillRGB[j*3+1];b+=fillRGB[j*3+2];n++; }
-                        SB[i*3]=r/n;SB[i*3+1]=g/n;SB[i*3+2]=b/n; } const tmp=fillRGB; for(let k=0;k<PN*3;k++)fillRGB[k]=SB[k]; SB=tmp; }
+                    // Stash directional gap data for the SD-export bundle (native res, top-row-first)
+                    if (bgPlugMode === 'directional') {
+                        const fillU8 = new Uint8Array(PN*3);
+                        for (let k = 0; k < PN*3; k++) fillU8[k] = Math.max(0, Math.min(255, fillRGB[k]|0));
+                        bgDirectionalExport = { band: band, plug: plugDepth, fill: fillU8, pw: pw, ph: ph };
+                    }
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
@@ -7264,7 +7291,7 @@ function buildBackgroundLayer() {
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
                     if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
                     _fillTex = fillDT;
-                    console.log('[RUNG-PLUG] fill: directional rim-colour (bg-only source) built');
+                    console.log('[RUNG-PLUG] fill: depth-guided exemplar (' + order.length + ' holes, ' + (Date.now()-tF) + 'ms)');
                 }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
