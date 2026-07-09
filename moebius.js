@@ -7255,24 +7255,27 @@ function buildBackgroundLayer() {
                         const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
                         for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
                     const tF = Date.now();
+                    const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
                     const fillRGB = new Float32Array(PN * 3);
                     for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
-                    const known = new Uint8Array(PN); for (let i = 0; i < PN; i++) known[i] = band[i]?0:1;
-                    // distance-from-rim ordering (fill rim-first)
-                    const dist = new Int32Array(PN).fill(-1), qd = [];
-                    for (let i = 0; i < PN; i++){ if(band[i]){ const x=i%pw,y=(i/pw)|0; const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1]; for(const j of nb){ if(j>=0&&!band[j]){dist[i]=0;qd.push(i);break;} } } }
-                    for (let h = 0; h < qd.length; h++){ const i=qd[h]; const x=i%pw,y=(i/pw)|0; const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1]; for(const j of nb){ if(j>=0&&band[j]&&dist[j]<0){dist[j]=dist[i]+1;qd.push(j);} } }
-                    const order = []; for (let i = 0; i < PN; i++) if(band[i]) order.push(i); order.sort((a,b)=>dist[a]-dist[b]);
-                    const EP = 2, EWIN = 12;
-                    for (const i of order){ const x=i%pw,y=(i/pw)|0; const targetD = plugDepth[i];
-                        let bestErr = 1e18, bestS = (rimSrc && rimSrc[i]>=0) ? rimSrc[i] : i;
-                        const sx0=Math.max(EP,x-EWIN), sx1=Math.min(pw-1-EP,x+EWIN), sy0=Math.max(EP,y-EWIN), sy1=Math.min(ph-1-EP,y+EWIN);
-                        for (let sy=sy0;sy<=sy1;sy++) for (let sx=sx0;sx<=sx1;sx++){ const s=sy*pw+sx; if(!fillSrc[s])continue; if(Math.abs(depth[s]-targetD)>0.12)continue;
-                            let err=0,cnt=0; for(let dy=-EP;dy<=EP;dy++)for(let dx=-EP;dx<=EP;dx++){ const tx=x+dx,ty=y+dy; if(tx<0||tx>=pw||ty<0||ty>=ph)continue; const ti=ty*pw+tx; if(!known[ti])continue;
-                                const si=(sy+dy)*pw+(sx+dx); const dr=fillRGB[ti*3]-cpx[si*4],dg=fillRGB[ti*3+1]-cpx[si*4+1],db=fillRGB[ti*3+2]-cpx[si*4+2]; err+=dr*dr+dg*dg+db*db; cnt++; }
-                            if(cnt>0){ err/=cnt; if(err<bestErr){bestErr=err;bestS=s;} } }
-                        fillRGB[i*3]=cpx[bestS*4]; fillRGB[i*3+1]=cpx[bestS*4+1]; fillRGB[i*3+2]=cpx[bestS*4+2]; known[i]=1;
+                    // DIRECTIONAL BACKGROUND EXTENSION: for each hole, march to the nearest
+                    // far-side background rim, then REFLECT the real background across the rim
+                    // into the hole — copies actual sky/desert texture (stars, stroke), never
+                    // the foreground and never a muddy blend. Fall back to the smooth base only
+                    // where the reflected sample isn't valid background.
+                    const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
+                    for (let i = 0; i < PN; i++){ if(!band[i])continue; const x=i%pw,y=(i/pw)|0;
+                        let bestSteps=1e9,bxx=0,byy=0,rX=0,rY=0;
+                        for (const d of DIRS){ const dx=d[0],dy=d[1]; let cxp=x,cyp=y,st=0;
+                            while(st<400){ cxp+=dx;cyp+=dy;st++; if(cxp<0||cxp>=pw||cyp<0||cyp>=ph){st=1e9;break;} if(!band[cyp*pw+cxp])break; }
+                            if(st<bestSteps && st<1e9 && fillSrc[cyp*pw+cxp]){ bestSteps=st;bxx=dx;byy=dy;rX=cxp;rY=cyp; } }
+                        if(bestSteps<1e9){ const sxp=rX+bxx*bestSteps, syp=rY+byy*bestSteps;
+                            if(sxp>=0&&sxp<pw&&syp>=0&&syp<ph && fillSrc[syp*pw+sxp]){ const s=syp*pw+sxp; fillRGB[i*3]=cpx[s*4];fillRGB[i*3+1]=cpx[s*4+1];fillRGB[i*3+2]=cpx[s*4+2]; }
+                            else { const r=rY*pw+rX; fillRGB[i*3]=cpx[r*4];fillRGB[i*3+1]=cpx[r*4+1];fillRGB[i*3+2]=cpx[r*4+2]; } }
+                        else { fillRGB[i*3]=smoothBase[i*3];fillRGB[i*3+1]=smoothBase[i*3+1];fillRGB[i*3+2]=smoothBase[i*3+2]; }
                     }
+                    const order = { length: 0 }; // (retained name for the log below)
+                    for (let i = 0; i < PN; i++) if (band[i]) order.length++;
                     // Stash directional gap data for the SD-export bundle (native res, top-row-first)
                     if (bgPlugMode === 'directional') {
                         const fillU8 = new Uint8Array(PN*3);
@@ -7291,7 +7294,7 @@ function buildBackgroundLayer() {
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
                     if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
                     _fillTex = fillDT;
-                    console.log('[RUNG-PLUG] fill: depth-guided exemplar (' + order.length + ' holes, ' + (Date.now()-tF) + 'ms)');
+                    console.log('[RUNG-PLUG] fill: directional bg extension/reflection (' + order.length + ' holes, ' + (Date.now()-tF) + 'ms)');
                 }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
