@@ -5923,6 +5923,24 @@ function exportSDBundle() {
             meta.files['dir_bg_color_coarse.png'] = 'DIRECTIONAL coarse BG fill (replace with diffusion output), native res';
             meta.directionalNativeRes = [dpw, dph];
         }
+        // SCENE-EXTENSION / OUTPAINT plate — enlarged canvas (image centred, margin =
+        // beyond-frame region the head-tracked view reveals). The diffusion stage should
+        // OUTPAINT the white margin using out_color_coarse as seed and out_depth_completed
+        // as ControlNet depth, then the result is imported back onto the extended BG layer.
+        if (bgExtendExport) {
+            const xE = bgExtendExport, xw = xE.EPW, xh = xE.EPH, xN = xw*xh;
+            const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = xw; cv.height = xh;
+                const cc = cv.getContext('2d'); const id = cc.createImageData(xw, xh); drawFn(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+            files.push({ name: 'out_mask_outpaint.png', bytes: mk(d => { for (let i=0;i<xN;i++){ const v=xE.mask[i]?255:0; d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            files.push({ name: 'out_color_coarse.png', bytes: mk(d => { for (let i=0;i<xN;i++){ d[i*4]=xE.fill[i*3];d[i*4+1]=xE.fill[i*3+1];d[i*4+2]=xE.fill[i*3+2];d[i*4+3]=255; } }) });
+            files.push({ name: 'out_depth_completed.png', bytes: mk(d => { for (let i=0;i<xN;i++){ const v=Math.max(0,Math.min(255,(xE.depth[i]*255)|0)); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+            meta.files['out_mask_outpaint.png'] = 'SCENE-EXTENSION outpaint mask (white = beyond-frame margin to generate), extended res';
+            meta.files['out_color_coarse.png'] = 'SCENE-EXTENSION coarse colour (image centred, margin edge-extended) — outpaint seed, extended res';
+            meta.files['out_depth_completed.png'] = 'SCENE-EXTENSION completed depth (margin edge-extended) — ControlNet depth conditioning, extended res';
+            meta.outpaintExtendedRes = [xw, xh];
+            meta.outpaintMarginPx = [xE.mx, xE.my];
+            meta.outpaintSourceRes = [xE.pw, xE.ph];
+        }
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -6345,6 +6363,18 @@ let bgSplitDefault = 0.35; // fallback split if a threshold can't be computed
 //                   never protrudes, needs no band/valid PNG (band computed from depth).
 //   'global'      — legacy: band(PNG or live) + Otsu valid + harmonic (fg/bg only).
 let bgPlugMode = 'directional';
+// Scene extension / outpaint (coarse live pass): grow the BG layer beyond the
+// image rectangle so the off-axis frustum, as the head sweeps, finds background
+// out to the terrarium frame and past it, instead of clear-color void. The
+// margin is sized automatically (pillarbox/letterbox gap + max-parallax reveal).
+// The coarse pass edge-extends colour+depth into the margin; the SD bundle
+// exports a proper outpaint plate (mask + extended colour + extended depth) to
+// replace it. Set false to keep the BG layer flush with the image rectangle.
+let bgSceneExtend = true;
+// Coarse-extension data stashed at BG-build for the SD outpaint bundle
+// (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
+//  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
+let bgExtendExport = null;
 // Otsu threshold (maximize between-class variance) over a value list in [0,1].
 function bgOtsuThreshold(values, skip) {
     const B = 256, h = new Float64Array(B); let n = 0;
@@ -7117,6 +7147,8 @@ function buildBackgroundLayer() {
         if (bgLayerMesh) {
             scene.remove(bgLayerMesh);
             bgLayerMesh.material.dispose();
+            // dispose our own oversized geometry, but never the shared FG geometry
+            if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
             bgLayerMesh = null;
         }
         const mat = L.mesh.material.clone();
@@ -7125,6 +7157,8 @@ function buildBackgroundLayer() {
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
+        let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
+        bgExtendExport = null;
         const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
         if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
             try {
@@ -7305,6 +7339,89 @@ function buildBackgroundLayer() {
                     if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
                     _fillTex = fillDT;
                     console.log('[RUNG-PLUG] fill: directional bg extension/reflection (' + order.length + ' holes, ' + (Date.now()-tF) + 'ms)');
+
+                    // ---- SCENE EXTENSION / OUTPAINT (coarse live pass) ----
+                    // Grow the BG layer past the image rectangle so the off-axis frustum,
+                    // as the head sweeps, finds background out to the terrarium frame and
+                    // a little beyond, not clear-color void. Margin (auto) = the fixed
+                    // pillarbox/letterbox gap between the image and the frame, PLUS the
+                    // max-parallax reveal of the far plane across the head-track range:
+                    // a far point (z = portal - sOuter) shifts on the portal by
+                    // dEx * sOuter/(Ez + sOuter). Coarse fill = edge-replicate colour+depth
+                    // into the margin (SD plate replaces it). Centre keeps band alpha so the
+                    // FG still shows in front; the margin is opaque scene backdrop.
+                    if (bgSceneExtend && L.mesh && L.mesh.geometry && L.mesh.geometry.parameters) {
+                        const gp = L.mesh.geometry.parameters;
+                        const origW = gp.width, origH = gp.height;
+                        const segW0 = gp.widthSegments || 1, segH0 = gp.heightSegments || 1;
+                        const ax = origW / pw, ay = origH / ph;               // world units / source texel
+                        const hAngle = parseFloat(document.getElementById('autoSweepAngleHorizSlider')?.value || 45) / 400.0;
+                        const vAngle = parseFloat(document.getElementById('autoSweepAngleVertSlider')?.value  || 45) / 400.0;
+                        const Ez = Math.max(1e-3, Math.abs(((camera && camera.position) ? camera.position.z : 0.17) - portalPlaneWorldZ));
+                        const sOuter = Math.max(1e-4, outerVolumeDepth * metricScaleFactor);
+                        const parX = sOuter / (Ez + sOuter);                  // portal shift per unit eye-x
+                        const PAD = 1.15;
+                        // margin in WORLD units from the image edge: pillarbox gap + parallax reveal
+                        const mWx = Math.max(0, (terrariumWidth  - origW) / 2) + hAngle * parX;
+                        const mWy = Math.max(0, (terrariumHeight - origH) / 2) + vAngle * parX;
+                        let mx = Math.ceil((mWx / ax) * PAD), my = Math.ceil((mWy / ay) * PAD);
+                        mx = Math.max(0, Math.min(mx, pw));  my = Math.max(0, Math.min(my, ph)); // sane clamp
+                        if (mx > 0 || my > 0) {
+                            const tX = Date.now();
+                            const EPW = pw + 2*mx, EPH = ph + 2*my, EPN = EPW*EPH;
+                            const cX = v => v < 0 ? 0 : (v >= pw ? pw-1 : v);
+                            const cY = v => v < 0 ? 0 : (v >= ph ? ph-1 : v);
+                            const extDepth = new Float32Array(EPN);   // top-row-first
+                            const extFill  = new Uint8Array(EPN*3);   // top-row-first RGB
+                            const extMask  = new Uint8Array(EPN);     // 1 = margin (outpaint region)
+                            for (let Y = 0; Y < EPH; Y++) { const sy = cY(Y-my), inRowY = (Y>=my && Y<my+ph);
+                                for (let X = 0; X < EPW; X++) { const sx = cX(X-mx);
+                                    const si = sy*pw+sx, di = Y*EPW+X;
+                                    const inCenter = inRowY && (X>=mx && X<mx+pw);
+                                    extDepth[di] = plugDepth[si];             // edge-replicated depth
+                                    extFill[di*3]   = fillRGB[si*3];
+                                    extFill[di*3+1] = fillRGB[si*3+1];
+                                    extFill[di*3+2] = fillRGB[si*3+2];
+                                    extMask[di] = inCenter ? 0 : 1;
+                                }
+                            }
+                            // extended plug-depth texture (RedFloat, rows flipped for GL like the native one)
+                            const eplug = new Float32Array(EPN);
+                            for (let y = 0; y < EPH; y++) { const s = y*EPW, d = (EPH-1-y)*EPW;
+                                for (let x = 0; x < EPW; x++) eplug[d+x] = extDepth[s+x]; }
+                            const eplugDT = new THREE.DataTexture(eplug, EPW, EPH, THREE.RedFormat, THREE.FloatType);
+                            eplugDT.needsUpdate = true; eplugDT.flipY = false;
+                            eplugDT.minFilter = THREE.LinearFilter; eplugDT.magFilter = THREE.LinearFilter;
+                            if ('colorSpace' in eplugDT) eplugDT.colorSpace = THREE.NoColorSpace;
+                            _plugTex = eplugDT;
+                            // extended fill texture: centre alpha = band (FG shows in front),
+                            // margin alpha = 255 (opaque backdrop). Rows flipped for GL.
+                            const efill = new Uint8Array(EPN*4);
+                            for (let Y = 0; Y < EPH; Y++) { const inRowY = (Y>=my && Y<my+ph);
+                                for (let X = 0; X < EPW; X++) {
+                                    const si = Y*EPW+X, o = ((EPH-1-Y)*EPW+X)*4;
+                                    const inCenter = inRowY && (X>=mx && X<mx+pw);
+                                    efill[o]=extFill[si*3]; efill[o+1]=extFill[si*3+1]; efill[o+2]=extFill[si*3+2];
+                                    efill[o+3] = inCenter ? (band[(cY(Math.floor(Y-my)))*pw + cX(Math.floor(X-mx))] ? 255 : 0) : 255;
+                                }
+                            }
+                            const efillDT = new THREE.DataTexture(efill, EPW, EPH, THREE.RGBAFormat, THREE.UnsignedByteType);
+                            efillDT.needsUpdate = true; efillDT.flipY = false;
+                            efillDT.minFilter = THREE.LinearFilter; efillDT.magFilter = THREE.LinearFilter;
+                            if ('encoding' in efillDT) efillDT.encoding = THREE.sRGBEncoding;
+                            if ('colorSpace' in efillDT) efillDT.colorSpace = THREE.SRGBColorSpace;
+                            _fillTex = efillDT;
+                            // oversized geometry, same vertex density, centred on the portal
+                            const gW = origW + 2*mx*ax, gH = origH + 2*my*ay;
+                            const segW = Math.max(1, Math.round(segW0 * gW / origW));
+                            const segH = Math.max(1, Math.round(segH0 * gH / origH));
+                            bgExtGeom = new THREE.PlaneGeometry(gW, gH, segW, segH);
+                            // stash for the SD outpaint bundle (top-row-first, extended res)
+                            bgExtendExport = { mx, my, pw, ph, EPW, EPH, depth: extDepth, fill: extFill, mask: extMask };
+                            console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
+                                EPW + 'x' + EPH + ' (' + (Date.now()-tX) + 'ms)');
+                        }
+                    }
                 }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
@@ -7318,7 +7435,7 @@ function buildBackgroundLayer() {
         mat.uniforms.u_useEdgeMask.value = false;
         // Tiny push back so the BG never z-fights the FG where their depths match.
         mat.uniforms.displacementBias.value = (mat.uniforms.displacementBias.value || 0) - 0.004;
-        bgLayerMesh = new THREE.Mesh(L.mesh.geometry, mat);
+        bgLayerMesh = new THREE.Mesh(bgExtGeom || L.mesh.geometry, mat);
         bgLayerMesh.position.copy(L.mesh.position);
         bgLayerMesh.rotation.copy(L.mesh.rotation);
         bgLayerMesh.scale.copy(L.mesh.scale);
