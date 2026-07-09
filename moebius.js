@@ -6392,14 +6392,14 @@ function bgDirectionalPlug(depth, W, H, opts) {
     for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
         const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
     const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
-    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), q = [];
+    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1), q = [];
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
-        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, isE=false;
-        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar)bestFar=depth[j]; } }
-        if (isE){ band[i]=1; rim[i]=bestFar; budget[i]=Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2; q.push(i); } }
+        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, bestJ=-1, isE=false;
+        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ; budget[i]=Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2; q.push(i); } }
     for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
         const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
-        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; budget[j]=budget[i]-1; q.push(j); } } }
+        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; rimSrc[j]=rimSrc[i]; budget[j]=budget[i]-1; q.push(j); } } }
     const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
     const ring = new Uint8Array(N);
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
@@ -6408,7 +6408,7 @@ function bgDirectionalPlug(depth, W, H, opts) {
     for (let s=0;s<SWEEPS;s++){ for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]){B[i]=A[i];continue;}
         B[i]=0.25*(A[y*W+Math.max(0,x-1)]+A[y*W+Math.min(W-1,x+1)]+A[Math.max(0,y-1)*W+x]+A[Math.min(H-1,y+1)*W+x]); } const t=A;A=B;B=t; }
     for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
-    return { plug, band };
+    return { plug, band, rimSrc };
 }
 (function(){
     const bImg = new Image(); bImg.onload = function(){
@@ -7157,13 +7157,13 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
-                let band, plugDepth;
+                let band, plugDepth, rimSrc = null;
                 if (bgPlugMode === 'directional') {
                     // Single directional plug computed straight from the depth: seal each
                     // disocclusion at the far side of its own edge, grown in by the edge's
                     // parallax budget. No band/valid PNG needed.
                     const dr = bgDirectionalPlug(depth, pw, ph, {});
-                    band = dr.band; plugDepth = dr.plug;
+                    band = dr.band; plugDepth = dr.plug; rimSrc = dr.rimSrc;
                     let bandN = 0; for (let i = 0; i < PN; i++) bandN += band[i];
                     console.log('[RUNG-PLUG] inputs: directional plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
                         ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)');
@@ -7230,13 +7230,32 @@ function buildBackgroundLayer() {
                     cx.clearRect(0, 0, pw, ph);
                     cx.drawImage(cImg2, 0, 0, pw, ph);
                     const cpx = cx.getImageData(0, 0, pw, ph).data;
-                    const fillValid = new Uint8Array(PN);
-                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillValid[i] = (!band[i] && lum>=45) ? 1 : 0; }
-                    const frgb = bgPullPushFill(cpx, fillValid, pw, ph);
+                    // Fill SOURCE = true background only. Exclude the band, dark ink, and
+                    // (directional) OCCLUDER BODIES — non-band pixels nearer than a band
+                    // strip they border — so the foreground (e.g. the astronaut's gear)
+                    // can't bleed into the reveal. Then start each band pixel at the exact
+                    // revealed rim colour (rimSrc, the far side of ITS edge) and pull-push
+                    // the rest; a light blur removes rim-copy streaks.
+                    const fillSrc = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillSrc[i] = (!band[i] && lum>=45) ? 1 : 0; }
+                    if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
+                        const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
+                        for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
+                    const frgb = bgPullPushFill(cpx, fillSrc, pw, ph);
+                    const fillRGB = new Float32Array(PN * 3);
+                    for (let i = 0; i < PN; i++) {
+                        if (band[i] && rimSrc && rimSrc[i] >= 0) { const s = rimSrc[i]; fillRGB[i*3]=cpx[s*4]; fillRGB[i*3+1]=cpx[s*4+1]; fillRGB[i*3+2]=cpx[s*4+2]; }
+                        else { fillRGB[i*3]=frgb[i*3]; fillRGB[i*3+1]=frgb[i*3+1]; fillRGB[i*3+2]=frgb[i*3+2]; }
+                    }
+                    // light smoothing of the fill inside the band (reduce rim-copy streaks)
+                    let SB = fillRGB.slice();
+                    for (let p = 0; p < 8; p++) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!band[i])continue;
+                        let r=0,g=0,b=0,n=0; for (const [dx,dy] of [[0,0],[-1,0],[1,0],[0,-1],[0,1]]){ const xx=x+dx,yy=y+dy; if(xx<0||xx>=pw||yy<0||yy>=ph)continue; const j=yy*pw+xx; r+=fillRGB[j*3];g+=fillRGB[j*3+1];b+=fillRGB[j*3+2];n++; }
+                        SB[i*3]=r/n;SB[i*3+1]=g/n;SB[i*3+2]=b/n; } const tmp=fillRGB; for(let k=0;k<PN*3;k++)fillRGB[k]=SB[k]; SB=tmp; }
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
-                        if (band[i]) { fill[o]=frgb[i*3]; fill[o+1]=frgb[i*3+1]; fill[o+2]=frgb[i*3+2]; fill[o+3]=255; }
+                        if (band[i]) { fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2]; fill[o+3]=255; }
                         // else leave alpha 0 (transparent -> discarded by the BG material)
                     }
                     const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -7245,7 +7264,7 @@ function buildBackgroundLayer() {
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
                     if ('colorSpace' in fillDT) fillDT.colorSpace = THREE.SRGBColorSpace;   // r152+
                     _fillTex = fillDT;
-                    console.log('[RUNG-PLUG] fill: pull-push (ink-excluded) built');
+                    console.log('[RUNG-PLUG] fill: directional rim-colour (bg-only source) built');
                 }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
