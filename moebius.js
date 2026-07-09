@@ -7282,11 +7282,21 @@ function buildBackgroundLayer() {
                         for (let k = 0; k < PN*3; k++) fillU8[k] = Math.max(0, Math.min(255, fillRGB[k]|0));
                         bgDirectionalExport = { band: band, plug: plugDepth, fill: fillU8, pw: pw, ph: ph };
                     }
+                    // Bleed the band's fill colour a few px OUT into the surrounding
+                    // non-band so the fill texture's bilinear edge blends fill->fill,
+                    // not fill->black. Alpha stays sharp (= band); only RGB is bled.
+                    { let filled = new Uint8Array(PN); for (let i=0;i<PN;i++) filled[i]=band[i]?1:0;
+                      for (let p=0;p<3;p++){ const prev=filled.slice();
+                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(prev[i])continue;
+                          const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
+                          for (const j of nb){ if(j>=0&&prev[j]){ fillRGB[i*3]=fillRGB[j*3];fillRGB[i*3+1]=fillRGB[j*3+1];fillRGB[i*3+2]=fillRGB[j*3+2]; filled[i]=1; break; } } } } }
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
-                        if (band[i]) { fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2]; fill[o+3]=255; }
-                        // else leave alpha 0 (transparent -> discarded by the BG material)
+                        // RGB written everywhere (fill inside band, bled colour just
+                        // outside, source elsewhere); alpha = band drives the discard.
+                        fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2];
+                        fill[o+3] = band[i] ? 255 : 0;
                     }
                     const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
                     fillDT.needsUpdate = true; fillDT.flipY = false;
