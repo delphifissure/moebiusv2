@@ -6371,14 +6371,24 @@ let bgPlugMode = 'directional';
 // exports a proper outpaint plate (mask + extended colour + extended depth) to
 // replace it. Set false to keep the BG layer flush with the image rectangle.
 let bgSceneExtend = true;
-// Streak suppression: the coarse fill copies real background across a gap, but
-// where it has to travel far from any real pixel it degrades into a 1-D smear
-// (the horizontal streaks). That travel distance IS a confidence signal, so we
-// fade the fill's ALPHA out with it — short reach stays opaque, long reach goes
-// transparent (revealing nothing rather than a smear, and deferred to the SD
-// plate, whose masks already cover the whole gap). Tunable in px of source res.
-let bgStreakFadeNearPx = 4;    // reach <= this: fully opaque coarse fill (tight near-rim only)
-let bgStreakFadeFarPx  = 20;   // reach >= this: fully transparent (defer to SD)
+// Band fill opacity. With the band tightened to a silhouette strip the fill is
+// short-range, so it should read as a SOLID, complete inpaint — no streaks AND
+// no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
+// (The reach->alpha fade below is retained for the case where the band is
+//  widened well past the reveal; it fades the far, purely-stretched reach so it
+//  degrades to transparent instead of a smear. Off by default now.)
+let bgFillSolid = true;
+// Band fill method:
+//   'smooth'  — pull-push (pyramid diffusion) from the surrounding real background.
+//               Solid and streak-free; for smooth backgrounds (sky, desert) it is
+//               near-perfect. The tight band keeps any blur to a few px. DEFAULT.
+//   'reflect' — copy/reflect real background across the rim into the gap. Preserves
+//               texture (stars, stroke) but striates when the reach is long.
+let bgFillMode = 'smooth';
+// Streak suppression (only used when bgFillSolid = false): fade the fill's alpha
+// with the distance it had to travel from real background (the streak signal).
+let bgStreakFadeNearPx = 8;    // reach <= this: fully opaque coarse fill
+let bgStreakFadeFarPx  = 40;   // reach >= this: fully transparent (defer to SD)
 let bgMarginFadeStartFrac = 0.5; // margin stays opaque until this fraction out, then fades to the edge
 // Disocclusion band width cap. The band grows from each silhouette edge INTO the
 // occluder by the local parallax budget so the BG layer holds real background
@@ -7337,10 +7347,17 @@ function buildBackgroundLayer() {
                         else { fillRGB[i*3]=smoothBase[i*3];fillRGB[i*3+1]=smoothBase[i*3+1];fillRGB[i*3+2]=smoothBase[i*3+2];
                             bandReach[i]=1e6; }
                     }
+                    // 'smooth' mode: replace the band colour with the pull-push diffusion
+                    // fill — solid and streak-free (the reflection above only sets bandReach,
+                    // used by the optional fade). Keeps the interior clean, no striation.
+                    if (bgFillMode === 'smooth') {
+                        for (let i = 0; i < PN; i++) if (band[i]) { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                    }
                     // reach -> alpha: opaque for short reach, faded to transparent for long
                     // (streaks). smoothstep between the two configured thresholds.
                     const _reachAlpha = (r) => {
-                        if (r >= 1e6) return 0;
+                        if (bgFillSolid) return 255;                 // solid fill: no gaps inside the silhouette
+                        if (r >= 1e6) return 255;                    // ghost (smooth-filled) still solid, not empty
                         if (r <= bgStreakFadeNearPx) return 255;
                         if (r >= bgStreakFadeFarPx) return 0;
                         const t = (r - bgStreakFadeNearPx) / (bgStreakFadeFarPx - bgStreakFadeNearPx);
