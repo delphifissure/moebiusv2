@@ -6403,6 +6403,13 @@ let bgBandMaxGrowPx = 28;
 // and depth-map noise inside the figure, tiling the whole body with band seeds;
 // raise it so only genuine figure->background cliffs seed a strip.
 let bgBandStep = 0.10;
+// Cut the foreground at disocclusions in the scene pass when the BG plug is live,
+// so the FG opens the hole onto the stable plug instead of stretching over it
+// (the reveal-side streak). UV-stretch targets smeared triangles; the depth-grad
+// cut catches sharp depth cliffs. Tune the thresholds if the FG over-/under-cuts.
+let bgCutFGOnPlug = true;
+let bgFGCutUVStretch = 0.5;   // lower = cut more stretched FG triangles
+let bgFGCutDepthGrad = 0.02;  // lower = cut at gentler depth cliffs
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -10103,16 +10110,27 @@ function render() {
     }
 
     // --- PASS: Generate Gaps/Edges ---
-    setAllLayerUniforms('u_useDepthGrad', document.getElementById('useDepthGradCheck')?.checked || false);
+    // When the BG plug layer is live, force the FG depth/stretch cut ON for this
+    // scene render regardless of the UI toggles: the final composite expects the
+    // scene render to already hold BG at plug depth in the disocclusions (see
+    // finalCompositeMaterial u_bgLayerActive). Without the cut the FG stretches
+    // across the gap and covers the plug — the reveal-side streak. The BG mesh
+    // itself never discards (u_isBackgroundLayer), so only the foreground cuts.
+    const _bgCut = bgCutFGOnPlug && (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.visible);
+    setAllLayerUniforms('u_useDepthGrad', _bgCut || (document.getElementById('useDepthGradCheck')?.checked || false));
     setAllLayerUniforms('u_useSobel', document.getElementById('useSobelCheck')?.checked || false);
     setAllLayerUniforms('u_useLuma', document.getElementById('useLumaCheck')?.checked || false);
     setAllLayerUniforms('u_useChroma', document.getElementById('useChromaCheck')?.checked || false);
     setAllLayerUniforms('u_useCrease', document.getElementById('useCreaseCheck')?.checked || false);
     setAllLayerUniforms('u_useCurvature', document.getElementById('useCurvatureCheck')?.checked || false);
-    setAllLayerUniforms('u_useUVStretch', document.getElementById('useUVStretchCheck')?.checked || false);
+    setAllLayerUniforms('u_useUVStretch', _bgCut || (document.getElementById('useUVStretchCheck')?.checked || false));
     setAllLayerUniforms('u_useGrazingAngle', document.getElementById('useGrazingAngleCheck')?.checked || false);
     setAllLayerUniforms('u_useEdgeMask', false);
-    
+    if (_bgCut) {
+        setAllLayerUniforms('u_depthGradThreshold', bgFGCutDepthGrad);
+        setAllLayerUniforms('u_uvStretchThreshold', bgFGCutUVStretch);
+    }
+
     if (!pingPongRenderTargetB) { console.error("pingPongRenderTargetB not initialized!"); return; }
     renderer.setRenderTarget(pingPongRenderTargetB); renderer.clear();
     renderer.render(scene, camera);
