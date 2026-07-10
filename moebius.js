@@ -7542,59 +7542,42 @@ function buildBackgroundLayer() {
                     // ground. Result: the whole near-class occluder is completed
                     // with local rims and the plug has no interior cliff.
                     const otsuThr = bgOtsuThreshold(depth, band);
-                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), q2 = [];
-                    // rimC: LOCAL rim source pixel carried with the flood, so the
-                    // fill under each occluder takes its own edge's colour (legs
-                    // fill dune-pink, torso fills sky-blue) — criterion 1's colour
-                    // half; the global pull-push mixed sky down the leg corridor.
+                    // UNIFIED COMPLETION FLOOD, nearest-rim-first (review v5).
+                    // First-come BFS let FAR-rim fronts (torso->sky/plain) walk
+                    // down through low-contrast ground contacts and claim the
+                    // legs and nearby dune — the reveal then showed the DISTANT
+                    // blue sand through the pink sand. Fronts are processed in
+                    // DESCENDING rim depth (the local surface claims its own
+                    // occluder before any far front arrives), and the entry gate
+                    // is +0.02 so a leg only ~0.05 nearer than its dune still
+                    // admits the dune's rim.
+                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN);
                     const rimC = new Int32Array(PN).fill(-1);
+                    const NB = 32, buckets = [];
+                    for (let k = 0; k < NB; k++) buckets.push([]);
+                    const bkt = (r) => Math.max(0, Math.min(NB - 1, ((1 - r) * NB) | 0)); // near rim -> low bucket
                     for (let i = 0; i < PN; i++) if (band[i]) {
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
-                                depth[j] >= plugDepth[i] + 0.06 && depth[j] >= otsuThr) {
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.02) {
                             fgm[j] = 1; rimV[j] = plugDepth[i];
                             rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
-                            q2.push(j);
+                            buckets[bkt(plugDepth[i])].push(j);
                         }
                     }
-                    for (let h = 0; h < q2.length; h++) { const i = q2[h];
-                        const x = i % pw, y = (i / pw) | 0;
-                        const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
-                                depth[j] >= rimV[i] + 0.06 && depth[j] >= otsuThr) {
-                            fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i]; q2.push(j);
-                        }
-                    }
-                    // PASS 2 — sub-Otsu occluders (seated group, sled, tents). The
-                    // Otsu floor kept pass 1 from leaking through ground contact,
-                    // but left mid-depth occluders uncompleted: the full-frame
-                    // plate carried THEIR colours, which parallax wrong when a
-                    // torn reveal opens beside them (dark scallops at the dune
-                    // crest). Near-class is already claimed, so this flood is
-                    // contained by the +0.06 continuity gate alone (their rims are
-                    // the local plain; nothing unclaimed rises 0.06 above it); a
-                    // generous budget is the hard stop.
-                    {
-                        const budg2 = new Int32Array(PN); const q3 = [];
-                        for (let i = 0; i < PN; i++) if (band[i]) {
+                    for (let bi = 0; bi < NB; bi++) {
+                        const q2 = buckets[bi];
+                        for (let h = 0; h < q2.length; h++) { const i = q2[h];
                             const x = i % pw, y = (i / pw) | 0;
                             const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
-                                fgm[j] = 1; rimV[j] = plugDepth[i];
-                                rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
-                                budg2[j] = 400; q3.push(j);
+                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.02) {
+                                fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i];
+                                const tb = bkt(rimV[i]);
+                                if (tb === bi) q2.push(j); else buckets[tb].push(j);
                             }
                         }
-                        for (let h = 0; h < q3.length; h++) { const i = q3[h]; if (budg2[i] <= 0) continue;
-                            const x = i % pw, y = (i / pw) | 0;
-                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.06) {
-                                fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i]; budg2[j] = budg2[i] - 1; q3.push(j);
-                            }
-                        }
-                        console.log('[RUNG-PLUG] completion pass 2 (sub-otsu occluders): +' + q3.length + 'px');
                     }
+                    console.log('[RUNG-PLUG] completion flood: unified nearest-rim-first, gate 0.02');
                     // Reject rims that are themselves under an occluder (internal
                     // figure cliffs: arm-over-torso seeds carry FIGURE colours —
                     // bright dashes in the fill). Those pixels fall back to the
