@@ -7957,14 +7957,22 @@ function buildBackgroundLayer() {
                             const extValid = new Uint8Array(EPN);
                             const extCpx = new Uint8Array(EPN*4);   // RGBA, colour source
                             const extDpx = new Uint8Array(EPN*4);   // RGBA, depth encoded as gray
+                            // Margin seeds = SOURCE image colour + FRONT-surface depth, not the
+                            // plate fill. A beyond-frame reveal shows the front world continuing
+                            // past the frame (the near dune keeps going below the bottom edge),
+                            // and a near-depth skirt parallax-slides with the FG silhouette to
+                            // cover the gap. Seeding from the plate put the occluded-world wash
+                            // (inpaint blues, starved blacks, fill striations) at FAR depth in
+                            // the margin: it stayed put under parallax and rendered as the
+                            // striped off-colour band along the frame edge at look-up poses.
                             for (let Y = 0; Y < ph; Y++) for (let X = 0; X < pw; X++) {
                                 const si = Y*pw+X, di = (Y+my)*EPW+(X+mx);
                                 extValid[di] = 1;
-                                extCpx[di*4]   = Math.max(0, Math.min(255, fillRGB[si*3]|0));
-                                extCpx[di*4+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
-                                extCpx[di*4+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
+                                extCpx[di*4]   = cpx[si*4];
+                                extCpx[di*4+1] = cpx[si*4+1];
+                                extCpx[di*4+2] = cpx[si*4+2];
                                 extCpx[di*4+3] = 255;
-                                const dz = Math.max(0, Math.min(255, (plugDepth[si]*255)|0));
+                                const dz = Math.max(0, Math.min(255, (depth[si]*255)|0));
                                 extDpx[di*4] = dz; extDpx[di*4+1] = dz; extDpx[di*4+2] = dz; extDpx[di*4+3] = 255;
                             }
                             const extColorSmooth = bgPullPushFill(extCpx, extValid, EPW, EPH);
@@ -7985,6 +7993,24 @@ function buildBackgroundLayer() {
                                     extFill[di*3+2] = extColorSmooth[di*3+2];
                                 }
                                 extMask[di] = inCenter ? 0 : 1;
+                            }
+                            // WELD RING: the outermost few CENTER texels take front-surface
+                            // depth + source colour, matching the margin skirt. Without it,
+                            // the plate(far)->skirt(near) depth cliff sits exactly on the
+                            // frame boundary and its one-texel transition quad renders as a
+                            // fold wall textured with the plate<->skirt colour blend — the
+                            // thin dark seam line hugging the FG silhouette at look-up. The
+                            // ring is never legitimately visible as plate (the FG edge rows
+                            // cover it at rest; the skirt covers it in reveals), so moving
+                            // the cliff a few texels inboard hides the fold behind the skirt.
+                            const WELD = 3;
+                            for (let Y = 0; Y < ph; Y++) for (let X = 0; X < pw; X++) {
+                                if (Math.min(X, Y, pw-1-X, ph-1-Y) >= WELD) continue;
+                                const si = Y*pw+X, di = (Y+my)*EPW+(X+mx);
+                                extDepth[di] = depth[si];
+                                extFill[di*3]   = cpx[si*4];
+                                extFill[di*3+1] = cpx[si*4+1];
+                                extFill[di*3+2] = cpx[si*4+2];
                             }
                             // extended plug-depth texture (RedFloat, rows flipped for GL like the native one)
                             const eplug = new Float32Array(EPN);
