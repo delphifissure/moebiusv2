@@ -7324,9 +7324,68 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
+                // ---- THIN FEATURES: detect + depth-halo (review-fix v4) ----
+                // A 1-2px feature (staff, glider) is ALL edge triangles: under
+                // parallax it renders as a diluted smear, and tearing it deletes
+                // it. Fix its rigidity in the DISPLACEMENT domain: dilate the
+                // feature's depth ~2px into its background neighbours (colour
+                // untouched). The rubber boundary moves off the feature onto
+                // sky-coloured cells, which stretch invisibly over the plate;
+                // the feature's own pixels displace as a rigid body.
+                {
+                    const oT = bgOtsuThreshold(depth, null);
+                    const nearM = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) nearM[i] = depth[i] >= oT ? 1 : 0;
+                    let E = nearM;
+                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
+                        E = ne; }
+                    // Thin = near-class pixel that the eroded core cannot reach
+                    // GEODESICALLY (through the near mask). A plain window test
+                    // marks the staff shaft "thick" just because the figure's
+                    // core is nearby — and the shaft got torn ("carved away").
+                    let R = E;
+                    for (let p = 0; p < 3; p++) { const nr = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (!nearM[i]) continue;
+                            if (R[i] || R[i-1] || R[i+1] || R[i-pw] || R[i+pw]) nr[i] = 1; }
+                        R = nr; }
+                    thinM = new Uint8Array(PN);
+                    let nThin = 0;
+                    for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
+                    if (nThin > 0 && !L._thinHaloApplied) {
+                        const hd = depth.slice(); let changed = 0;
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                            if (thinM[i]) continue;
+                            let m = -1;
+                            for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+                                const yy = y + oy, xx = x + ox;
+                                if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
+                                const j = yy * pw + xx;
+                                if (thinM[j] && depth[j] > m) m = depth[j];
+                            }
+                            if (m > hd[i] + 0.004) { hd[i] = m; changed++; }
+                        }
+                        if (changed > 0) {
+                            const hc = document.createElement('canvas'); hc.width = pw; hc.height = ph;
+                            const hx = hc.getContext('2d'); const hid = hx.createImageData(pw, ph);
+                            for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(hd[i] * 255)));
+                                hid.data[i*4] = v; hid.data[i*4+1] = v; hid.data[i*4+2] = v; hid.data[i*4+3] = 255; }
+                            hx.putImageData(hid, 0, 0);
+                            const hTex = new THREE.Texture(hc); hTex.needsUpdate = true;
+                            L.textures.depth = hTex;
+                            if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
+                            L._thinHaloApplied = true;
+                            console.log('[RUNG-PLUG] thin-feature depth halo: ' + nThin + 'px thin, ' + changed + 'px haloed');
+                        }
+                    }
+                }
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
+                let underRimC = null;   // per-completed-pixel LOCAL rim source index (fill colour)
                 if (bgPlugMode === 'directional') {
                     // Single directional plug computed straight from the depth: seal each
                     // disocclusion at the far side of its own edge, grown in by the edge's
@@ -7392,12 +7451,19 @@ function buildBackgroundLayer() {
                     // with local rims and the plug has no interior cliff.
                     const otsuThr = bgOtsuThreshold(depth, band);
                     const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), q2 = [];
+                    // rimC: LOCAL rim source pixel carried with the flood, so the
+                    // fill under each occluder takes its own edge's colour (legs
+                    // fill dune-pink, torso fills sky-blue) — criterion 1's colour
+                    // half; the global pull-push mixed sky down the leg corridor.
+                    const rimC = new Int32Array(PN).fill(-1);
                     for (let i = 0; i < PN; i++) if (band[i]) {
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
                         for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
                                 depth[j] >= plugDepth[i] + 0.06 && depth[j] >= otsuThr) {
-                            fgm[j] = 1; rimV[j] = plugDepth[i]; q2.push(j);
+                            fgm[j] = 1; rimV[j] = plugDepth[i];
+                            rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimSrc[i] : j;
+                            q2.push(j);
                         }
                     }
                     for (let h = 0; h < q2.length; h++) { const i = q2[h];
@@ -7405,9 +7471,15 @@ function buildBackgroundLayer() {
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
                         for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
                                 depth[j] >= rimV[i] + 0.06 && depth[j] >= otsuThr) {
-                            fgm[j] = 1; rimV[j] = rimV[i]; q2.push(j);
+                            fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i]; q2.push(j);
                         }
                     }
+                    // Reject rims that are themselves under an occluder (internal
+                    // figure cliffs: arm-over-torso seeds carry FIGURE colours —
+                    // bright dashes in the fill). Those pixels fall back to the
+                    // diffusion wash.
+                    for (let i = 0; i < PN; i++) if (rimC[i] >= 0 && (fgm[rimC[i]] || band[rimC[i]])) rimC[i] = -1;
+                    underRimC = rimC;
                     console.log('[RUNG-PLUG] completion flood: unbounded, otsu floor ' + otsuThr.toFixed(3));
                     let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
                     if (nFg > 0) {
@@ -7506,13 +7578,6 @@ function buildBackgroundLayer() {
                 //     step is the real fix.
                 if (fgPreTear && bandCutMask && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                     try {
-                        const otsuT = bgOtsuThreshold(depth, band);
-                        let E = new Uint8Array(PN);
-                        for (let i = 0; i < PN; i++) E[i] = depth[i] >= otsuT ? 1 : 0;
-                        for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
-                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
-                                if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
-                            E = ne; }
                         const g = L.mesh.geometry, gp = g.parameters;
                         const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
                         if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
@@ -7535,17 +7600,14 @@ function buildBackgroundLayer() {
                             if (mx - mn > fgTearStep) {
                                 if (!inPlug) { keptUnbacked++; }
                                 else {
-                                    // thick near side? scan 7x7 around each near vertex
-                                    let thick = false;
-                                    for (let k = 0; k < 3 && !thick; k++) {
+                                    // thin-feature near side (thinM, computed with the
+                                    // depth halo above)? never tear those.
+                                    let thin = false;
+                                    for (let k = 0; k < 3 && !thin; k++) {
                                         if (dv[k] < mx - 0.02) continue; // far vertex
-                                        for (let oy = -3; oy <= 3 && !thick; oy++) for (let ox = -3; ox <= 3; ox++) {
-                                            const yy = tyv[k] + oy, xx = txv[k] + ox;
-                                            if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
-                                            if (E[yy * pw + xx]) { thick = true; break; }
-                                        }
+                                        if (thinM && thinM[tyv[k] * pw + txv[k]]) thin = true;
                                     }
-                                    if (thick) { dropped++; keep = false; } else keptThin++;
+                                    if (!thin) { dropped++; keep = false; } else keptThin++;
                                 }
                             }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
@@ -7640,9 +7702,29 @@ function buildBackgroundLayer() {
                     // The occluder rind (depth-completed, smooth) carries opaque
                     // background wash: never the figure's own colours, so nothing
                     // figure-tinted exists on the plug for bilinear edges to smear.
-                    if (underMask) for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
-                        bandAlpha[i] = 255;
-                        fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2];
+                    if (underMask) {
+                        // Fill each completed pixel with its OWN edge's rim colour
+                        // (carried by the flood) — legs fill dune, torso fills sky.
+                        // The global pull-push mixed sky down the under-figure
+                        // corridor (blue patches on the dune between the legs).
+                        for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
+                            bandAlpha[i] = 255;
+                            const rc = (underRimC && underRimC[i] >= 0) ? underRimC[i] : -1;
+                            if (rc >= 0) { fillRGB[i*3] = cpx[rc*4]; fillRGB[i*3+1] = cpx[rc*4+1]; fillRGB[i*3+2] = cpx[rc*4+2]; }
+                            else { fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2]; }
+                        }
+                        // soften the flat rim-colour patches (Jacobi, completed set only)
+                        let A2 = fillRGB, B2 = new Float32Array(PN * 3);
+                        for (let p = 0; p < 8; p++) {
+                            B2.set(A2);
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (!underMask[i] || band[i]) continue;
+                                for (let c = 0; c < 3; c++)
+                                    B2[i*3+c] = 0.2 * A2[i*3+c] + 0.2 * (A2[(i-1)*3+c] + A2[(i+1)*3+c] + A2[(i-pw)*3+c] + A2[(i+pw)*3+c]);
+                            }
+                            const t2 = A2; A2 = B2; B2 = t2;
+                        }
+                        if (A2 !== fillRGB) fillRGB.set(A2);
                     }
                     const order = { length: 0 }; // (retained name for the log below)
                     for (let i = 0; i < PN; i++) if (band[i]) order.length++;
