@@ -7670,7 +7670,15 @@ function buildBackgroundLayer() {
                     // fill — solid and streak-free (the reflection above only sets bandReach,
                     // used by the optional fade). Keeps the interior clean, no striation.
                     if (bgFillMode === 'smooth') {
-                        for (let i = 0; i < PN; i++) if (band[i]) { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                        // v4: band pixels take their OWN edge's rim colour (local),
+                        // not the global diffusion wash — the wash painted sky-gray
+                        // into ground-level reveals (blue patches under the legs).
+                        // Rims under an occluder are rejected (figure colours).
+                        for (let i = 0; i < PN; i++) if (band[i]) {
+                            const rs = rimSrc ? rimSrc[i] : -1;
+                            if (rs >= 0 && !band[rs] && !(underMask && underMask[rs])) { fillRGB[i*3]=cpx[rs*4]; fillRGB[i*3+1]=cpx[rs*4+1]; fillRGB[i*3+2]=cpx[rs*4+2]; }
+                            else { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                        }
                     }
                     // reach -> alpha: opaque for short reach, faded to transparent for long
                     // (streaks). smoothstep between the two configured thresholds.
@@ -7718,7 +7726,7 @@ function buildBackgroundLayer() {
                         for (let p = 0; p < 8; p++) {
                             B2.set(A2);
                             for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
-                                if (!underMask[i] || band[i]) continue;
+                                if (!(underMask[i] || band[i])) continue;
                                 for (let c = 0; c < 3; c++)
                                     B2[i*3+c] = 0.2 * A2[i*3+c] + 0.2 * (A2[(i-1)*3+c] + A2[(i+1)*3+c] + A2[(i-pw)*3+c] + A2[(i+pw)*3+c]);
                             }
