@@ -4890,8 +4890,13 @@ function renderNormalizedDepthPass() {
                         float minSourceDepth = min(sourceDepth, min(min(min(d1, d2), min(d3, d4)), min(min(d5, d6), min(d7, d8))));
                         float sourceRange = maxSourceDepth - minSourceDepth;
                         
-                        // Only consider tunnel detection if there's a significant depth discontinuity nearby
-                        if (sourceRange > 0.04) {
+                        // Only consider tunnel detection if there's a significant depth discontinuity nearby.
+                        // REVIEW: with the pre-torn FG these heuristics are obsolete
+                        // (torn cliffs are honest holes) and, once their samplers were
+                        // actually bound (D8 fix), they misfire on untorn sub-band
+                        // cliffs (striping at the dune/vehicle line). Explicitly off.
+                        const bool TUNNEL_HEURISTICS = false;
+                        if (TUNNEL_HEURISTICS && sourceRange > 0.04) {
                             // Check if interpolated depth falls BETWEEN the extremes (tunnel interpolation)
                             float marginFromMin = vNormalizedDepth - minSourceDepth;
                             float marginFromMax = maxSourceDepth - vNormalizedDepth;
@@ -7474,6 +7479,35 @@ function buildBackgroundLayer() {
                             fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i]; q2.push(j);
                         }
                     }
+                    // PASS 2 — sub-Otsu occluders (seated group, sled, tents). The
+                    // Otsu floor kept pass 1 from leaking through ground contact,
+                    // but left mid-depth occluders uncompleted: the full-frame
+                    // plate carried THEIR colours, which parallax wrong when a
+                    // torn reveal opens beside them (dark scallops at the dune
+                    // crest). Near-class is already claimed, so this flood is
+                    // contained by the +0.06 continuity gate alone (their rims are
+                    // the local plain; nothing unclaimed rises 0.06 above it); a
+                    // generous budget is the hard stop.
+                    {
+                        const budg2 = new Int32Array(PN); const q3 = [];
+                        for (let i = 0; i < PN; i++) if (band[i]) {
+                            const x = i % pw, y = (i / pw) | 0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
+                                fgm[j] = 1; rimV[j] = plugDepth[i];
+                                rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimSrc[i] : j;
+                                budg2[j] = 400; q3.push(j);
+                            }
+                        }
+                        for (let h = 0; h < q3.length; h++) { const i = q3[h]; if (budg2[i] <= 0) continue;
+                            const x = i % pw, y = (i / pw) | 0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.06) {
+                                fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i]; budg2[j] = budg2[i] - 1; q3.push(j);
+                            }
+                        }
+                        console.log('[RUNG-PLUG] completion pass 2 (sub-otsu occluders): +' + q3.length + 'px');
+                    }
                     // Reject rims that are themselves under an occluder (internal
                     // figure cliffs: arm-over-torso seeds carry FIGURE colours —
                     // bright dashes in the fill). Those pixels fall back to the
@@ -7721,9 +7755,13 @@ function buildBackgroundLayer() {
                             if (rc >= 0) { fillRGB[i*3] = cpx[rc*4]; fillRGB[i*3+1] = cpx[rc*4+1]; fillRGB[i*3+2] = cpx[rc*4+2]; }
                             else { fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2]; }
                         }
-                        // soften the flat rim-colour patches (Jacobi, completed set only)
+                        // soften the flat rim-colour patches (Jacobi, completed set
+                        // only). 24 passes: along busy silhouettes (vehicle line at
+                        // the dune edge) adjacent rims alternate dark/light and 8
+                        // passes left a visible vertical comb; ~5px diffusion
+                        // radius kills the period.
                         let A2 = fillRGB, B2 = new Float32Array(PN * 3);
-                        for (let p = 0; p < 8; p++) {
+                        for (let p = 0; p < 24; p++) {
                             B2.set(A2);
                             for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
                                 if (!(underMask[i] || band[i])) continue;
