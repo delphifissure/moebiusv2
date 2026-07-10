@@ -6477,6 +6477,13 @@ let bgBandCutMaxGrad = 0.04;
 // 0.3 = "stretched more than ~3x". Lower = stricter (less cutting).
 let bgBandCutStretchFrac = 0.3;
 let bgBandCutDilatePx = 4;     // dilate the cut mask so far-side stretch fragments are covered too
+// PRE-TORN FOREGROUND (review-fix): drop FG triangles that span a depth cliff
+// at build time, so rubber-band triangles cannot exist at all. Reveals become
+// honest holes (the plug / screen-space fill shows through) from any angle,
+// zoom, or canvas size — no per-fragment stretch heuristics. When active, the
+// band-gated cut is redundant and stays disarmed.
+let fgPreTear = true;
+let fgTearStep = 0.06;         // min 3-vertex depth span that counts as a cliff
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -7317,6 +7324,39 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                // ---- PRE-TORN FOREGROUND: remove cliff-spanning triangles ----
+                // The FG grid is ~1 vertex/texel; a triangle whose corners span
+                // more than fgTearStep in (live-baked) depth is a silhouette
+                // crossing — under parallax it can only ever render as a rubber
+                // band. Drop it: the reveal opens as a true hole over the plug.
+                // The original index is stashed so a rebuild can re-tear from
+                // the full grid (and A/B by setting fgPreTear=false).
+                if (fgPreTear && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
+                    try {
+                        const g = L.mesh.geometry, gp = g.parameters;
+                        const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
+                        if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                        const src = g.userData._fullIndex;
+                        const out = new src.constructor(src.length);
+                        const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
+                        let n = 0, dropped = 0;
+                        for (let t = 0; t < src.length; t += 3) {
+                            let mn = 2, mx = -1;
+                            for (let k = 0; k < 3; k++) {
+                                const vi = src[t + k];
+                                const tx = Math.round((vi % vw) * sx);
+                                const ty = Math.round(((vi / vw) | 0) * sy);
+                                const d = depth[ty * pw + tx];
+                                if (d < mn) mn = d; if (d > mx) mx = d;
+                            }
+                            if (mx - mn > fgTearStep) { dropped++; continue; }
+                            out[n++] = src[t]; out[n++] = src[t + 1]; out[n++] = src[t + 2];
+                        }
+                        g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
+                        console.log('[RUNG-PLUG] FG pre-torn at cliffs > ' + fgTearStep + ': ' +
+                            dropped + ' of ' + (src.length / 3) + ' triangles dropped');
+                    } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
+                }
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
@@ -7388,6 +7428,28 @@ function buildBackgroundLayer() {
                             fgm[j] = 1; rimV[j] = rimV[i]; budg[j] = budg[i] - 1; q2.push(j);
                         }
                     }
+                    // REVIEW FIX (interior cliff): the bounded rind relocates the
+                    // plug's cliff ~RIND px inward but past it the plug reverts to
+                    // FOREGROUND depth — a figure-shaped tower in the displacement
+                    // map. The BG sheet rubber-stretches over that tower and renders
+                    // a dark doppelganger at mid depths ("plug intrudes toward the
+                    // foreground"). Complete the depth under the ENTIRE occluder
+                    // instead: any non-band pixel on the near side of the Otsu depth
+                    // split joins the completion set. Diffusion sources stay
+                    // background + pinned rims only, so the completed plug is a
+                    // convex combination of those — it can never come out nearer
+                    // than the local background (the plug sits at/behind the
+                    // furthest visible background by construction). The bounded
+                    // flood is kept for occluders the global split misses.
+                    {
+                        const otsuThr = bgOtsuThreshold(depth, band);
+                        let nOtsu = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (!band[i] && !fgm[i] && depth[i] >= otsuThr) { fgm[i] = 1; nOtsu++; }
+                        }
+                        console.log('[RUNG-PLUG] completion set: otsu>=' + otsuThr.toFixed(3) +
+                            ' adds ' + nOtsu + 'px to the rind flood');
+                    }
                     let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
                     if (nFg > 0) {
                         // diffuse surrounding plug depth (background + pinned band rims)
@@ -7456,7 +7518,10 @@ function buildBackgroundLayer() {
                     if (fu && fu.u_bandMask) {
                         if (fu.u_bandMask.value && fu.u_bandMask.value.dispose) fu.u_bandMask.value.dispose();
                         fu.u_bandMask.value = cutDT;
-                        fu.u_useBandCut.value = !!bgCutFGOnPlug;
+                        // With the FG pre-torn there are no rubber triangles to
+                        // cut — the stretch heuristics stay disarmed (they misfire
+                        // at rest on slow-ramp cliffs; see review D1b).
+                        fu.u_useBandCut.value = !!bgCutFGOnPlug && !fgPreTear;
                         fu.u_bandCutMismatch.value = bgBandCutMismatch;
                         if (fu.u_bandCutMaxGrad) fu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                         // expected UV rate: the mesh spans UV 0..1 over roughly the
