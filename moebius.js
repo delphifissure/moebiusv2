@@ -7500,6 +7500,23 @@ function buildBackgroundLayer() {
                         }
                     }
                 }
+                // rim colour source: step a few px past the rim, away from the
+                // occluder — the immediate far-side pixel at a contact edge is
+                // usually the cast shadow / ink line (it filled the reveal next
+                // to the boot with shadow-navy instead of sand).
+                const rimColorSrc = (bandI, rs) => {
+                    if (rs < 0) return rs;
+                    const bx = bandI % pw, by = (bandI / pw) | 0;
+                    const rx = rs % pw, ry = (rs / pw) | 0;
+                    const dx = Math.sign(rx - bx), dy = Math.sign(ry - by);
+                    for (let step = 4; step >= 2; step--) {
+                        const nx = rx + dx * step, ny = ry + dy * step;
+                        if (nx < 0 || nx >= pw || ny < 0 || ny >= ph) continue;
+                        const j = ny * pw + nx;
+                        if (!band[j]) return j;
+                    }
+                    return rs;
+                };
                 // ---- PLUG DEPTH COMPLETION: bury the plug's own cliff ----
                 // Outside the band the plug reverts to SOURCE depth, so the
                 // band's inner boundary is a figure-sized cliff in the PLUG's
@@ -7537,7 +7554,7 @@ function buildBackgroundLayer() {
                         for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
                                 depth[j] >= plugDepth[i] + 0.06 && depth[j] >= otsuThr) {
                             fgm[j] = 1; rimV[j] = plugDepth[i];
-                            rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimSrc[i] : j;
+                            rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
                             q2.push(j);
                         }
                     }
@@ -7565,7 +7582,7 @@ function buildBackgroundLayer() {
                             const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
                             for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
                                 fgm[j] = 1; rimV[j] = plugDepth[i];
-                                rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimSrc[i] : j;
+                                rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
                                 budg2[j] = 400; q3.push(j);
                             }
                         }
@@ -7816,7 +7833,8 @@ function buildBackgroundLayer() {
                         // into ground-level reveals (blue patches under the legs).
                         // Rims under an occluder are rejected (figure colours).
                         for (let i = 0; i < PN; i++) if (band[i]) {
-                            const rs = rimSrc ? rimSrc[i] : -1;
+                            const rs0 = rimSrc ? rimSrc[i] : -1;
+                            const rs = rs0 >= 0 ? rimColorSrc(i, rs0) : -1;
                             if (rs >= 0 && !band[rs] && !(underMask && underMask[rs])) { fillRGB[i*3]=cpx[rs*4]; fillRGB[i*3+1]=cpx[rs*4+1]; fillRGB[i*3+2]=cpx[rs*4+2]; }
                             else { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
                         }
