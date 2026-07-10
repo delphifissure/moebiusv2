@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.11.1-liveplug | VAR: CPU plug from loaded band+valid PNGs', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.12.0-bandcut | band-gated FG stretch cut + directional plug + smooth margin', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -1177,6 +1177,16 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
 
         u_useGrazingAngle: { value: document.getElementById('useGrazingAngleCheck')?.checked || false },
         u_grazingAngleThreshold: { value: parseFloat(document.getElementById('grazingAngleThresholdSlider')?.value) || 0.2 },
+
+        // Band-gated stretch cut (set by buildBackgroundLayer once the plug
+        // exists): u_bandMask = source-space disocclusion band (dilated), the
+        // ONLY region where the FG may discard; the trigger is the
+        // sampled-vs-interpolated depth mismatch (see unifiedGapLogicGLSL).
+        u_useBandCut: { value: false },
+        u_bandMask: { value: null },
+        u_bandCutMismatch: { value: 0.01 },
+        u_bandCutMaxGrad: { value: 0.04 },
+        u_bandCutUvRate: { value: 0.0 }, // 0 = stretch test off until armed
         // --------------------------------
 
         u_alphaMap: { value: alphaTexture },
@@ -1211,6 +1221,9 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform bool u_useCurvature;   uniform float u_curvatureThreshold;
         uniform bool u_useUVStretch;   uniform float u_uvStretchThreshold;
         uniform bool u_useGrazingAngle; uniform float u_grazingAngleThreshold;
+        uniform bool u_useBandCut;     uniform sampler2D u_bandMask;
+        uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
+        uniform float u_bandCutUvRate;
 
         varying vec2 vUv;
         varying float vNormalizedDepth;
@@ -1230,6 +1243,34 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         bool isGap = false;
         // Define 'center' depth early as it is used by Curvature (Laplacian)
         #define center getDepth(vUv)
+
+        // --- 0. BAND-GATED STRETCH CUT (plug reveal) ---
+        // A fragment whose sampled depth (center) disagrees with its
+        // vertex-interpolated depth (vNormalizedDepth) sits on a triangle
+        // spanning a depth cliff. Whether that triangle is a mid-parallax
+        // RUBBER BAND (the smear that reads as a streak) or just a rest-state
+        // silhouette cell is decided by the screen-space ramp rate: at rest
+        // the cliff crosses its cell in ~2px (fwidth large); a stretched
+        // triangle ramps the same cliff over tens of px (fwidth tiny). Cut
+        // only the stretched case, only inside the plug band (where the BG
+        // layer is guaranteed opaque) — thin features stay intact at rest,
+        // and no naked holes can ever open.
+        if (u_useBandCut && !u_isBackgroundLayer && !isGap) {
+            if (texture2D(u_bandMask, vUv).r > 0.5) {
+                // (a) STRETCH: UV advances far slower per screen px than an
+                // unstretched cell would (the derivative is constant across a
+                // triangle, so this catches the WHOLE rubber band — including
+                // the near half, where the depth mismatch is zero by
+                // construction). u_bandCutUvRate = fraction-of-expected rate.
+                float uvRate = max(length(dFdx(vUv)), length(dFdy(vUv)));
+                bool stretched = (u_bandCutUvRate > 0.0) && (uvRate < u_bandCutUvRate);
+                // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
+                // gated to slow ramps so rest-state cliffs are exempt.
+                bool torn = abs(center - vNormalizedDepth) > u_bandCutMismatch &&
+                            fwidth(vNormalizedDepth) < u_bandCutMaxGrad;
+                if (stretched || torn) isGap = true;
+            }
+        }
 
         // --- 1. GENERATORS (Depth & Texture) ---
         
@@ -5578,7 +5619,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.11.1-liveplug | VAR: CPU plug from loaded PNGs (no GPU readback)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.12.0-bandcut | band-gated FG stretch cut + directional plug + smooth margin';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -6403,13 +6444,39 @@ let bgBandMaxGrowPx = 28;
 // and depth-map noise inside the figure, tiling the whole body with band seeds;
 // raise it so only genuine figure->background cliffs seed a strip.
 let bgBandStep = 0.10;
-// Cut the foreground at disocclusions in the scene pass when the BG plug is live,
-// so the FG opens the hole onto the stable plug instead of stretching over it
-// (the reveal-side streak). UV-stretch targets smeared triangles; the depth-grad
-// cut catches sharp depth cliffs. Tune the thresholds if the FG over-/under-cuts.
-let bgCutFGOnPlug = true;
-let bgFGCutUVStretch = 0.5;   // lower = cut more stretched FG triangles
-let bgFGCutDepthGrad = 0.02;  // lower = cut at gentler depth cliffs
+// BAND-GATED FOREGROUND CUT (the streak fix). The FG mesh is one connected
+// sheet: at a depth cliff its triangles STRETCH across the gap, smearing a few
+// edge pixels over the whole reveal — that smear IS the streak. Cutting the FG
+// globally (screen heuristics) shreds smooth ramps like the ground; not cutting
+// leaves the smear covering the plug. The correct rule uses both signals we
+// already have:
+//   WHERE it is safe to cut = the plug band (source-space, view-independent).
+//     Cut region is a subset of plug coverage, so a cut never opens a naked hole.
+//   WHEN a fragment must die = it is mid-stretch: the vertex-interpolated depth
+//     (vNormalizedDepth) disagrees with the depth texture sampled at the
+//     fragment's own UV (getDepth(vUv)). On any honest triangle the two agree;
+//     they only diverge on a rubber-band triangle spanning a cliff. Zero false
+//     positives on ramps/folds; at rest nothing is stretched, so nothing cuts.
+let bgCutFGOnPlug = true;      // master toggle for the band-gated FG cut
+// |sampled - interpolated| depth that counts as mid-stretch. The mismatch
+// peaks at ~cliff/2 mid-stretch and tapers toward the triangle's vertices.
+// Rest-state cliffs are excluded by the gradient gate below, so this can sit
+// low enough to catch nearly the whole smear.
+let bgBandCutMismatch = 0.01;
+// Second gate: only cut fragments whose interpolated depth ramps SLOWLY in
+// screen space. At rest a cliff crosses a mesh cell in ~2px (fwidth large);
+// a stretched triangle ramps the same cliff over tens of px (fwidth tiny).
+// This keeps thin features (staff, glider) fully intact at rest while still
+// cutting every real smear. Raise if smears survive, lower if rest erosion.
+let bgBandCutMaxGrad = 0.04;
+// Direct stretch trigger: a rubber-band triangle advances its UVs far slower
+// per screen pixel than an unstretched cell (and the derivative is constant
+// across the triangle, so this catches the NEAR half of the smear, where the
+// depth mismatch is zero by construction). A fragment cuts when its UV rate
+// drops below this fraction of the expected rate (1/canvasWidth per px).
+// 0.3 = "stretched more than ~3x". Lower = stricter (less cutting).
+let bgBandCutStretchFrac = 0.3;
+let bgBandCutDilatePx = 4;     // dilate the cut mask so far-side stretch fragments are covered too
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -7251,6 +7318,8 @@ function buildBackgroundLayer() {
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
                 let band, plugDepth, rimSrc = null;
+                let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
+                let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
                 if (bgPlugMode === 'directional') {
                     // Single directional plug computed straight from the depth: seal each
                     // disocclusion at the far side of its own edge, grown in by the edge's
@@ -7290,6 +7359,52 @@ function buildBackgroundLayer() {
                         ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
                     plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
                 }
+                // ---- PLUG DEPTH COMPLETION: bury the plug's own cliff ----
+                // Outside the band the plug reverts to SOURCE depth, so the
+                // band's inner boundary is a figure-sized cliff in the PLUG's
+                // displacement map — and the BG mesh rubber-stretches across it
+                // exactly like the FG did, smearing figure colours through the
+                // fill texture's bilinear edge (the residual streak, confirmed
+                // by BG-only renders). Fix: carve a deep rind out of every
+                // occluder (bounded flood — deep enough that no parallax can
+                // reveal the relocated cliff, bounded so it cannot leak through
+                // an occluder's feet into the whole ground) and diffuse
+                // background/rim depth underneath. The visible plug becomes a
+                // cliff-free "world without the foreground" surface.
+                {
+                    const RIND = Math.max(48, 3 * (bgBandMaxGrowPx | 0));
+                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), budg = new Int32Array(PN), q2 = [];
+                    for (let i = 0; i < PN; i++) if (band[i]) {
+                        const x = i % pw, y = (i / pw) | 0;
+                        const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
+                            fgm[j] = 1; rimV[j] = plugDepth[i]; budg[j] = RIND; q2.push(j);
+                        }
+                    }
+                    for (let h = 0; h < q2.length; h++) { const i = q2[h]; if (budg[i] <= 0) continue;
+                        const x = i % pw, y = (i / pw) | 0;
+                        const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.06) {
+                            fgm[j] = 1; rimV[j] = rimV[i]; budg[j] = budg[i] - 1; q2.push(j);
+                        }
+                    }
+                    let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
+                    if (nFg > 0) {
+                        // diffuse surrounding plug depth (background + pinned band rims)
+                        // into the rind — 8-bit gray through the pyramid fill; the
+                        // visible band keeps its float-precision values untouched.
+                        const dpx4 = new Uint8Array(PN * 4), dval = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) {
+                            const ok = fgm[i] ? 0 : 1; dval[i] = ok;
+                            const v = ok ? Math.max(0, Math.min(255, (plugDepth[i] * 255) | 0)) : 0;
+                            dpx4[i*4] = v; dpx4[i*4+1] = v; dpx4[i*4+2] = v; dpx4[i*4+3] = 255;
+                        }
+                        const dsm = bgPullPushFill(dpx4, dval, pw, ph);
+                        for (let i = 0; i < PN; i++) if (fgm[i]) plugDepth[i] = dsm[i*3] / 255;
+                        underMask = fgm;
+                        console.log('[RUNG-PLUG] plug depth completed under occluders (' + nFg + 'px rind, diffused)');
+                    }
+                }
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
                 // displacementMap is an image/canvas THREE.Texture (flipY=true), and
                 // this BG mesh reuses the FG geometry/UVs — so the plug must present
@@ -7311,6 +7426,47 @@ function buildBackgroundLayer() {
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
 
+                // --- BAND-GATED FG STRETCH CUT: bake the cut mask ---
+                // Dilate the band a few px so the far-side half of a stretched
+                // triangle (whose UVs land just past the cliff) is covered too,
+                // then hand it to the FG material. The trigger is per-fragment
+                // (depth mismatch), so dilation only widens where cutting is
+                // ALLOWED — at rest nothing is stretched and nothing cuts.
+                {
+                    const cut = band.slice();
+                    for (let it = 0; it < (bgBandCutDilatePx|0); it++) {
+                        const nb = cut.slice();
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                            const i = y*pw+x; if (cut[i]) continue;
+                            if ((x>0&&cut[i-1])||(x<pw-1&&cut[i+1])||(y>0&&cut[i-pw])||(y<ph-1&&cut[i+pw])) nb[i] = 1;
+                        }
+                        cut.set(nb);
+                    }
+                    bandCutMask = cut; // the fill below must be opaque everywhere the FG may cut
+                    // rows flipped to match the FG mesh's flipY=true image textures
+                    // (same convention as the plug DataTexture above)
+                    const cutF = new Float32Array(PN);
+                    for (let y = 0; y < ph; y++) { const s = y*pw, d = (ph-1-y)*pw;
+                        for (let x = 0; x < pw; x++) cutF[d+x] = cut[s+x]; }
+                    const cutDT = new THREE.DataTexture(cutF, pw, ph, THREE.RedFormat, THREE.FloatType);
+                    cutDT.needsUpdate = true; cutDT.flipY = false;
+                    cutDT.minFilter = THREE.NearestFilter; cutDT.magFilter = THREE.NearestFilter;
+                    if ('colorSpace' in cutDT) cutDT.colorSpace = THREE.NoColorSpace;
+                    const fu = L.mesh.material.uniforms;
+                    if (fu && fu.u_bandMask) {
+                        if (fu.u_bandMask.value && fu.u_bandMask.value.dispose) fu.u_bandMask.value.dispose();
+                        fu.u_bandMask.value = cutDT;
+                        fu.u_useBandCut.value = !!bgCutFGOnPlug;
+                        fu.u_bandCutMismatch.value = bgBandCutMismatch;
+                        if (fu.u_bandCutMaxGrad) fu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
+                        // expected UV rate: the mesh spans UV 0..1 over roughly the
+                        // canvas width; a rubber triangle runs at a small fraction of it
+                        const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
+                        if (fu.u_bandCutUvRate) fu.u_bandCutUvRate.value = _uvRateThr;
+                        console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
+                    }
+                }
+
                 // --- FILL COLOR (Law 4): DEPTH-GUIDED EXEMPLAR (onion-peel). Fill each
                 // hole rim-first by copying the best-matching REAL background patch (SSD
                 // over known neighbours; sources restricted to true background at similar
@@ -7323,9 +7479,13 @@ function buildBackgroundLayer() {
                     cx.clearRect(0, 0, pw, ph);
                     cx.drawImage(cImg2, 0, 0, pw, ph);
                     const cpx = cx.getImageData(0, 0, pw, ph).data;
-                    // fill SOURCE = background only (exclude band, dark ink, occluder bodies)
+                    // fill SOURCE = background only (exclude band, dark ink, occluder bodies).
+                    // The occluder RIND (underMask) is excluded wholesale: without it the
+                    // figure's interior colours feed the pull-push diffusion and tint the
+                    // band fill tan right where it is most visible (at the silhouette).
                     const fillSrc = new Uint8Array(PN);
-                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3; fillSrc[i] = (!band[i] && lum>=45) ? 1 : 0; }
+                    for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3;
+                        fillSrc[i] = (!band[i] && !(underMask && underMask[i]) && lum>=45) ? 1 : 0; }
                     if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
                         const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
                         for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
@@ -7372,6 +7532,17 @@ function buildBackgroundLayer() {
                     };
                     const bandAlpha = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) bandAlpha[i] = band[i] ? _reachAlpha(bandReach[i]) : 0;
+                    // The FG stretch cut is allowed in the DILATED band (bandCutMask), so
+                    // the plug must be opaque there too — a discard over transparent plug
+                    // is a naked hole. RGB for the ring comes from the bleed below.
+                    if (bandCutMask) for (let i = 0; i < PN; i++) if (!band[i] && bandCutMask[i]) bandAlpha[i] = 255;
+                    // The occluder rind (depth-completed, smooth) carries opaque
+                    // background wash: never the figure's own colours, so nothing
+                    // figure-tinted exists on the plug for bilinear edges to smear.
+                    if (underMask) for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
+                        bandAlpha[i] = 255;
+                        fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2];
+                    }
                     const order = { length: 0 }; // (retained name for the log below)
                     for (let i = 0; i < PN; i++) if (band[i]) order.length++;
                     // Stash directional gap data for the SD-export bundle (native res, top-row-first)
@@ -7384,7 +7555,8 @@ function buildBackgroundLayer() {
                     // non-band so the fill texture's bilinear edge blends fill->fill,
                     // not fill->black. Alpha stays sharp (= band); only RGB is bled.
                     { let filled = new Uint8Array(PN); for (let i=0;i<PN;i++) filled[i]=band[i]?1:0;
-                      for (let p=0;p<3;p++){ const prev=filled.slice();
+                      const BLEED = Math.max(3, (bgBandCutDilatePx|0) + 1); // must cover the cut ring
+                      for (let p=0;p<BLEED;p++){ const prev=filled.slice();
                         for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(prev[i])continue;
                           const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
                           for (const j of nb){ if(j>=0&&prev[j]){ fillRGB[i*3]=fillRGB[j*3];fillRGB[i*3+1]=fillRGB[j*3+1];fillRGB[i*3+2]=fillRGB[j*3+2]; filled[i]=1; break; } } } } }
@@ -7434,21 +7606,48 @@ function buildBackgroundLayer() {
                         if (mx > 0 || my > 0) {
                             const tX = Date.now();
                             const EPW = pw + 2*mx, EPH = ph + 2*my, EPN = EPW*EPH;
-                            const cX = v => v < 0 ? 0 : (v >= pw ? pw-1 : v);
-                            const cY = v => v < 0 ? 0 : (v >= ph ? ph-1 : v);
                             const extDepth = new Float32Array(EPN);   // top-row-first
                             const extFill  = new Uint8Array(EPN*3);   // top-row-first RGB
                             const extMask  = new Uint8Array(EPN);     // 1 = margin (outpaint region)
-                            for (let Y = 0; Y < EPH; Y++) { const sy = cY(Y-my), inRowY = (Y>=my && Y<my+ph);
-                                for (let X = 0; X < EPW; X++) { const sx = cX(X-mx);
-                                    const si = sy*pw+sx, di = Y*EPW+X;
-                                    const inCenter = inRowY && (X>=mx && X<mx+pw);
-                                    extDepth[di] = plugDepth[si];             // edge-replicated depth
-                                    extFill[di*3]   = fillRGB[si*3];
-                                    extFill[di*3+1] = fillRGB[si*3+1];
-                                    extFill[di*3+2] = fillRGB[si*3+2];
-                                    extMask[di] = inCenter ? 0 : 1;
+                            // Margin content by pull-push DIFFUSION, not edge
+                            // replication: replicating the rim row/column outward
+                            // manufactures 1-D ribbons (streaks) by construction.
+                            // Diffusing from the whole rim gives a soft wash that
+                            // reads as continuation — the SD plate replaces it
+                            // with real content. Color and depth both diffuse
+                            // (replicated depth carries the rim's profile outward
+                            // as shading ridges — same streak, in geometry).
+                            const extValid = new Uint8Array(EPN);
+                            const extCpx = new Uint8Array(EPN*4);   // RGBA, colour source
+                            const extDpx = new Uint8Array(EPN*4);   // RGBA, depth encoded as gray
+                            for (let Y = 0; Y < ph; Y++) for (let X = 0; X < pw; X++) {
+                                const si = Y*pw+X, di = (Y+my)*EPW+(X+mx);
+                                extValid[di] = 1;
+                                extCpx[di*4]   = Math.max(0, Math.min(255, fillRGB[si*3]|0));
+                                extCpx[di*4+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
+                                extCpx[di*4+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
+                                extCpx[di*4+3] = 255;
+                                const dz = Math.max(0, Math.min(255, (plugDepth[si]*255)|0));
+                                extDpx[di*4] = dz; extDpx[di*4+1] = dz; extDpx[di*4+2] = dz; extDpx[di*4+3] = 255;
+                            }
+                            const extColorSmooth = bgPullPushFill(extCpx, extValid, EPW, EPH);
+                            const extDepthSmooth = bgPullPushFill(extDpx, extValid, EPW, EPH);
+                            for (let Y = 0; Y < EPH; Y++) for (let X = 0; X < EPW; X++) {
+                                const di = Y*EPW+X;
+                                const inCenter = extValid[di] === 1;
+                                if (inCenter) {
+                                    const si = (Y-my)*pw+(X-mx);
+                                    extDepth[di] = plugDepth[si];
+                                    extFill[di*3]   = Math.max(0, Math.min(255, fillRGB[si*3]|0));
+                                    extFill[di*3+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
+                                    extFill[di*3+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
+                                } else {
+                                    extDepth[di] = extDepthSmooth[di*3] / 255;
+                                    extFill[di*3]   = extColorSmooth[di*3];
+                                    extFill[di*3+1] = extColorSmooth[di*3+1];
+                                    extFill[di*3+2] = extColorSmooth[di*3+2];
                                 }
+                                extMask[di] = inCenter ? 0 : 1;
                             }
                             // extended plug-depth texture (RedFloat, rows flipped for GL like the native one)
                             const eplug = new Float32Array(EPN);
@@ -7513,6 +7712,9 @@ function buildBackgroundLayer() {
         if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
+        // The clone may inherit an armed band cut from the FG (rebuild case);
+        // the BG never cuts — clear it so no stale texture stays bound.
+        if (mat.uniforms.u_useBandCut) { mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null; }
         // Tiny push back so the BG never z-fights the FG where their depths match.
         mat.uniforms.displacementBias.value = (mat.uniforms.displacementBias.value || 0) - 0.004;
         bgLayerMesh = new THREE.Mesh(bgExtGeom || L.mesh.geometry, mat);
@@ -7578,6 +7780,10 @@ function _wireDebugSheetControls() {
     });
     document.getElementById('bgLayerToggle')?.addEventListener('change', (e) => {
         if (bgLayerMesh) bgLayerMesh.visible = e.target.checked;
+        // The FG stretch cut is only safe while the plug is there to back it —
+        // disarm it whenever the BG layer is hidden, re-arm when shown.
+        const fu = mediaLayers[0]?.mesh?.material?.uniforms;
+        if (fu && fu.u_useBandCut) fu.u_useBandCut.value = e.target.checked && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
     });
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
@@ -10110,26 +10316,15 @@ function render() {
     }
 
     // --- PASS: Generate Gaps/Edges ---
-    // When the BG plug layer is live, force the FG depth/stretch cut ON for this
-    // scene render regardless of the UI toggles: the final composite expects the
-    // scene render to already hold BG at plug depth in the disocclusions (see
-    // finalCompositeMaterial u_bgLayerActive). Without the cut the FG stretches
-    // across the gap and covers the plug — the reveal-side streak. The BG mesh
-    // itself never discards (u_isBackgroundLayer), so only the foreground cuts.
-    const _bgCut = bgCutFGOnPlug && (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.visible);
-    setAllLayerUniforms('u_useDepthGrad', _bgCut || (document.getElementById('useDepthGradCheck')?.checked || false));
+    setAllLayerUniforms('u_useDepthGrad', document.getElementById('useDepthGradCheck')?.checked || false);
     setAllLayerUniforms('u_useSobel', document.getElementById('useSobelCheck')?.checked || false);
     setAllLayerUniforms('u_useLuma', document.getElementById('useLumaCheck')?.checked || false);
     setAllLayerUniforms('u_useChroma', document.getElementById('useChromaCheck')?.checked || false);
     setAllLayerUniforms('u_useCrease', document.getElementById('useCreaseCheck')?.checked || false);
     setAllLayerUniforms('u_useCurvature', document.getElementById('useCurvatureCheck')?.checked || false);
-    setAllLayerUniforms('u_useUVStretch', _bgCut || (document.getElementById('useUVStretchCheck')?.checked || false));
+    setAllLayerUniforms('u_useUVStretch', document.getElementById('useUVStretchCheck')?.checked || false);
     setAllLayerUniforms('u_useGrazingAngle', document.getElementById('useGrazingAngleCheck')?.checked || false);
     setAllLayerUniforms('u_useEdgeMask', false);
-    if (_bgCut) {
-        setAllLayerUniforms('u_depthGradThreshold', bgFGCutDepthGrad);
-        setAllLayerUniforms('u_uvStretchThreshold', bgFGCutUVStretch);
-    }
 
     if (!pingPongRenderTargetB) { console.error("pingPongRenderTargetB not initialized!"); return; }
     renderer.setRenderTarget(pingPongRenderTargetB); renderer.clear();
