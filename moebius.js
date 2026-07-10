@@ -6723,7 +6723,45 @@ function applyLiveBake(L) {
         cx.clearRect(0, 0, w, h); cx.drawImage(cImg, 0, 0, w, h);
         const cpx = cx.getImageData(0, 0, w, h).data;
         const t0 = Date.now();
+        L._rawDepth = depth.slice(); L._rawDepthW = w; L._rawDepthH = h; // pre-bake depth for tear decisions
         const out = MoebiusEdgeBake.bakeEdges(depth, cpx, w, h, {});
+        // NEAR-PROTECTION CLAMP (review, v2): the colour-guided weighted
+        // median leaks FAR depth into dark/thin NEAR features (staff shaft
+        // perforated, hood interior blacked out — far-depth holes inside the
+        // figure in the depth composite; the RAW map is clean). Rule, global-
+        // class-free: a pixel sitting ON its local near plateau (raw >=
+        // boxMax(raw, 2px) - 0.02) may never end up farther than raw. Ramp
+        // pixels (raw below the local max) may snap either way — that is the
+        // bake\'s legitimate job.
+        {
+            const N = w * h, r2 = 2;
+            const tmpM = new Float32Array(N), bmax = new Float32Array(N);
+            for (let y = 0; y < h; y++) { const row = y * w;
+                for (let x = 0; x < w; x++) { let m = -1;
+                    for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = depth[row+xx]; if (v > m) m = v; }
+                    tmpM[row+x] = m; } }
+            for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = -1;
+                for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v > m) m = v; }
+                bmax[y*w+x] = m; } }
+            let clamped = 0, nans = 0;
+            for (let i = 0; i < N; i++) {
+                const s = out.sharpened[i];
+                if (!isFinite(s)) { out.sharpened[i] = depth[i]; nans++; continue; }
+                // NaN-proof comparison: !(s >= x) also catches NaN
+                if (depth[i] >= bmax[i] - 0.02 && !(s >= depth[i] - 0.02)) { out.sharpened[i] = depth[i]; clamped++; }
+            }
+            if (clamped || nans) console.log('[RUNG-A] plateau clamp restored ' + clamped + 'px eroded + ' + nans + 'px NaN from the bake');
+        }
+        // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
+        // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
+        // (UNPACK colorspace), so a canvas displacementMap arrives ~v^2.2 in
+        // the vertex shader while the plug's DataTexture carries raw values —
+        // the FG and the plate lived in two different depth spaces (the real
+        // source of plate-in-front-of-FG protrusion and weld mismatch).
+        const sfN = w * h; const sf = new Float32Array(sfN);
+        for (let y = 0; y < h; y++) { const s = y*w, d = (h-1-y)*w;
+            for (let x = 0; x < w; x++) sf[d+x] = out.sharpened[s+x]; }
+        // keep a canvas copy for code paths that read .image via drawImage
         const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
         const octx = oc.getContext('2d');
         const oid = octx.createImageData(w, h);
@@ -6740,7 +6778,12 @@ function applyLiveBake(L) {
             mid.data[i*4] = v; mid.data[i*4+1] = v; mid.data[i*4+2] = v; mid.data[i*4+3] = 255;
         }
         mctx.putImageData(mid, 0, 0);
-        const sTex = new THREE.Texture(oc); sTex.needsUpdate = true;
+        const sTex = new THREE.DataTexture(sf, w, h, THREE.RedFormat, THREE.FloatType);
+        sTex.needsUpdate = true; sTex.flipY = false;
+        sTex.minFilter = THREE.LinearFilter; sTex.magFilter = THREE.LinearFilter;
+        sTex.generateMipmaps = false;
+        if ('colorSpace' in sTex) sTex.colorSpace = THREE.NoColorSpace;
+        sTex.image2d = oc;   // CPU-readable copy for drawImage consumers
         const mTex = new THREE.Texture(mc); mTex.needsUpdate = true;
         L.textures.depth = sTex;
         L.textures.edgeMask = mTex;
@@ -7301,7 +7344,9 @@ function buildBackgroundLayer() {
                 const cx = cv.getContext('2d', { willReadFrequently: true });
                 // read sharpened depth from the layer's depth texture (img/canvas =
                 // top-row-first, matching the band/valid PNGs read below)
-                if (dImg && dImg.tagName) {
+                if (dSrc.image2d) {
+                    cx.drawImage(dSrc.image2d, 0, 0, pw, ph);
+                } else if (dImg && dImg.tagName) {
                     cx.drawImage(dImg, 0, 0, pw, ph);
                 } else {
                     // DataTexture fallback — render to a temp target and read back.
@@ -7330,63 +7375,6 @@ function buildBackgroundLayer() {
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
-                // ---- THIN FEATURES: detect + depth-halo (review-fix v4) ----
-                // A 1-2px feature (staff, glider) is ALL edge triangles: under
-                // parallax it renders as a diluted smear, and tearing it deletes
-                // it. Fix its rigidity in the DISPLACEMENT domain: dilate the
-                // feature's depth ~2px into its background neighbours (colour
-                // untouched). The rubber boundary moves off the feature onto
-                // sky-coloured cells, which stretch invisibly over the plate;
-                // the feature's own pixels displace as a rigid body.
-                {
-                    const oT = bgOtsuThreshold(depth, null);
-                    const nearM = new Uint8Array(PN);
-                    for (let i = 0; i < PN; i++) nearM[i] = depth[i] >= oT ? 1 : 0;
-                    let E = nearM;
-                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
-                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
-                            if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
-                        E = ne; }
-                    // Thin = near-class pixel that the eroded core cannot reach
-                    // GEODESICALLY (through the near mask). A plain window test
-                    // marks the staff shaft "thick" just because the figure's
-                    // core is nearby — and the shaft got torn ("carved away").
-                    let R = E;
-                    for (let p = 0; p < 3; p++) { const nr = new Uint8Array(PN);
-                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
-                            if (!nearM[i]) continue;
-                            if (R[i] || R[i-1] || R[i+1] || R[i-pw] || R[i+pw]) nr[i] = 1; }
-                        R = nr; }
-                    thinM = new Uint8Array(PN);
-                    let nThin = 0;
-                    for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
-                    if (nThin > 0 && !L._thinHaloApplied) {
-                        const hd = depth.slice(); let changed = 0;
-                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                            if (thinM[i]) continue;
-                            let m = -1;
-                            for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
-                                const yy = y + oy, xx = x + ox;
-                                if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
-                                const j = yy * pw + xx;
-                                if (thinM[j] && depth[j] > m) m = depth[j];
-                            }
-                            if (m > hd[i] + 0.004) { hd[i] = m; changed++; }
-                        }
-                        if (changed > 0) {
-                            const hc = document.createElement('canvas'); hc.width = pw; hc.height = ph;
-                            const hx = hc.getContext('2d'); const hid = hx.createImageData(pw, ph);
-                            for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(hd[i] * 255)));
-                                hid.data[i*4] = v; hid.data[i*4+1] = v; hid.data[i*4+2] = v; hid.data[i*4+3] = 255; }
-                            hx.putImageData(hid, 0, 0);
-                            const hTex = new THREE.Texture(hc); hTex.needsUpdate = true;
-                            L.textures.depth = hTex;
-                            if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
-                            L._thinHaloApplied = true;
-                            console.log('[RUNG-PLUG] thin-feature depth halo: ' + nThin + 'px thin, ' + changed + 'px haloed');
-                        }
-                    }
-                }
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
@@ -7429,6 +7417,71 @@ function buildBackgroundLayer() {
                         ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)' +
                         ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
                     plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
+                }
+                // ---- THIN FEATURES: detect + depth-halo (review-fix v4) ----
+                // A 1-2px feature (staff, glider) is ALL edge triangles: under
+                // parallax it renders as a diluted smear, and tearing it deletes
+                // it. Fix its rigidity in the DISPLACEMENT domain: dilate the
+                // feature's depth ~2px into its background neighbours (colour
+                // untouched). The rubber boundary moves off the feature onto
+                // sky-coloured cells, which stretch invisibly over the plate;
+                // the feature's own pixels displace as a rigid body.
+                {
+                    const oT = bgOtsuThreshold(depth, band); // band-excluded: null-skip lands ABOVE the figure on ground-heavy histograms and unprotects the staff
+                    const nearM = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) nearM[i] = depth[i] >= oT ? 1 : 0;
+                    let E = nearM;
+                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
+                        E = ne; }
+                    // Thin = near-class pixel that the eroded core cannot reach
+                    // GEODESICALLY (through the near mask). A plain window test
+                    // marks the staff shaft "thick" just because the figure's
+                    // core is nearby — and the shaft got torn ("carved away").
+                    let R = E;
+                    for (let p = 0; p < 3; p++) { const nr = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (!nearM[i]) continue;
+                            if (R[i] || R[i-1] || R[i+1] || R[i-pw] || R[i+pw]) nr[i] = 1; }
+                        R = nr; }
+                    thinM = new Uint8Array(PN);
+                    let nThin = 0;
+                    for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
+                    if (nThin > 0 && !L._thinHaloApplied) {
+                        const hd = depth.slice(); let changed = 0;
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                            if (thinM[i]) continue;
+                            let m = -1;
+                            for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+                                const yy = y + oy, xx = x + ox;
+                                if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
+                                const j = yy * pw + xx;
+                                if (thinM[j] && depth[j] > m) m = depth[j];
+                            }
+                            if (m > hd[i] + 0.004) { hd[i] = m; changed++; }
+                        }
+                        if (changed > 0) {
+                            const hf = new Float32Array(PN);
+                            for (let y = 0; y < ph; y++) { const s = y*pw, d = (ph-1-y)*pw;
+                                for (let x = 0; x < pw; x++) hf[d+x] = hd[s+x]; }
+                            const hc = document.createElement('canvas'); hc.width = pw; hc.height = ph;
+                            const hx = hc.getContext('2d'); const hid = hx.createImageData(pw, ph);
+                            for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(hd[i] * 255)));
+                                hid.data[i*4] = v; hid.data[i*4+1] = v; hid.data[i*4+2] = v; hid.data[i*4+3] = 255; }
+                            hx.putImageData(hid, 0, 0);
+                            const hTex = new THREE.DataTexture(hf, pw, ph, THREE.RedFormat, THREE.FloatType);
+                            hTex.needsUpdate = true; hTex.flipY = false;
+                            hTex.minFilter = THREE.LinearFilter; hTex.magFilter = THREE.LinearFilter;
+                            hTex.generateMipmaps = false;
+                            if ('colorSpace' in hTex) hTex.colorSpace = THREE.NoColorSpace;
+                            hTex.image2d = hc;
+                            L.textures.depth = hTex;
+                            if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
+                            L._thinHaloApplied = true;
+                            console.log('[RUNG-PLUG] thin-feature depth halo: ' + nThin + 'px thin, ' + changed + 'px haloed');
+                        }
+                    }
                 }
                 // ---- PLUG DEPTH COMPLETION: bury the plug's own cliff ----
                 // Outside the band the plug reverts to SOURCE depth, so the
@@ -7612,9 +7665,32 @@ function buildBackgroundLayer() {
                 //     step is the real fix.
                 if (fgPreTear && bandCutMask && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                     try {
+                        const otsuTearThr = bgOtsuThreshold(depth, band);
+                        // No tearing anywhere NEAR a thin feature: the depth halo
+                        // moves their cliffs onto sky-coloured cells whose rubber is
+                        // invisible over the plate; tearing the halo ring instead
+                        // ate a black band around every staff/glider in the depth
+                        // composite. Dilate the thin mask 3px into a no-tear zone.
+                        let thinDil = null;
+                        if (thinM) {
+                            thinDil = thinM.slice();
+                            for (let p = 0; p < 3; p++) { const nb = thinDil.slice();
+                                for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                    if (thinDil[i]) continue;
+                                    if (thinDil[i-1] || thinDil[i+1] || thinDil[i-pw] || thinDil[i+pw]) nb[i] = 1; }
+                                thinDil = nb; }
+                        }
                         const g = L.mesh.geometry, gp = g.parameters;
                         const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
                         if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                        // span tests on the RAW depth: the bake leaves a 1-2px
+                        // pepper skin along silhouettes (inside the clamp's
+                        // unprotected zone); on baked depth every speck is a
+                        // >0.06 span and the tear shreds a band-shaped zone
+                        // along every silhouette and thin feature. Raw has no
+                        // pepper; real cliffs still span >0.06 across their
+                        // soft 2-3px ramps.
+                        const tearD = (L._rawDepth && L._rawDepthW === pw && L._rawDepthH === ph) ? L._rawDepth : depth;
                         const src = g.userData._fullIndex;
                         const out = new src.constructor(src.length);
                         const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
@@ -7626,20 +7702,34 @@ function buildBackgroundLayer() {
                                 const vi = src[t + k];
                                 const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
                                 txv[k] = tx; tyv[k] = ty;
-                                const d = depth[ty * pw + tx]; dv[k] = d;
+                                const d = tearD[ty * pw + tx]; dv[k] = d;
                                 if (d < mn) mn = d; if (d > mx) mx = d;
                                 if (bandCutMask[ty * pw + tx]) inPlug = true;
                             }
                             let keep = true;
                             if (mx - mn > fgTearStep) {
-                                if (!inPlug) { keptUnbacked++; }
+                                // Only tear BACKGROUND-backed cliffs: the plate holds one
+                                // depth per texel, so an internal FG-on-FG tear (arm over
+                                // torso) would reveal GLOBAL background depth instead of
+                                // the local far surface — wrong-depth slits through the
+                                // figure (seen in the depth composites). Internal overlaps
+                                // keep their rubber until MPI gives each layer its own
+                                // plate. Proxy: the local plug value (= band rim) must be
+                                // in the far class.
+                                let bgBacked = false;
+                                for (let k = 0; k < 3 && !bgBacked; k++) {
+                                    const ti = tyv[k] * pw + txv[k];
+                                    if (bandCutMask[ti] && plugDepth[ti] < otsuTearThr) bgBacked = true;
+                                }
+                                if (!bgBacked) { keptUnbacked++; }
+                                else if (!inPlug) { keptUnbacked++; }
                                 else {
                                     // thin-feature near side (thinM, computed with the
                                     // depth halo above)? never tear those.
+                                    // any vertex inside the dilated thin zone => no tear
                                     let thin = false;
-                                    for (let k = 0; k < 3 && !thin; k++) {
-                                        if (dv[k] < mx - 0.02) continue; // far vertex
-                                        if (thinM && thinM[tyv[k] * pw + txv[k]]) thin = true;
+                                    if (thinDil) for (let k = 0; k < 3 && !thin; k++) {
+                                        if (thinDil[tyv[k] * pw + txv[k]]) thin = true;
                                     }
                                     if (!thin) { dropped++; keep = false; } else keptThin++;
                                 }
