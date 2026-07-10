@@ -7324,39 +7324,6 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
-                // ---- PRE-TORN FOREGROUND: remove cliff-spanning triangles ----
-                // The FG grid is ~1 vertex/texel; a triangle whose corners span
-                // more than fgTearStep in (live-baked) depth is a silhouette
-                // crossing — under parallax it can only ever render as a rubber
-                // band. Drop it: the reveal opens as a true hole over the plug.
-                // The original index is stashed so a rebuild can re-tear from
-                // the full grid (and A/B by setting fgPreTear=false).
-                if (fgPreTear && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
-                    try {
-                        const g = L.mesh.geometry, gp = g.parameters;
-                        const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
-                        if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                        const src = g.userData._fullIndex;
-                        const out = new src.constructor(src.length);
-                        const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
-                        let n = 0, dropped = 0;
-                        for (let t = 0; t < src.length; t += 3) {
-                            let mn = 2, mx = -1;
-                            for (let k = 0; k < 3; k++) {
-                                const vi = src[t + k];
-                                const tx = Math.round((vi % vw) * sx);
-                                const ty = Math.round(((vi / vw) | 0) * sy);
-                                const d = depth[ty * pw + tx];
-                                if (d < mn) mn = d; if (d > mx) mx = d;
-                            }
-                            if (mx - mn > fgTearStep) { dropped++; continue; }
-                            out[n++] = src[t]; out[n++] = src[t + 1]; out[n++] = src[t + 2];
-                        }
-                        g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
-                        console.log('[RUNG-PLUG] FG pre-torn at cliffs > ' + fgTearStep + ': ' +
-                            dropped + ' of ' + (src.length / 3) + ' triangles dropped');
-                    } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
-                }
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
@@ -7412,44 +7379,36 @@ function buildBackgroundLayer() {
                 // background/rim depth underneath. The visible plug becomes a
                 // cliff-free "world without the foreground" surface.
                 {
-                    const RIND = Math.max(48, 3 * (bgBandMaxGrowPx | 0));
-                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), budg = new Int32Array(PN), q2 = [];
+                    // REVIEW FIX v2 (interior cliff, locally correct): the flood
+                    // keeps the author's PER-EDGE rim depths (criterion 1: legs
+                    // complete to the dune behind them, the torso to the sky) but
+                    // the RIND budget goes away — bounded completion merely
+                    // relocated the plug's cliff inward, and the BG rubber sheet
+                    // climbed it (the doppelganger). Leak containment moves from
+                    // the budget to an OTSU FLOOR: growth requires the pixel to be
+                    // in the near (occluder) depth class, so a sky-rim front that
+                    // reaches the feet cannot spill past them into the far-class
+                    // ground. Result: the whole near-class occluder is completed
+                    // with local rims and the plug has no interior cliff.
+                    const otsuThr = bgOtsuThreshold(depth, band);
+                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), q2 = [];
                     for (let i = 0; i < PN; i++) if (band[i]) {
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
-                            fgm[j] = 1; rimV[j] = plugDepth[i]; budg[j] = RIND; q2.push(j);
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
+                                depth[j] >= plugDepth[i] + 0.06 && depth[j] >= otsuThr) {
+                            fgm[j] = 1; rimV[j] = plugDepth[i]; q2.push(j);
                         }
                     }
-                    for (let h = 0; h < q2.length; h++) { const i = q2[h]; if (budg[i] <= 0) continue;
+                    for (let h = 0; h < q2.length; h++) { const i = q2[h];
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.06) {
-                            fgm[j] = 1; rimV[j] = rimV[i]; budg[j] = budg[i] - 1; q2.push(j);
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] &&
+                                depth[j] >= rimV[i] + 0.06 && depth[j] >= otsuThr) {
+                            fgm[j] = 1; rimV[j] = rimV[i]; q2.push(j);
                         }
                     }
-                    // REVIEW FIX (interior cliff): the bounded rind relocates the
-                    // plug's cliff ~RIND px inward but past it the plug reverts to
-                    // FOREGROUND depth — a figure-shaped tower in the displacement
-                    // map. The BG sheet rubber-stretches over that tower and renders
-                    // a dark doppelganger at mid depths ("plug intrudes toward the
-                    // foreground"). Complete the depth under the ENTIRE occluder
-                    // instead: any non-band pixel on the near side of the Otsu depth
-                    // split joins the completion set. Diffusion sources stay
-                    // background + pinned rims only, so the completed plug is a
-                    // convex combination of those — it can never come out nearer
-                    // than the local background (the plug sits at/behind the
-                    // furthest visible background by construction). The bounded
-                    // flood is kept for occluders the global split misses.
-                    {
-                        const otsuThr = bgOtsuThreshold(depth, band);
-                        let nOtsu = 0;
-                        for (let i = 0; i < PN; i++) {
-                            if (!band[i] && !fgm[i] && depth[i] >= otsuThr) { fgm[i] = 1; nOtsu++; }
-                        }
-                        console.log('[RUNG-PLUG] completion set: otsu>=' + otsuThr.toFixed(3) +
-                            ' adds ' + nOtsu + 'px to the rind flood');
-                    }
+                    console.log('[RUNG-PLUG] completion flood: unbounded, otsu floor ' + otsuThr.toFixed(3));
                     let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
                     if (nFg > 0) {
                         // diffuse surrounding plug depth (background + pinned band rims)
@@ -7532,6 +7491,72 @@ function buildBackgroundLayer() {
                     }
                 }
 
+                // ---- PRE-TORN FOREGROUND (review-fix v2): remove cliff-spanning
+                // triangles, but only where the hole is SAFE and the feature is
+                // not destroyed:
+                //   gate 1 (plug-backed): a triangle tears only if a vertex texel
+                //     lies in the dilated band (bandCutMask) — every hole opens
+                //     over opaque plug at the local rim depth. Sub-band cliffs
+                //     (mountains, tents) keep their v3.12 behaviour instead of
+                //     tearing onto nothing (that painted ink-black).
+                //   gate 2 (thin features): if the triangle's near side vanishes
+                //     under a 2px erosion of the near-class mask (staff, glider),
+                //     it is NOT torn — deleting it deletes the feature. Those
+                //     features keep their (small) rubber smear for now; the MPI
+                //     step is the real fix.
+                if (fgPreTear && bandCutMask && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
+                    try {
+                        const otsuT = bgOtsuThreshold(depth, band);
+                        let E = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) E[i] = depth[i] >= otsuT ? 1 : 0;
+                        for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
+                            E = ne; }
+                        const g = L.mesh.geometry, gp = g.parameters;
+                        const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
+                        if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                        const src = g.userData._fullIndex;
+                        const out = new src.constructor(src.length);
+                        const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
+                        const txv = new Int32Array(3), tyv = new Int32Array(3), dv = new Float32Array(3);
+                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0;
+                        for (let t = 0; t < src.length; t += 3) {
+                            let mn = 2, mx = -1, inPlug = false;
+                            for (let k = 0; k < 3; k++) {
+                                const vi = src[t + k];
+                                const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
+                                txv[k] = tx; tyv[k] = ty;
+                                const d = depth[ty * pw + tx]; dv[k] = d;
+                                if (d < mn) mn = d; if (d > mx) mx = d;
+                                if (bandCutMask[ty * pw + tx]) inPlug = true;
+                            }
+                            let keep = true;
+                            if (mx - mn > fgTearStep) {
+                                if (!inPlug) { keptUnbacked++; }
+                                else {
+                                    // thick near side? scan 7x7 around each near vertex
+                                    let thick = false;
+                                    for (let k = 0; k < 3 && !thick; k++) {
+                                        if (dv[k] < mx - 0.02) continue; // far vertex
+                                        for (let oy = -3; oy <= 3 && !thick; oy++) for (let ox = -3; ox <= 3; ox++) {
+                                            const yy = tyv[k] + oy, xx = txv[k] + ox;
+                                            if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
+                                            if (E[yy * pw + xx]) { thick = true; break; }
+                                        }
+                                    }
+                                    if (thick) { dropped++; keep = false; } else keptThin++;
+                                }
+                            }
+                            if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
+                        }
+                        g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
+                        console.log('[RUNG-PLUG] FG pre-torn (plug-backed, thick only): ' + dropped +
+                            ' dropped, ' + keptThin + ' thin-feature kept, ' + keptUnbacked +
+                            ' unbacked kept, of ' + (src.length / 3));
+                    } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
+                }
+
                 // --- FILL COLOR (Law 4): DEPTH-GUIDED EXEMPLAR (onion-peel). Fill each
                 // hole rim-first by copying the best-matching REAL background patch (SSD
                 // over known neighbours; sources restricted to true background at similar
@@ -7597,6 +7622,17 @@ function buildBackgroundLayer() {
                     };
                     const bandAlpha = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) bandAlpha[i] = band[i] ? _reachAlpha(bandReach[i]) : 0;
+                    // REVIEW FIX v3 — FULL-FRAME PLATE: the plug is opaque
+                    // everywhere, not only over band/ring/rind. Outside the
+                    // completed regions its RGB is simply the source image and its
+                    // depth the source depth (0.004 behind the FG), so it is
+                    // invisible at rest — but ANY reveal, of any width, opens onto
+                    // real content at the right depth. This is what fills the
+                    // parallax sweep behind THIN occluders (staff, glider): their
+                    // source-space band can never be wider than the feature
+                    // itself, so a patch-plug leaves most of their reveal naked
+                    // (the composite painted it ink-black).
+                    for (let i = 0; i < PN; i++) if (!band[i] && !bandAlpha[i]) bandAlpha[i] = 255;
                     // The FG stretch cut is allowed in the DILATED band (bandCutMask), so
                     // the plug must be opaque there too — a discard over transparent plug
                     // is a naked hole. RGB for the ring comes from the bleed below.
