@@ -6743,14 +6743,31 @@ function applyLiveBake(L) {
             for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = -1;
                 for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v > m) m = v; }
                 bmax[y*w+x] = m; } }
-            let clamped = 0, nans = 0;
+            // local far minimum (same window) for skin binarization
+            const bmin = new Float32Array(N);
+            for (let y = 0; y < h; y++) { const row = y * w;
+                for (let x = 0; x < w; x++) { let m = 2;
+                    for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = depth[row+xx]; if (v < m) m = v; }
+                    tmpM[row+x] = m; } }
+            for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = 2;
+                for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v < m) m = v; }
+                bmin[y*w+x] = m; } }
+            let clamped = 0, nans = 0, snapped = 0;
             for (let i = 0; i < N; i++) {
                 const s = out.sharpened[i];
                 if (!isFinite(s)) { out.sharpened[i] = depth[i]; nans++; continue; }
                 // NaN-proof comparison: !(s >= x) also catches NaN
-                if (depth[i] >= bmax[i] - 0.02 && !(s >= depth[i] - 0.02)) { out.sharpened[i] = depth[i]; clamped++; }
+                if (depth[i] >= bmax[i] - 0.02 && !(s >= depth[i] - 0.02)) { out.sharpened[i] = depth[i]; clamped++; continue; }
+                // SKIN BINARIZATION: within the sharpened silhouette skin a pixel
+                // must be the local near plateau or the local far minimum — the
+                // bake's pepper (intermediate values) poisons the plug's rim
+                // depths (mid-gray slabs floating in the reveals) and the tear.
+                if (bmax[i] - bmin[i] > 0.06) {
+                    const dN = Math.abs(s - bmax[i]), dF = Math.abs(s - bmin[i]);
+                    if (dN > 0.05 && dF > 0.05) { out.sharpened[i] = (dN < dF) ? bmax[i] : bmin[i]; snapped++; }
+                }
             }
-            if (clamped || nans) console.log('[RUNG-A] plateau clamp restored ' + clamped + 'px eroded + ' + nans + 'px NaN from the bake');
+            if (clamped || nans || snapped) console.log('[RUNG-A] bake regularized: ' + clamped + 'px plateau-restored, ' + snapped + 'px skin-binarized, ' + nans + 'px NaN');
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
