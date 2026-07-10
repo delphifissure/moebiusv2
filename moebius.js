@@ -4825,8 +4825,8 @@ function renderNormalizedDepthPass() {
                     precision highp float;
                     
                     // Gap detection uniforms (shared with main material)
-                    uniform sampler2D u_depthMap;
-                    uniform sampler2D u_texture;
+                    uniform sampler2D displacementMap; // (D8 fix: shared uniform actually bound in image mode)
+                    uniform sampler2D map;
                     uniform sampler2D u_edgeMask;
                     uniform vec2 u_textureSize;
                     uniform vec2 u_resolution;
@@ -4851,7 +4851,7 @@ function renderNormalizedDepthPass() {
                     }
                     
                     float getDepth(vec2 uv) {
-                        return texture2D(u_depthMap, uv).r;
+                        return texture2D(displacementMap, uv).r;
                     }
                     
                     uniform bool u_isBackgroundLayer;
@@ -4865,7 +4865,7 @@ function renderNormalizedDepthPass() {
                             return;
                         }
 
-                        vec4 originalColor = texture2D(u_texture, vUv);
+                        vec4 originalColor = texture2D(map, vUv);
                         
                         bool isGap = false;
                         bool isTunnel = false; // Track if gap was detected by tunnel logic
@@ -4873,18 +4873,18 @@ function renderNormalizedDepthPass() {
                         
                         // TUNNEL DETECTION: Only flag pixels that are clearly interpolating
                         // between FG and BG depths (not just any mismatch)
-                        float sourceDepth = texture2D(u_depthMap, vUv).r;
+                        float sourceDepth = texture2D(displacementMap, vUv).r;
                         vec2 texel = 1.0 / u_textureSize;
                         
                         // Sample neighbors to find local depth range in source
-                        float d1 = texture2D(u_depthMap, vUv + vec2(-texel.x, -texel.y)).r;
-                        float d2 = texture2D(u_depthMap, vUv + vec2( 0.0,     -texel.y)).r;
-                        float d3 = texture2D(u_depthMap, vUv + vec2( texel.x, -texel.y)).r;
-                        float d4 = texture2D(u_depthMap, vUv + vec2(-texel.x,  0.0)).r;
-                        float d5 = texture2D(u_depthMap, vUv + vec2( texel.x,  0.0)).r;
-                        float d6 = texture2D(u_depthMap, vUv + vec2(-texel.x,  texel.y)).r;
-                        float d7 = texture2D(u_depthMap, vUv + vec2( 0.0,      texel.y)).r;
-                        float d8 = texture2D(u_depthMap, vUv + vec2( texel.x,  texel.y)).r;
+                        float d1 = texture2D(displacementMap, vUv + vec2(-texel.x, -texel.y)).r;
+                        float d2 = texture2D(displacementMap, vUv + vec2( 0.0,     -texel.y)).r;
+                        float d3 = texture2D(displacementMap, vUv + vec2( texel.x, -texel.y)).r;
+                        float d4 = texture2D(displacementMap, vUv + vec2(-texel.x,  0.0)).r;
+                        float d5 = texture2D(displacementMap, vUv + vec2( texel.x,  0.0)).r;
+                        float d6 = texture2D(displacementMap, vUv + vec2(-texel.x,  texel.y)).r;
+                        float d7 = texture2D(displacementMap, vUv + vec2( 0.0,      texel.y)).r;
+                        float d8 = texture2D(displacementMap, vUv + vec2( texel.x,  texel.y)).r;
                         
                         float maxSourceDepth = max(sourceDepth, max(max(max(d1, d2), max(d3, d4)), max(max(d5, d6), max(d7, d8))));
                         float minSourceDepth = min(sourceDepth, min(min(min(d1, d2), min(d3, d4)), min(min(d5, d6), min(d7, d8))));
