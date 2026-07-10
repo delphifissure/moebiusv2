@@ -7784,6 +7784,8 @@ function buildBackgroundLayer() {
                         for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
                     const tF = Date.now();
                     const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
+                    // debug capture (harness probes): which path coloured each pixel
+                    const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
                     const fillRGB = new Float32Array(PN * 3);
                     for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
                     // DIRECTIONAL BACKGROUND EXTENSION: for each hole, march to the nearest
@@ -7818,8 +7820,8 @@ function buildBackgroundLayer() {
                         for (let i = 0; i < PN; i++) if (band[i]) {
                             const rs0 = rimSrc ? rimSrc[i] : -1;
                             const rs = rs0 >= 0 ? rimColorSrc(i, rs0) : -1;
-                            if (rs >= 0 && !band[rs] && !(underMask && underMask[rs])) { fillRGB[i*3]=cpx[rs*4]; fillRGB[i*3+1]=cpx[rs*4+1]; fillRGB[i*3+2]=cpx[rs*4+2]; }
-                            else { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                            if (rs >= 0 && !band[rs] && !(underMask && underMask[rs])) { fillRGB[i*3]=cpx[rs*4]; fillRGB[i*3+1]=cpx[rs*4+1]; fillRGB[i*3+2]=cpx[rs*4+2]; if (dbgFB) dbgFB[i]=1; }
+                            else { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; if (dbgFB) dbgFB[i]=2; }
                         }
                     }
                     // reach -> alpha: opaque for short reach, faded to transparent for long
@@ -7860,9 +7862,66 @@ function buildBackgroundLayer() {
                         for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
                             bandAlpha[i] = 255;
                             const rc = (underRimC && underRimC[i] >= 0) ? underRimC[i] : -1;
-                            if (rc >= 0) { fillRGB[i*3] = cpx[rc*4]; fillRGB[i*3+1] = cpx[rc*4+1]; fillRGB[i*3+2] = cpx[rc*4+2]; }
-                            else { fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2]; }
+                            if (rc >= 0) { fillRGB[i*3] = cpx[rc*4]; fillRGB[i*3+1] = cpx[rc*4+1]; fillRGB[i*3+2] = cpx[rc*4+2]; if (dbgFB) dbgFB[i]=3; }
+                            else { fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2]; if (dbgFB) dbgFB[i]=4; }
                         }
+                        // DEPTH-CONSISTENT LOCAL CONTINUATION (v5): a completed
+                        // pixel's colour must come from background at ITS OWN
+                        // completed depth, found along its own row/column — not
+                        // from whichever rim's flood claimed it first. The flood
+                        // carries DEPTH correctly, but its colour rode along: a
+                        // dark LOW rim (the figure's horizon-contact ink) claimed
+                        // plate territory far above its own height and painted
+                        // the sky behind the torso near-black (the "black blob"
+                        // doppelgänger at look-up). Sampling background of the
+                        // pixel's own depth on the pixel's own scanline gives
+                        // sky rows sky, the horizon stripe its own continuation,
+                        // and the under-leg corridor dune — one rule, no knobs
+                        // (tolerance/bound reused from the existing fill logic).
+                        {
+                            const tolD = 0.06, REACH = 400;
+                            const inSet = (j) => band[j] || underMask[j];
+                            let fixedN = 0;
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                                const i = y*pw+x;
+                                if (!inSet(i)) continue;
+                                const td = plugDepth[i];
+                                let bestJ = -1, bestCost = 1e9;
+                                for (let k = 0; k < 4; k++) {
+                                    const dx = (k===0)?1:(k===1)?-1:0, dy = (k===2)?1:(k===3)?-1:0;
+                                    const pen = (k >= 2) ? 2 : 1;   // scenes stratify horizontally: prefer same-row
+                                    let cx2 = x, cy2 = y, st = 0;
+                                    while (st < REACH) {
+                                        cx2 += dx; cy2 += dy; st++;
+                                        if (cx2 < 0 || cx2 >= pw || cy2 < 0 || cy2 >= ph) break;
+                                        const j = cy2*pw+cx2;
+                                        if (inSet(j)) continue;                    // still crossing the completed set
+                                        if (fillSrc[j] && Math.abs(depth[j] - td) <= tolD) {
+                                            if (st * pen < bestCost) { bestCost = st * pen; bestJ = j; }
+                                            break;                                 // first hit per direction
+                                        }
+                                    }
+                                }
+                                if (bestJ >= 0) {
+                                    // step a few px deeper past the rim (same escape the
+                                    // rim-colour sampler uses) to clear contact shading
+                                    const bx = bestJ % pw, by = (bestJ / pw) | 0;
+                                    const sx2 = Math.sign(bx - x), sy2 = Math.sign(by - y);
+                                    for (let s = 4; s >= 0; s--) {
+                                        const ex = bx + sx2*s, ey = by + sy2*s;
+                                        if (ex < 0 || ex >= pw || ey < 0 || ey >= ph) continue;
+                                        const ej = ey*pw+ex;
+                                        if (fillSrc[ej] && Math.abs(depth[ej] - td) <= tolD) { bestJ = ej; break; }
+                                    }
+                                    fillRGB[i*3] = cpx[bestJ*4]; fillRGB[i*3+1] = cpx[bestJ*4+1]; fillRGB[i*3+2] = cpx[bestJ*4+2];
+                                    fixedN++;
+                                }
+                                // no depth-compatible background in reach: keep the
+                                // flood-carried rim colour (still never foreground)
+                            }
+                            console.log('[RUNG-PLUG] depth-consistent continuation: ' + fixedN + 'px recoloured');
+                        }
+                        if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth };
                         // soften the flat rim-colour patches (Jacobi, completed set
                         // only). 24 passes: along busy silhouettes (vehicle line at
                         // the dune edge) adjacent rims alternate dark/light and 8
