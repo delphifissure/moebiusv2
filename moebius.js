@@ -5882,6 +5882,62 @@ function _canvasToPngBytes(canvas) {
 // interior gaps = flooded rim target plug, border = 0), the inpaint mask
 // (interior disocclusions), the outpaint mask (border void), the FG-occluder
 // mask, and a metadata json.
+// PER-LAYER SD FILES (MPI slice 3b): for every layer with strip content,
+// emit color (visible texels + coarse strip continuation, alpha = known),
+// depth (same coverage), and an inpaint mask (white = the strip region SD
+// should regenerate WITH layer-k context only). SD upgrades the texture
+// inside the landed structure; depth conditioning comes from the strip
+// depth, which already continues each surface's own slope. Returns the
+// number of layers emitted; testable independently of the zip path.
+function bgBuildMPILayerFiles(files, meta, canvasToPng) {
+    if (!bgMPIExport || !bgMPIStripExport || bgMPIExport.pw !== bgMPIStripExport.pw) return 0;
+    const mE = bgMPIExport, sE = bgMPIStripExport;
+    const mpw = mE.pw, mph = mE.ph, mN = mpw * mph;
+    const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+    const cImg = L0 && ((L0.textures.color && L0.textures.color.image) || (L0.elements && L0.elements.color));
+    if (!cImg) return 0;
+    const cv0 = document.createElement('canvas'); cv0.width = mpw; cv0.height = mph;
+    const cc0 = cv0.getContext('2d', { willReadFrequently: true });
+    cc0.drawImage(cImg, 0, 0, mpw, mph);
+    const scpx = cc0.getImageData(0, 0, mpw, mph).data;
+    const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = mpw; cv.height = mph;
+        const cc = cv.getContext('2d'); const id = cc.createImageData(mpw, mph); drawFn(id.data); cc.putImageData(id, 0, 0); return canvasToPng(cv); };
+    const layersMeta = [];
+    let emitted = 0;
+    for (let k = 1; k <= mE.layers; k++) {
+        // strip ownership for this layer across both overlap slots
+        let nStrip = 0, nVis = 0;
+        for (let i = 0; i < mN; i++) {
+            if (sE.slotO[0][i] === k || sE.slotO[1][i] === k) nStrip++;
+            if (mE.texLayer[i] === k) nVis++;
+        }
+        layersMeta.push({ layer: k, meanDepth: +mE.meanD[k-1].toFixed(4), visibleTexels: nVis, stripTexels: nStrip });
+        if (!nStrip) continue;   // nothing to regenerate for this layer
+        const slotOf = (i) => sE.slotO[0][i] === k ? 0 : (sE.slotO[1][i] === k ? 1 : -1);
+        files.push({ name: `layer${k}_color.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4;
+                if (mE.texLayer[i] === k) { d[o]=scpx[o]; d[o+1]=scpx[o+1]; d[o+2]=scpx[o+2]; d[o+3]=255; }
+                else { const s = slotOf(i);
+                    if (s >= 0) { d[o]=sE.slotC[s][i*3]; d[o+1]=sE.slotC[s][i*3+1]; d[o+2]=sE.slotC[s][i*3+2]; d[o+3]=255; }
+                    else d[o+3]=0; } } }) });
+        files.push({ name: `layer${k}_depth.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4; let v = 0, a = 0;
+                if (mE.texLayer[i] === k) { v = Math.max(0, Math.min(255, (sE.depth[i]*255) | 0)); a = 255; }
+                else { const s = slotOf(i);
+                    if (s >= 0) { v = Math.max(0, Math.min(255, (sE.slotD[s][i]*255) | 0)); a = 255; } }
+                d[o]=v; d[o+1]=v; d[o+2]=v; d[o+3]=a; } }) });
+        files.push({ name: `layer${k}_mask_inpaint.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4; const v = slotOf(i) >= 0 ? 255 : 0;
+                d[o]=v; d[o+1]=v; d[o+2]=v; d[o+3]=255; } }) });
+        meta.files[`layer${k}_color.png`] = `MPI layer ${k}: visible texels + coarse strip continuation (alpha = known content) — SD context`;
+        meta.files[`layer${k}_depth.png`] = `MPI layer ${k}: depth over the same coverage (slope-continued in strips) — ControlNet depth conditioning`;
+        meta.files[`layer${k}_mask_inpaint.png`] = `MPI layer ${k}: white = strip region to regenerate using ONLY this layer's context`;
+        emitted++;
+    }
+    meta.mpiLayers = { nativeRes: [mpw, mph], count: mE.layers, emitted, layers: layersMeta,
+        note: 'per-layer completion: inpaint each layer independently at its own depth; overlap slots resolved back-to-front by the viewer' };
+    return emitted;
+}
 function exportSDBundle() {
     try {
         if (!renderer || !postProcessScene || !postProcessCamera) { alert('Renderer not ready'); return; }
@@ -5987,6 +6043,11 @@ function exportSDBundle() {
             meta.outpaintMarginPx = [xE.mx, xE.my];
             meta.outpaintSourceRes = [xE.pw, xE.ph];
         }
+        // PER-LAYER completion set (MPI slice 3b) — one color/depth/mask triple
+        // per layer with strip content; SD inpaints each layer with its own
+        // context only, then the results reimport as per-layer textures.
+        const nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
+        if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -6441,6 +6502,7 @@ let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EP
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
 let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
 let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
+let bgMPIStripExport = null; // { pw, ph, slotO, slotD, slotC, depth } — live per-layer plates, for the SD bundle
 // ---- MPI slice 2: the UNDER-SHEET (band-limited second depth) ----
 // Everything the single plate cannot fix is INTERNAL overlap: cliffs whose
 // far side is another part of the same scene stack (arm over torso, fur
@@ -7499,6 +7561,7 @@ function buildBackgroundLayer() {
         let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
         let _stripD = null, _stripC = null, _stripO = null, _stripPW = 0, _stripPH = 0, _stripFrontD = null; // per-layer plates, live (MPI slice 3): two overlap slots
         bgExtendExport = null;
+        bgMPIStripExport = null;
         const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
         if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
             try {
@@ -8909,6 +8972,7 @@ function buildBackgroundLayer() {
                             }
                         }
                         _stripD = slotD; _stripC = slotC; _stripO = slotO; _stripPW = pw; _stripPH = ph; _stripFrontD = depth;
+                        bgMPIStripExport = { pw, ph, slotO, slotD, slotC, depth };
                         console.log('[MPI] per-layer plates (live, v2 additive): ' + claimed7 + 'px claimed, ' + kept7 + 'px kept after prune (' + (Date.now()-t7) + 'ms)');
                 _mark('layer-strips');
                     }
