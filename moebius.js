@@ -7642,6 +7642,36 @@ function buildBackgroundLayer() {
                             }
                         }
                     }
+                    // ---- RAMP COLLAPSE (review-fix v6): the streak generator ----
+                    // The bake leaves 3-10px transition APRONS along silhouettes,
+                    // quantized into terrace treads. Every tread is an intermediate-
+                    // depth texel band below fgTearStep: no tear rule can touch it,
+                    // and under parallax each tread shears horizontally by its own
+                    // depth — rendered as the parallel streak bands (FG-only depth
+                    // attribution: the eagle, boots and staff surroundings shred
+                    // into terraces). Cutting one line through the ramp (the NMS
+                    // core tear) leaves the remaining treads still connected, still
+                    // shearing. So remove the INTERMEDIATE DEPTHS themselves:
+                    // binarize every ramp pixel (local +/-2px window span > step)
+                    // to whichever side — window min or max — is closer in value.
+                    // Silhouette aprons become 1-texel cliffs (the sharp tear
+                    // handles them); smooth real slopes (window span < step) are
+                    // untouched; the bake's silhouette pepper collapses with it.
+                    {
+                        const d0 = depth.slice();
+                        let snapped = 0;
+                        for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
+                            const i = y*pw+x;
+                            let mn2 = 2, mx2 = -1;
+                            for (let oy = -2; oy <= 2; oy++) { const r = i+oy*pw;
+                                for (let ox = -2; ox <= 2; ox++) { const d = d0[r+ox]; if (d<mn2)mn2=d; if(d>mx2)mx2=d; } }
+                            if (mx2 - mn2 <= fgTearStep) continue;
+                            const v = d0[i];
+                            const t2 = (v - mn2 <= mx2 - v) ? mn2 : mx2;
+                            if (Math.abs(t2 - v) > 0.002) { depth[i] = t2; snapped++; }
+                        }
+                        if (snapped > 0) { pxChanged += snapped; console.log('[RUNG-PLUG] ramp collapse: ' + snapped + 'px binarized'); }
+                    }
                     if (pxChanged > 0) {
                         const hf2 = new Float32Array(PN);
                         for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
@@ -7660,7 +7690,7 @@ function buildBackgroundLayer() {
                         L.textures.depth = hTex2;
                         if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex2;
                         console.log('[RUNG-PLUG] despeckle: ' + nAttach + ' attached, ' + nFlat +
-                            ' flattened (' + pxChanged + 'px), ' + nKeep + ' kept (sharp/big)');
+                            ' flattened (' + pxChanged + 'px total w/ collapse), ' + nKeep + ' kept (sharp/big)');
                     }
                 }
                 if (bgPlugMode === 'directional') {
@@ -7926,6 +7956,20 @@ function buildBackgroundLayer() {
                         // cut — the stretch heuristics stay disarmed (they misfire
                         // at rest on slow-ramp cliffs; see review D1b).
                         fu.u_useBandCut.value = !!bgCutFGOnPlug && !fgPreTear;
+                        // Same rationale for the per-fragment gap discards
+                        // (u_useDepthGrad was hard-on: `checked || true`). On the
+                        // walls the tear deliberately KEEPS (far-mismatch overlaps,
+                        // thin ribbons), fwidth straddles the threshold under
+                        // parallax, so the discards render them as dash-row streak
+                        // patterns — in the colour pass AND the depth pass, which
+                        // shares these uniforms. Geometry tears are the cut now;
+                        // kept walls render solid.
+                        if (fgPreTear) {
+                            for (const gk of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                                              'u_useCurvature','u_useCrease','u_useUVStretch','u_useGrazingAngle']) {
+                                if (fu[gk]) fu[gk].value = false;
+                            }
+                        }
                         fu.u_bandCutMismatch.value = bgBandCutMismatch;
                         if (fu.u_bandCutMaxGrad) fu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                         // expected UV rate: the mesh spans UV 0..1 over roughly the
@@ -7951,14 +7995,17 @@ function buildBackgroundLayer() {
                 //     step is the real fix.
                 if (fgPreTear && bandCutMask && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                     try {
-                        const otsuTearThr = bgOtsuThreshold(depth, band);
-                        // No tearing anywhere NEAR a thin feature: the depth halo
-                        // moves their cliffs onto sky-coloured cells whose rubber is
-                        // invisible over the plate; tearing the halo ring instead
-                        // ate a black band around every staff/glider in the depth
-                        // composite. Dilate the thin mask 3px into a no-tear zone.
+                        // Thin-feature protection is the RIBBON itself (feature +
+                        // halo): only triangles touching it are vetoed. The old 3px
+                        // thinDil collar also protected every THICK structure's
+                        // cliff that happened to pass near a thin feature (the
+                        // arm/shoulder silhouette where the staff crosses it) —
+                        // those kept their rubber walls, and the depth pass's
+                        // glancing-angle discards chopped them into the residual
+                        // streak block. thinDil remains only as the fallback when
+                        // no halo mask exists this build (rebuild path).
                         let thinDil = null;
-                        if (thinM) {
+                        if (thinM && !haloM) {
                             thinDil = thinM.slice();
                             for (let p = 0; p < 3; p++) { const nb = thinDil.slice();
                                 for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
@@ -7969,14 +8016,14 @@ function buildBackgroundLayer() {
                         const g = L.mesh.geometry, gp = g.parameters;
                         const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
                         if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                        // span tests on the RAW depth: the bake leaves a 1-2px
-                        // pepper skin along silhouettes (inside the clamp's
-                        // unprotected zone); on baked depth every speck is a
-                        // >0.06 span and the tear shreds a band-shaped zone
-                        // along every silhouette and thin feature. Raw has no
-                        // pepper; real cliffs still span >0.06 across their
-                        // soft 2-3px ramps.
-                        const tearD = (L._rawDepth && L._rawDepthW === pw && L._rawDepthH === ph) ? L._rawDepth : depth;
+                        // span tests on the COLLAPSED displayed depth: the ramp
+                        // collapse binarized every silhouette apron (including the
+                        // bake's 1-2px pepper skin, which lives inside those
+                        // aprons), so cliffs are 1-texel sharp and pepper cannot
+                        // shred. The old raw-depth indirection existed only for
+                        // pepper immunity — raw's soft ramps also made the
+                        // far-side test unreliable (mid-ramp minima).
+                        const tearD = depth;
                         // SOFT-CLIFF CORE (review-fix v5): the bake spreads some
                         // silhouettes into 3-10px ramps whose per-triangle span never
                         // exceeds fgTearStep, so the mesh rubbers instead of tearing
@@ -7985,6 +8032,7 @@ function buildBackgroundLayer() {
                         // core (gradient non-maximum suppression, Canny-style), so
                         // the rest-state gap stays as thin as a sharp-cliff tear.
                         const cliffCore = new Uint8Array(PN);
+                        const cliffFar = new Float32Array(PN);  // window min at each core px: the ramp's local far side
                         {
                             const gm = (j) => Math.max(Math.abs(tearD[j+1]-tearD[j-1]), Math.abs(tearD[j+pw]-tearD[j-pw]));
                             for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
@@ -7996,7 +8044,7 @@ function buildBackgroundLayer() {
                                 const gx = Math.abs(tearD[i+1]-tearD[i-1]), gy2 = Math.abs(tearD[i+pw]-tearD[i-pw]);
                                 const g0 = Math.max(gx, gy2);
                                 const a = gx >= gy2 ? i-1 : i-pw, b = gx >= gy2 ? i+1 : i+pw;
-                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) cliffCore[i] = 1;
+                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) { cliffCore[i] = 1; cliffFar[i] = mn2; }
                             }
                         }
                         const src = g.userData._fullIndex;
@@ -8006,74 +8054,70 @@ function buildBackgroundLayer() {
                         let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0;
                         const ribbon = (j) => (thinM && thinM[j]) || (haloM && haloM[j]);
                         for (let t = 0; t < src.length; t += 3) {
-                            let mn = 2, mx = -1, inPlug = false, nRib = 0, hasCore = false, farBacked = false;
-                            let dmn = 2, dmx = -1;
+                            let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false;
+                            let dmn = 2, dmx = -1, mnTi = -1;
                             for (let k = 0; k < 3; k++) {
                                 const vi = src[t + k];
                                 const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
                                 txv[k] = tx; tyv[k] = ty;
                                 const ti = ty * pw + tx;
                                 const d = tearD[ti]; dv[k] = d;
-                                if (d < mn) mn = d; if (d > mx) mx = d;
+                                if (d < mn) mn = d;
+                                if (d > mx) mx = d;
                                 const dd = dispDepth[ti];
-                                if (dd < dmn) dmn = dd; if (dd > dmx) dmx = dd;
-                                if (bandCutMask[ti]) inPlug = true;
+                                if (dd < dmn) { dmn = dd; mnTi = ti; }
+                                if (dd > dmx) dmx = dd;
                                 if (ribbon(ti)) nRib++;
-                                if (cliffCore[ti]) hasCore = true;
-                                if (plugDepth[ti] < otsuTearThr) farBacked = true;
+                                // a core vertex qualifies only if the plate behind it
+                                // carries the ramp's own local far side (2x step: the
+                                // +/-2px window may not reach the ramp's true foot)
+                                if (cliffCore[ti] && Math.abs(plugDepth[ti] - cliffFar[ti]) <= 2*fgTearStep) coreOK = true;
+                                if (thinDil && thinDil[ti]) thinVeto = true;
                             }
+                            // FAR-SIDE MATCH — the one gate all three rules share: a
+                            // cliff tears iff the plate behind it carries the cliff's
+                            // OWN far side (within fgTearStep). This is what makes a
+                            // tear safe by construction: the hole opens onto the same
+                            // surface the cliff falls to. It tears figure-over-DUNE
+                            // ground contacts (plate = dune there — the nearest-rim
+                            // flood guarantees it), which the old near/far-class proxy
+                            // never could, and still keeps arm-over-torso overlaps
+                            // (plate = sky behind the arm: mismatch) until MPI.
+                            // The far side is identified in the DISPLAYED (sharpened)
+                            // depth: raw silhouettes are soft ramps, so a triangle's
+                            // raw min is a mid-ramp value that never matches the true
+                            // far plate (probe: the whole figure ringed by kept walls).
+                            const farMatch = mnTi >= 0 && Math.abs(plugDepth[mnTi] - dmn) <= fgTearStep;
                             let keep = true;
                             // HALO-EDGE TEAR: the thin-feature ribbon (feature + halo)
                             // stays rigid and intact; the triangles that SPAN its outer
                             // boundary are the depth-channel rubber filaments (colour-
                             // invisible sky-over-sky stretch). Their cliff exists only
                             // in the DISPLAYED (haloed) depth — raw has no step there.
-                            // Backed by far plate (source background just outside the
-                            // ribbon), so the tear is colour-seamless by construction.
-                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && farBacked) {
+                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && farMatch) {
                                 droppedHalo++; keep = false;
                             }
-                            // SOFT-CLIFF CORE TEAR: no bandCutMask requirement — the
-                            // sub-threshold edges that need this are exactly the ones
-                            // the band never seeded (D3); the full-frame plate is
-                            // opaque everywhere, so the gap always opens onto content.
-                            else if (hasCore && farBacked && !(thinDil && (thinDil[tyv[0]*pw+txv[0]] || thinDil[tyv[1]*pw+txv[1]] || thinDil[tyv[2]*pw+txv[2]]))) {
+                            else if (nRib > 0 || thinVeto) {
+                                // ribbon interior / fallback collar: never torn
+                                if (mx - mn > fgTearStep) keptThin++;
+                            }
+                            // SOFT-CLIFF CORE TEAR: sub-threshold ramps the band never
+                            // seeded (D3) — the full-frame plate is opaque everywhere,
+                            // so the thin gap always opens onto content.
+                            else if (coreOK) {
                                 droppedCore++; keep = false;
                             }
                             else if (mx - mn > fgTearStep) {
-                                // Only tear BACKGROUND-backed cliffs: the plate holds one
-                                // depth per texel, so an internal FG-on-FG tear (arm over
-                                // torso) would reveal GLOBAL background depth instead of
-                                // the local far surface — wrong-depth slits through the
-                                // figure (seen in the depth composites). Internal overlaps
-                                // keep their rubber until MPI gives each layer its own
-                                // plate. Proxy: the local plug value (= band rim) must be
-                                // in the far class.
-                                let bgBacked = false;
-                                for (let k = 0; k < 3 && !bgBacked; k++) {
-                                    const ti = tyv[k] * pw + txv[k];
-                                    if (bandCutMask[ti] && plugDepth[ti] < otsuTearThr) bgBacked = true;
-                                }
-                                if (!bgBacked) { keptUnbacked++; }
-                                else if (!inPlug) { keptUnbacked++; }
-                                else {
-                                    // thin-feature near side (thinM, computed with the
-                                    // depth halo above)? never tear those.
-                                    // any vertex inside the dilated thin zone => no tear
-                                    let thin = false;
-                                    if (thinDil) for (let k = 0; k < 3 && !thin; k++) {
-                                        if (thinDil[tyv[k] * pw + txv[k]]) thin = true;
-                                    }
-                                    if (!thin) { dropped++; keep = false; } else keptThin++;
-                                }
+                                if (farMatch) { dropped++; keep = false; }
+                                else keptUnbacked++;   // plate does not hold this cliff's far side (FG-on-FG): rubber until MPI
                             }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
                         }
                         g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
-                        console.log('[RUNG-PLUG] FG pre-torn (plug-backed, thick only): ' + dropped +
+                        console.log('[RUNG-PLUG] FG pre-torn (far-side match): ' + dropped +
                             ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' +
                             keptThin + ' thin-feature kept, ' + keptUnbacked +
-                            ' unbacked kept, of ' + (src.length / 3));
+                            ' far-mismatch kept, of ' + (src.length / 3));
                     } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
                 }
 
@@ -8238,7 +8282,8 @@ function buildBackgroundLayer() {
                             }
                             console.log('[RUNG-PLUG] depth-consistent continuation: ' + fixedN + 'px recoloured');
                         }
-                        if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth };
+                        if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth,
+                            thinM, haloM, dispD: dispDepth, rawD: (L._rawDepth && L._rawDepthW === pw) ? L._rawDepth : depth, bandCutMask };
                         // soften the flat rim-colour patches (Jacobi, completed set
                         // only). 24 passes: along busy silhouettes (vehicle line at
                         // the dune edge) adjacent rims alternate dark/light and 8
