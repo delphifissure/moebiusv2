@@ -6642,7 +6642,48 @@ function bgDirectionalPlug(depth, W, H, opts) {
         if (x<W-1) { j=i+1; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
         if (y>0)   { j=i-W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
         if (y<H-1) { j=i+W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } } }
-    const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
+    // SLOPE-CONTINUING INITIALISATION: every band pixel starts at the far
+    // surface's own gradient extrapolated from its rim source over the grown
+    // distance (a ground plane continues its slope into the reveal; sky, with
+    // zero gradient, stays flat; a narrow slot cannot bridge its walls
+    // because the gradient is the slot's own far surface's). The flat rim
+    // value was the measured plateau error (slope x band width), and the
+    // harmonic sweeps could not fix it: 120 Jacobi passes cannot converge a
+    // budget-deep strip from a flat initialisation. The gradient is measured
+    // over 4px behind the rim source, aborts at any cliff (falls back to the
+    // flat rim), and nearer-going extrapolation is clamped below the local
+    // occluder depth — no protrusion channel.
+    const plug = new Float32Array(N);
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
+        if (!band[i]) { plug[i]=depth[i]; continue; }
+        plug[i]=rim[i];
+        const a = rimSrc[i];
+        if (a < 0) continue;
+        const ax = a%W, ay = (a/W)|0;
+        const dx = x-ax, dy = y-ay, dist = Math.sqrt(dx*dx+dy*dy);
+        if (dist < 2) continue;
+        const ux = dx/dist, uy = dy/dist;
+        // Sample the surface at 4 and 8 px BEHIND the rim source. The first
+        // ~3px beside a cliff are collapse-modified (ramp collapse pulls them
+        // toward the window minimum); measuring the gradient from the rim
+        // pixel itself reads that dip as a slope AWAY from the reveal and
+        // extrapolates the wrong direction (measured: rim-slope*dist errors
+        // on the synthetic suite). Base and gradient both come from the
+        // clean zone; the path is continuity-checked the whole way.
+        let ok = true, prev = depth[a], base = 0, back = 0;
+        for (let k=1;k<=8;k++){
+            const sx = Math.round(ax-ux*k), sy = Math.round(ay-uy*k);
+            if (sx<0||sx>=W||sy<0||sy>=H){ ok=false; break; }
+            const dv = depth[sy*W+sx];
+            if (Math.abs(dv-prev) > STEP){ ok=false; break; }
+            prev = dv; if (k===4) base = dv; if (k===8) back = dv;
+        }
+        if (!ok) continue;
+        const g = (base-back)/4;
+        let e = base + g*(dist+4);
+        if (g > 0) e = Math.min(e, Math.max(rim[i], depth[i]-STEP));
+        plug[i] = Math.max(0, Math.min(1, e));
+    }
     const ring = new Uint8Array(N);
     // TOPOLOGY (slope continuation): ring pixels adjacent to the TRUE far-side
     // surface anchor at that surface's OWN depth instead of the carried rim
@@ -7967,13 +8008,54 @@ function buildBackgroundLayer() {
                     // complete to the dune behind them, the torso to the sky) but
                     // the RIND budget goes away — bounded completion merely
                     // relocated the plug's cliff inward, and the BG rubber sheet
-                    // climbed it (the doppelganger). Leak containment moves from
-                    // the budget to an OTSU FLOOR: growth requires the pixel to be
-                    // in the near (occluder) depth class, so a sky-rim front that
-                    // reaches the feet cannot spill past them into the far-class
-                    // ground. Result: the whole near-class occluder is completed
-                    // with local rims and the plug has no interior cliff.
-                    const otsuThr = bgOtsuThreshold(depth, band);
+                    // climbed it (the doppelganger).
+                    // STANDING-CONTENT MASK (generality v6): both earlier
+                    // containments failed a class of scene. The global Otsu floor
+                    // leaked on near-heavy histograms, and the raw above-local-floor
+                    // test (depth - windowed min > step) integrates SMOOTH SLOPE:
+                    // on an ordinary ground plane the depth ramp accumulates more
+                    // than fgTearStep across the window, so the whole ground was
+                    // swept into the rind and the plate's ground collapsed to
+                    // diffused far values (measured on the synthetic ground-truth
+                    // suite). A pixel is occluder BODY only if BOTH hold:
+                    //   (1) it stands above its local floor (min over the 4x-budget
+                    //       window — the maximum-parallax exposure radius), AND
+                    //   (2) it is geodesically reachable, within that same radius
+                    //       and without leaving class (1), from a CLIFF SEED: a
+                    //       pixel more than fgTearStep above the min of its +/-4px
+                    //       neighbourhood. A tear-scale discontinuity must exist
+                    //       within 4px — true at every silhouette that can tear
+                    //       (hard cliffs and the soft NMS ramps alike), never true
+                    //       on a smooth ramp, whose per-4px variation is bounded by
+                    //       the ramp-collapse binarization threshold.
+                    // The completion flood is gated to this mask, which restores
+                    // the leak containment the Otsu floor used to provide: a front
+                    // that reaches an occluder's feet cannot exit onto the open
+                    // ground, because the ground is not standing content.
+                    const standCap = (bgBandMaxGrowPx | 0) * 4;
+                    const standM = new Uint8Array(PN);
+                    {
+                        const floorBig = bgSlide2D(depth, pw, ph, standCap, true);
+                        const floorNear = bgSlide2D(depth, pw, ph, 4, true);
+                        const sq = new Int32Array(PN), sd = new Uint16Array(PN);
+                        let qh = 0, qt = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (depth[i] - floorBig[i] > fgTearStep && depth[i] - floorNear[i] > fgTearStep) {
+                                standM[i] = 1; sq[qt++] = i;
+                            }
+                        }
+                        const nSeed = qt;
+                        while (qh < qt) {
+                            const i = sq[qh++], d = sd[i];
+                            if (d >= standCap) continue;
+                            const x = i % pw, y = (i / pw) | 0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) if (j >= 0 && !standM[j] && depth[j] - floorBig[j] > fgTearStep) {
+                                standM[j] = 1; sd[j] = d + 1; sq[qt++] = j;
+                            }
+                        }
+                        console.log('[RUNG-PLUG] standing-content mask: ' + qt + 'px (' + nSeed + ' cliff-seeded)');
+                    }
                     // UNIFIED COMPLETION FLOOD, nearest-rim-first (review v5).
                     // First-come BFS let FAR-rim fronts (torso->sky/plain) walk
                     // down through low-contrast ground contacts and claim the
@@ -7991,7 +8073,7 @@ function buildBackgroundLayer() {
                     for (let i = 0; i < PN; i++) if (band[i]) {
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.02) {
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && standM[j] && depth[j] >= plugDepth[i] + 0.02) {
                             fgm[j] = 1; rimV[j] = plugDepth[i];
                             rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
                             buckets[bkt(plugDepth[i])].push(j);
@@ -8002,36 +8084,29 @@ function buildBackgroundLayer() {
                         for (let h = 0; h < q2.length; h++) { const i = q2[h];
                             const x = i % pw, y = (i / pw) | 0;
                             const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.02) {
+                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && standM[j] && depth[j] >= rimV[i] + 0.02) {
                                 fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i];
                                 const tb = bkt(rimV[i]);
                                 if (tb === bi) q2.push(j); else buckets[tb].push(j);
                             }
                         }
                     }
-                    console.log('[RUNG-PLUG] completion flood: unified nearest-rim-first, gate 0.02');
+                    console.log('[RUNG-PLUG] completion flood: unified nearest-rim-first, gate 0.02, standing-mask contained');
                     // FLOOR RIND (generality): the flood only enters through BAND
                     // seeds — dark-on-dark soft silhouettes never seed a band, so
                     // their near content stayed in the plate (measured: the
-                    // dancer's-thigh doppelganger blob on the cave asset). An
-                    // occluder is anything standing ABOVE ITS LOCAL FLOOR — the
-                    // under-sheet's own field, no global class threshold. Sweep
-                    // the missed pixels into the rind; they take diffused +
-                    // membrane depth and continuation colours (no carried rim).
+                    // dancer's-thigh doppelganger blob on the cave asset). Sweep
+                    // the standing-content pixels the flood did not claim into the
+                    // rind; they take diffused + membrane depth and continuation
+                    // colours (no carried rim).
                     floorField = bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
                     {
-                        // sweep radius = 4x the band budget (~ the maximum parallax
-                        // shift): plate content deeper inside an occluder than the
-                        // maximum reveal can never be exposed, so this radius covers
-                        // every exposable pixel — wide occluders included (the
-                        // budget-radius floor saw a wide core as its own floor).
-                        const floorBig = bgSlide2D(depth, pw, ph, (bgBandMaxGrowPx | 0) * 4, true);
                         let nFloorAdd = 0;
                         for (let i = 0; i < PN; i++) {
                             if (fgm[i] || band[i]) continue;
-                            if (depth[i] - floorBig[i] > fgTearStep) { fgm[i] = 1; nFloorAdd++; }
+                            if (standM[i]) { fgm[i] = 1; nFloorAdd++; }
                         }
-                        if (nFloorAdd) console.log('[RUNG-PLUG] floor rind: +' + nFloorAdd + 'px above-local-floor (band-less silhouettes)');
+                        if (nFloorAdd) console.log('[RUNG-PLUG] floor rind: +' + nFloorAdd + 'px standing content unclaimed by the flood');
                     }
                     // Reject rims that are themselves under an occluder (internal
                     // figure cliffs: arm-over-torso seeds carry FIGURE colours —
@@ -8039,7 +8114,6 @@ function buildBackgroundLayer() {
                     // diffusion wash.
                     for (let i = 0; i < PN; i++) if (rimC[i] >= 0 && (fgm[rimC[i]] || band[rimC[i]])) rimC[i] = -1;
                     underRimC = rimC;
-                    console.log('[RUNG-PLUG] completion flood: unbounded, otsu floor ' + otsuThr.toFixed(3));
                     let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
                     if (nFg > 0) {
                         // diffuse surrounding plug depth (background + pinned band rims)
@@ -8127,6 +8201,20 @@ function buildBackgroundLayer() {
                     }
                     console.log('[RUNG-PLUG] membrane correction: ' + corrected + 'px re-anchored to surface continuation lines');
                     _mark('membrane');
+                }
+                // PLATE CEILING (contract): the plate stands in for the world
+                // WITHOUT the removed content — it can never sit NEARER than the
+                // world's own surface at that pixel (anything nearer is the FG
+                // mesh's to carry). Rind diffusion + membrane blending leave a
+                // few-quantum NEARER bias on swept floor strips (measured as
+                // plate protrusions at the pose); occluder cores are far behind
+                // their source, so this is a no-op there.
+                if (underMask) {
+                    let nCeil = 0;
+                    for (let i = 0; i < PN; i++) {
+                        if (underMask[i] && !band[i] && plugDepth[i] > depth[i]) { plugDepth[i] = depth[i]; nCeil++; }
+                    }
+                    if (nCeil) console.log('[RUNG-PLUG] plate ceiling: ' + nCeil + 'px clamped to the source surface');
                 }
                     }
                 }
