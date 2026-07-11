@@ -6435,6 +6435,15 @@ let bgMPIMode = false;
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
 let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
 let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
+// ---- MPI slice 2: the UNDER-SHEET (band-limited second depth) ----
+// Everything the single plate cannot fix is INTERNAL overlap: cliffs whose
+// far side is another part of the same scene stack (arm over torso, fur
+// over body, troll limb over cave), where the plate's one-depth-per-texel
+// holds the backdrop instead. The under-sheet completes the LOCAL far
+// surface in a parallax-budget band behind each such cliff, rendered
+// between the backdrop plate and the FG layers — and the cliffs then
+// tear against it (far-side match vs the under-sheet's carried depth).
+let mpiMidMesh = null;
 // Band fill opacity. With the band tightened to a silhouette strip the fill is
 // short-range, so it should read as a SOLID, complete inpaint — no streaks AND
 // no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
@@ -7356,6 +7365,7 @@ function buildBackgroundLayer() {
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
+        let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
         bgExtendExport = null;
         const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
         if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
@@ -7412,6 +7422,10 @@ function buildBackgroundLayer() {
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
                 let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
+                let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
+                let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
+                let midRimC = null;     // carried far-side rim pixel index (colour base)
+                let midFillRGB = null;  // under-sheet colours (depth-consistent continuation at carried depth)
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
@@ -8064,14 +8078,51 @@ function buildBackgroundLayer() {
                                 if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) { cliffCore[i] = 1; cliffFar[i] = mn2; }
                             }
                         }
+                        // ---- MPI SLICE 2: UNDER-SHEET as a FLOOR FIELD ----
+                        // Behind any near clutter lies the LOCAL LOWER ENVELOPE of
+                        // the surface: the torso behind the arm, the body behind the
+                        // fur field. A per-cliff carried depth fragments into micro-
+                        // terraces on clutter (fur) — the streak problem one level
+                        // down. The floor (separable min of displayed depth over the
+                        // parallax-budget radius) is one coherent smooth sheet by
+                        // construction. Sheet exists where the front stands above
+                        // its floor AND the backdrop plate does not already carry
+                        // that floor. Colours: row-continuation at floor depth;
+                        // pixels with no continuation anywhere are pruned (a tiny
+                        // far sliver — the backdrop is the true next surface).
+                        if (bgMPIMode) {
+                            const RB = bgBandMaxGrowPx | 0;
+                            const fl = new Float32Array(PN), tmpF = new Float32Array(PN);
+                            for (let y = 0; y < ph; y++) { const r0 = y*pw;
+                                for (let x = 0; x < pw; x++) { let m = 2;
+                                    const x0 = Math.max(0, x-RB), x1 = Math.min(pw-1, x+RB);
+                                    for (let xx = x0; xx <= x1; xx++) { const v = depth[r0+xx]; if (v < m) m = v; }
+                                    tmpF[r0+x] = m; } }
+                            for (let x = 0; x < pw; x++) {
+                                for (let y = 0; y < ph; y++) { let m = 2;
+                                    const y0 = Math.max(0, y-RB), y1 = Math.min(ph-1, y+RB);
+                                    for (let yy = y0; yy <= y1; yy++) { const v = tmpF[yy*pw+x]; if (v < m) m = v; }
+                                    fl[y*pw+x] = m; } }
+                            midBand = new Uint8Array(PN);
+                            midDepthV = fl;
+                            midRimC = new Int32Array(PN).fill(-1);
+                            let nSheet = 0;
+                            for (let i = 0; i < PN; i++) {
+                                if (depth[i] - fl[i] <= fgTearStep) continue;                 // front is ON its floor
+                                if (Math.abs(plugDepth[i] - fl[i]) <= fgTearStep) continue;   // backdrop already carries the floor
+                                midBand[i] = 1; nSheet++;
+                            }
+                            if (nSheet > 0) console.log('[MPI] under-sheet floor: ' + nSheet + 'px above-floor (radius ' + RB + 'px)');
+                            else { midBand = null; midDepthV = null; midRimC = null; }
+                        }
                         const src = g.userData._fullIndex;
                         const out = new src.constructor(src.length);
                         const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
                         const txv = new Int32Array(3), tyv = new Int32Array(3), dv = new Float32Array(3);
-                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0;
+                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0;
                         const ribbon = (j) => (thinM && thinM[j]) || (haloM && haloM[j]);
                         for (let t = 0; t < src.length; t += 3) {
-                            let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false;
+                            let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false, midOK = false;
                             let dmn = 2, dmx = -1, mnTi = -1;
                             for (let k = 0; k < 3; k++) {
                                 const vi = src[t + k];
@@ -8087,9 +8138,16 @@ function buildBackgroundLayer() {
                                 if (ribbon(ti)) nRib++;
                                 // a core vertex qualifies only if the plate behind it
                                 // carries the ramp's own local far side (2x step: the
-                                // +/-2px window may not reach the ramp's true foot)
-                                if (cliffCore[ti] && Math.abs(plugDepth[ti] - cliffFar[ti]) <= 2*fgTearStep) coreOK = true;
+                                // +/-2px window may not reach the ramp's true foot) —
+                                // or the UNDER-SHEET does (internal soft cliffs: fur)
+                                if (cliffCore[ti] && (Math.abs(plugDepth[ti] - cliffFar[ti]) <= 2*fgTearStep ||
+                                    (midBand && midBand[ti] && Math.abs(midDepthV[ti] - cliffFar[ti]) <= 2*fgTearStep))) coreOK = true;
                                 if (thinDil && thinDil[ti]) thinVeto = true;
+                            }
+                            // under-sheet backing: evaluated after dmn is final
+                            if (midBand) for (let k = 0; k < 3 && !midOK; k++) {
+                                const ti = tyv[k]*pw + txv[k];
+                                if (midBand[ti] && Math.abs(midDepthV[ti] - dmn) <= fgTearStep) midOK = true;
                             }
                             // FAR-SIDE MATCH — the one gate all three rules share: a
                             // cliff tears iff the plate behind it carries the cliff's
@@ -8111,7 +8169,10 @@ function buildBackgroundLayer() {
                             // boundary are the depth-channel rubber filaments (colour-
                             // invisible sky-over-sky stretch). Their cliff exists only
                             // in the DISPLAYED (haloed) depth — raw has no step there.
-                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && farMatch) {
+                            // Backing: the backdrop plate (farMatch) OR the under-sheet
+                            // (midOK) — fur ribbons over a body tear against the body
+                            // floor, not the sky (their rubber was the residual smear).
+                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && (farMatch || midOK)) {
                                 droppedHalo++; keep = false;
                             }
                             else if (nRib > 0 || thinVeto) {
@@ -8126,13 +8187,14 @@ function buildBackgroundLayer() {
                             }
                             else if (mx - mn > fgTearStep) {
                                 if (farMatch) { dropped++; keep = false; }
-                                else keptUnbacked++;   // plate does not hold this cliff's far side (FG-on-FG): rubber until MPI
+                                else if (midOK) { droppedMid++; keep = false; }  // internal overlap: the under-sheet carries the local far side
+                                else keptUnbacked++;   // no sheet holds this cliff's far side: rubber (rare once the under-sheet exists)
                             }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
                         }
                         g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
                         console.log('[RUNG-PLUG] FG pre-torn (far-side match): ' + dropped +
-                            ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' +
+                            ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' + droppedMid + ' under-sheet, ' +
                             keptThin + ' thin-feature kept, ' + keptUnbacked +
                             ' far-mismatch kept, of ' + (src.length / 3));
 
@@ -8387,6 +8449,76 @@ function buildBackgroundLayer() {
                             }
                             console.log('[RUNG-PLUG] depth-consistent continuation: ' + fixedN + 'px recoloured');
                         }
+                        // ---- UNDER-SHEET COLOURS (MPI slice 2): same rule, target =
+                        // the sheet's carried far-side depth. The sheet behind the
+                        // arm is torso-coloured because torso pixels at torso depth
+                        // sit on the same rows; fallback = the carried rim pixel.
+                        if (midBand) {
+                            const tolD = 0.06, REACH = 400;
+                            midFillRGB = new Uint8Array(PN*3);
+                            let midCont = 0;
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                                const i = y*pw+x;
+                                if (!midBand[i]) continue;
+                                const td = midDepthV[i];
+                                let bestJ = -1, bestCost = 1e9;
+                                for (let k = 0; k < 4; k++) {
+                                    const dx = (k===0)?1:(k===1)?-1:0, dy = (k===2)?1:(k===3)?-1:0;
+                                    const pen = (k >= 2) ? 2 : 1;
+                                    let cx2 = x, cy2 = y, st = 0;
+                                    while (st < REACH) {
+                                        cx2 += dx; cy2 += dy; st++;
+                                        if (cx2 < 0 || cx2 >= pw || cy2 < 0 || cy2 >= ph) break;
+                                        const j = cy2*pw+cx2;
+                                        if (midBand[j]) continue;
+                                        // ANY visible surface at the carried depth qualifies —
+                                        // including figure-class content: the far side of an
+                                        // internal cliff IS the figure (torso behind arm).
+                                        // The backdrop's background-only source rules do not
+                                        // apply to the under-sheet; excluding underMask here
+                                        // starved the sheet onto dark rim inks (slab bug).
+                                        if (Math.abs(depth[j] - td) <= tolD) {
+                                            if (st * pen < bestCost) { bestCost = st * pen; bestJ = j; }
+                                            break;
+                                        }
+                                    }
+                                }
+                                // No visible surface anywhere at the carried depth: there
+                                // is nothing plausible to extend (a tiny far sliver — the
+                                // glider's innards, a staff ornament). No sheet pixel:
+                                // the cliff opens onto the backdrop, which IS the next
+                                // real surface beyond the sliver. Painting the rim ink
+                                // instead manufactured dark slabs.
+                                if (bestJ < 0) { midBand[i] = 0; midRimC[i] = -1; continue; }
+                                midCont++;
+                                midFillRGB[i*3] = cpx[bestJ*4]; midFillRGB[i*3+1] = cpx[bestJ*4+1]; midFillRGB[i*3+2] = cpx[bestJ*4+2];
+                            }
+                            // soften flat patches (Jacobi, sheet only; 24 passes — the
+                            // same count the backdrop plate needed to kill the per-row
+                            // source-alternation comb, for the same reason)
+                            let A3 = new Float32Array(PN*3);
+                            for (let i = 0; i < PN; i++) if (midBand[i]) { A3[i*3]=midFillRGB[i*3]; A3[i*3+1]=midFillRGB[i*3+1]; A3[i*3+2]=midFillRGB[i*3+2]; }
+                            let B3 = new Float32Array(PN*3);
+                            for (let p = 0; p < 24; p++) {
+                                B3.set(A3);
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                    if (!midBand[i]) continue;
+                                    let s0=0,s1=0,s2=0,c0=0;
+                                    for (const j of [i, i-1, i+1, i-pw, i+pw]) { if (!midBand[j]) continue;
+                                        s0+=A3[j*3]; s1+=A3[j*3+1]; s2+=A3[j*3+2]; c0++; }
+                                    if (c0) { B3[i*3]=s0/c0; B3[i*3+1]=s1/c0; B3[i*3+2]=s2/c0; }
+                                }
+                                const tt = A3; A3 = B3; B3 = tt;
+                            }
+                            for (let i = 0; i < PN; i++) if (midBand[i]) {
+                                midFillRGB[i*3]=Math.max(0,Math.min(255,A3[i*3]|0));
+                                midFillRGB[i*3+1]=Math.max(0,Math.min(255,A3[i*3+1]|0));
+                                midFillRGB[i*3+2]=Math.max(0,Math.min(255,A3[i*3+2]|0));
+                            }
+                            console.log('[MPI] under-sheet colours: ' + midCont + 'px row-continued, rest pruned (no continuation exists)');
+                            // hoist for the mesh build at function end (outside this block's scope)
+                            _midBand = midBand; _midDepthV = midDepthV; _midRimC = midRimC; _midFillRGB = midFillRGB; _midPW = pw; _midPH = ph; _midFrontD = depth;
+                        }
                         if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth,
                             thinM, haloM, dispD: dispDepth, rawD: (L._rawDepth && L._rawDepthW === pw) ? L._rawDepth : depth, bandCutMask };
                         // soften the flat rim-colour patches (Jacobi, completed set
@@ -8614,6 +8746,78 @@ function buildBackgroundLayer() {
         const show = document.getElementById('bgLayerToggle');
         bgLayerMesh.visible = show ? show.checked : true;
         scene.add(bgLayerMesh);
+
+        // ---- UNDER-SHEET MESH (MPI slice 2): between plate and FG ----
+        if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
+        if (_midBand && _midFillRGB && L.mesh.geometry && L.mesh.geometry.parameters) {
+            const midBand = _midBand, midDepthV = _midDepthV, midFillRGB = _midFillRGB, depth = _midFrontD;
+            try {
+                const gU = L.mesh.geometry, gpU = gU.parameters;
+                const pww = _midPW, phh = _midPH;
+                // depth texture: front surface outside the band (welds seamlessly),
+                // carried far depth inside
+                const mD = new Float32Array(midBand.length);
+                const mF = new Uint8Array(midBand.length * 4);
+                for (let y = 0; y < phh; y++) { const s = y*pww, d = (phh-1-y)*pww;
+                    for (let x = 0; x < pww; x++) {
+                        const i = s+x, o = (d+x)*4;
+                        // outside the band: FRONT surface, so boundary triangles weld
+                        // to the surroundings instead of walling to the far plane
+                        mD[d+x] = midBand[i] ? midDepthV[i] : depth[i];
+                        if (midBand[i]) { mF[o]=midFillRGB[i*3]; mF[o+1]=midFillRGB[i*3+1]; mF[o+2]=midFillRGB[i*3+2]; mF[o+3]=255; }
+                        else { mF[o+3]=0; }
+                    }
+                }
+                const mDT = new THREE.DataTexture(mD, pww, phh, THREE.RedFormat, THREE.FloatType);
+                mDT.needsUpdate = true; mDT.flipY = false;
+                mDT.minFilter = THREE.LinearFilter; mDT.magFilter = THREE.LinearFilter;
+                if ('colorSpace' in mDT) mDT.colorSpace = THREE.NoColorSpace;
+                const mFT = new THREE.DataTexture(mF, pww, phh, THREE.RGBAFormat, THREE.UnsignedByteType);
+                mFT.needsUpdate = true; mFT.flipY = false;
+                mFT.minFilter = THREE.LinearFilter; mFT.magFilter = THREE.LinearFilter;
+                if ('encoding' in mFT) mFT.encoding = THREE.sRGBEncoding;
+                if ('colorSpace' in mFT) mFT.colorSpace = THREE.SRGBColorSpace;
+                // triangles touching the band only
+                const full = gU.userData._fullIndex || gU.index.array;
+                const vw2 = ((gpU.widthSegments || 1) | 0) + 1, vh2 = ((gpU.heightSegments || 1) | 0) + 1;
+                const sx2 = (pww - 1) / Math.max(1, vw2 - 1), sy2 = (phh - 1) / Math.max(1, vh2 - 1);
+                // INTERIOR triangles only: a boundary triangle spans floor depth
+                // (near) inside the band to front depth (sky) outside — a one-
+                // texel wall stretched across the full parallax, rendered as the
+                // semi-transparent smear along silhouettes. All 3 vertices in.
+                const midIdx = [];
+                for (let t = 0; t < full.length; t += 3) {
+                    let all3 = true;
+                    for (let k = 0; k < 3 && all3; k++) {
+                        const vi = full[t+k];
+                        const tx = Math.round((vi % vw2) * sx2), ty = Math.round(((vi / vw2) | 0) * sy2);
+                        if (!midBand[ty*pww+tx]) all3 = false;
+                    }
+                    if (all3) midIdx.push(full[t], full[t+1], full[t+2]);
+                }
+                if (midIdx.length) {
+                    const mg = new THREE.BufferGeometry();
+                    mg.setAttribute('position', gU.attributes.position);
+                    mg.setAttribute('uv', gU.attributes.uv);
+                    if (gU.attributes.normal) mg.setAttribute('normal', gU.attributes.normal);
+                    mg.setIndex(new THREE.BufferAttribute(new full.constructor(midIdx), 1));
+                    const mm = L.mesh.material.clone();
+                    mm.uniforms.displacementMap.value = mDT;
+                    mm.uniforms.map.value = mFT;
+                    mm.uniforms.u_isBackgroundLayer.value = true;
+                    mm.uniforms.u_useEdgeMask.value = false;
+                    if (mm.uniforms.u_useBandCut) { mm.uniforms.u_useBandCut.value = false; mm.uniforms.u_bandMask.value = null; }
+                    mm.uniforms.displacementBias.value = (mm.uniforms.displacementBias.value || 0) - 0.002; // between FG (0) and plate (-0.004)
+                    mpiMidMesh = new THREE.Mesh(mg, mm);
+                    mpiMidMesh.position.copy(L.mesh.position);
+                    mpiMidMesh.rotation.copy(L.mesh.rotation);
+                    mpiMidMesh.scale.copy(L.mesh.scale);
+                    mpiMidMesh.renderOrder = (L.mesh.renderOrder || 0) - 0.5;
+                    scene.add(mpiMidMesh);
+                    console.log('[MPI] under-sheet mesh: ' + (midIdx.length/3) + ' tris between plate and FG');
+                }
+            } catch (e) { console.warn('[MPI] under-sheet mesh failed:', e); }
+        }
 
         console.log('[BG-LAYER] built: band + plug depth + baked color, mesh added behind layer 0');
         return true;
