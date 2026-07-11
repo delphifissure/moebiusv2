@@ -6436,6 +6436,7 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // without the under-sheet, halo tears fall back to rubber-stretch
 // streaks and the margins keep the JFA glow.
 let bgMPIMode = true;
+let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
 let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
 let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
@@ -8571,33 +8572,113 @@ function buildBackgroundLayer() {
                                 b[fp] = fIdx[t4]; b[fp+1] = fIdx[t4+1]; b[fp+2] = fIdx[t4+2];
                                 fillPos[k2] = fp + 3;
                             }
+                            // ---- PER-LAYER DECIMATION (adaptive quad indexing) ----
+                            // 1 vertex/texel is the scaling bottleneck (5M tris on the
+                            // reference asset). Flat interior runs need no per-texel
+                            // triangles: a quadtree block whose cells all belong to the
+                            // layer with BOTH torn triangles present, and whose per-texel
+                            // displacement deviates from the two coarse-triangle planes
+                            // by <= EPS, is emitted as 2 large triangles over the SAME
+                            // vertex grid (attributes untouched — unreferenced vertices
+                            // simply drop out of the draw). Tears and layer borders keep
+                            // their original per-texel triangles exactly. T-junction
+                            // cracks at block boundaries are depth-bounded by the same
+                            // EPS, i.e. sub-pixel on screen at maximum parallax, and sit
+                            // in front of the opaque backdrop plate — no transparent
+                            // hole channel. EPS = 1.5 8-bit quanta: below the depth
+                            // map's own quantisation noise.
+                            const bucketsD = (bgMPIDecimate && idMap2) ? (() => {
+                                const cw = vw - 1, ch = vh - 1, CN = cw * ch;
+                                const cellCnt = new Uint8Array(CN), cellLay = new Uint8Array(CN);
+                                for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                    const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                    let x0 = v0 % vw, y0 = (v0 / vw) | 0;
+                                    const x1 = v1 % vw, y1 = (v1 / vw) | 0, x2 = v2 % vw, y2 = (v2 / vw) | 0;
+                                    if (x1 < x0) x0 = x1; if (x2 < x0) x0 = x2;
+                                    if (y1 < y0) y0 = y1; if (y2 < y0) y0 = y2;
+                                    const c = y0 * cw + x0, lw = triLayer[tr];
+                                    if (cellCnt[c] === 0) { cellLay[c] = lw; cellCnt[c] = 1; }
+                                    else if (cellLay[c] === lw) cellCnt[c]++;
+                                    else cellLay[c] = 255;
+                                }
+                                const dd = dispDepth, EPS = 1.5 / 255;
+                                const covered = new Uint8Array(CN);
+                                const out2 = Array.from({length: K}, () => []);
+                                for (let B = 16; B >= 2; B >>= 1) {
+                                    for (let by = 0; by + B <= ch; by += B) for (let bx = 0; bx + B <= cw; bx += B) {
+                                        const k = cellLay[by * cw + bx];
+                                        if (!k || k === 255) continue;
+                                        let clean = true;
+                                        for (let cy = by; clean && cy < by + B; cy++) { const row = cy * cw;
+                                            for (let cx2 = bx; cx2 < bx + B; cx2++) {
+                                                const c = row + cx2;
+                                                if (covered[c] || cellCnt[c] !== 2 || cellLay[c] !== k) { clean = false; break; }
+                                            } }
+                                        if (!clean) continue;
+                                        // plane test against the two coarse triangles
+                                        const a0 = by * vw + bx;
+                                        const zA = dd[a0], zP1 = dd[a0 + B * vw], zP2 = dd[a0 + B * vw + B], zP3 = dd[a0 + B];
+                                        let ok2 = true;
+                                        for (let y5 = 0; ok2 && y5 <= B; y5++) { const rowv = (by + y5) * vw + bx, v5 = y5 / B;
+                                            for (let x5 = 0; x5 <= B; x5++) {
+                                                const u5 = x5 / B;
+                                                const z = (u5 + v5 <= 1)
+                                                    ? zA + u5 * (zP3 - zA) + v5 * (zP1 - zA)
+                                                    : zP2 + (1 - u5) * (zP1 - zP2) + (1 - v5) * (zP3 - zP2);
+                                                if (Math.abs(dd[rowv + x5] - z) > EPS) { ok2 = false; break; }
+                                            } }
+                                        if (!ok2) continue;
+                                        const o = out2[k - 1];
+                                        o.push(a0, a0 + B * vw, a0 + B,  a0 + B * vw, a0 + B * vw + B, a0 + B);
+                                        for (let cy = by; cy < by + B; cy++) { const row = cy * cw;
+                                            for (let cx2 = bx; cx2 < bx + B; cx2++) covered[row + cx2] = 1; }
+                                    }
+                                }
+                                // uncovered cells keep their original torn triangles
+                                for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                    const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                    let x0 = v0 % vw, y0 = (v0 / vw) | 0;
+                                    const x1 = v1 % vw, y1 = (v1 / vw) | 0, x2 = v2 % vw, y2 = (v2 / vw) | 0;
+                                    if (x1 < x0) x0 = x1; if (x2 < x0) x0 = x2;
+                                    if (y1 < y0) y0 = y1; if (y2 < y0) y0 = y2;
+                                    if (covered[y0 * cw + x0]) continue;
+                                    out2[triLayer[tr] - 1].push(v0, v1, v2);
+                                }
+                                return out2.map(o => fIdx.constructor.from(o));
+                            })() : null;
                             // back-to-front meshes over the SHARED attributes + material
                             const rankOrder = Array.from({length: K}, (_, k) => k).sort((a,b) => meanD[a]-meanD[b]);
                             mpiLayers = [];
                             let texCount = new Float64Array(K+1);
                             for (let i = 0; i < PN; i++) texCount[texLayer[i]]++;
                             rankOrder.forEach((k2, rank) => {
-                                if (!bucketsL[k2].length) return;
+                                const lidx = (bucketsD && bucketsD[k2].length) ? bucketsD[k2] : bucketsL[k2];
+                                if (!lidx.length) return;
                                 const lg = new THREE.BufferGeometry();
                                 lg.setAttribute('position', g.attributes.position);
                                 lg.setAttribute('uv', g.attributes.uv);
                                 if (g.attributes.normal) lg.setAttribute('normal', g.attributes.normal);
-                                lg.setIndex(new THREE.BufferAttribute(new fIdx.constructor(bucketsL[k2]), 1));
+                                lg.setIndex(new THREE.BufferAttribute(lidx instanceof fIdx.constructor ? lidx : new fIdx.constructor(lidx), 1));
                                 const lm = new THREE.Mesh(lg, L.mesh.material); // shared material: uniforms stay in sync
                                 lm.position.copy(L.mesh.position);
                                 lm.rotation.copy(L.mesh.rotation);
                                 lm.scale.copy(L.mesh.scale);
                                 lm.renderOrder = (L.mesh.renderOrder || 0) + rank * 1e-3; // back-to-front hint; z-buffer decides
                                 scene.add(lm);
-                                mpiLayers.push({ mesh: lm, meanD: meanD[k2], tris: bucketsL[k2].length/3, texels: texCount[k2+1] });
+                                mpiLayers.push({ mesh: lm, meanD: meanD[k2], tris: lidx.length/3, trisFull: bucketsL[k2].length/3, texels: texCount[k2+1] });
                             });
                             // the partition replaces the monolithic torn mesh
                             L.mesh.visible = false;
                             bgMPIExport = { pw, ph, layers: K, texLayer, meanD };
                             window._mpiDebug = { pw, ph, K, texLayer, meanD, comp: compL, nc };
                             _mark('mpi-partition');
-                        console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
-                                mpiLayers.map(Lr => Lr.tris + 't@' + Lr.meanD.toFixed(2)).join(', '));
+                        {
+                            let dT = 0, fT = 0;
+                            for (const Lr of mpiLayers) { dT += Lr.tris; fT += Lr.trisFull; }
+                            console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
+                                mpiLayers.map(Lr => Lr.tris + 't@' + Lr.meanD.toFixed(2)).join(', ') +
+                                (bucketsD ? ' | decimated ' + fT + ' -> ' + dT + ' tris (' + (100*dT/Math.max(1,fT)).toFixed(1) + '%)' : ''));
+                        }
                         }
                     } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
                 }
