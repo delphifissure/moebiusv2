@@ -6417,6 +6417,7 @@ let bgPlugMode = 'directional';
 // exports a proper outpaint plate (mask + extended colour + extended depth) to
 // replace it. Set false to keep the BG layer flush with the image rectangle.
 let bgSceneExtend = true;
+let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their thin carrier; over-claims on paintings with emissive backgrounds
 // Band fill opacity. With the band tightened to a silhouette strip the fill is
 // short-range, so it should read as a SOLID, complete inpaint — no streaks AND
 // no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
@@ -7392,10 +7393,276 @@ function buildBackgroundLayer() {
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
+                let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
+                let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
                 let underRimC = null;   // per-completed-pixel LOCAL rim source index (fill colour)
+                // ---- SOURCE-DEPTH DESPECKLE / GLOW-ATTACH (review-fix v5) ----
+                // Soft mid-depth blobs floating over the smooth far field (the lamp
+                // glow, sparkle haze) are source depth-map defects: their ramps
+                // (~0.01/px over tens of px) are below every tear detector, so they
+                // anchor stretched displacement walls that the depth pass's
+                // glancing-angle discards then chop into dash-row streaks. Detect
+                // raised-vs-local-floor components that are SOFT everywhere (ink-
+                // edged objects — birds, crystals, people — are sharp somewhere and
+                // are kept; big regions like continuous dune ramps are size-capped).
+                // A soft blob touching a NEAR structure attaches to it (glow rides
+                // the staff; its rim is freed by the halo-edge tear); an isolated
+                // one flattens into the local floor. Self-idempotent on rebuilds.
+                {
+                    const otsuD = bgOtsuThreshold(depth, null);
+                    const ds = 4, dw2 = Math.ceil(pw/ds), dh2 = Math.ceil(ph/ds);
+                    let dmin = new Float32Array(dw2*dh2).fill(2);
+                    for (let y = 0; y < ph; y++) { const r0 = ((y/ds)|0)*dw2, r1 = y*pw;
+                        for (let x = 0; x < pw; x++) { const j = r0 + ((x/ds)|0);
+                            const v = depth[r1+x]; if (v < dmin[j]) dmin[j] = v; } }
+                    const RD = 6; // 24px full-res floor window: wider than the glow blobs
+                    const tmpD = new Float32Array(dw2*dh2);
+                    for (let y = 0; y < dh2; y++) for (let x = 0; x < dw2; x++) { let m = 2;
+                        for (let o = -RD; o <= RD; o++) { const xx = x+o; if (xx<0||xx>=dw2) continue;
+                            const v = dmin[y*dw2+xx]; if (v<m) m=v; } tmpD[y*dw2+x]=m; }
+                    for (let x = 0; x < dw2; x++) for (let y = 0; y < dh2; y++) { let m = 2;
+                        for (let o = -RD; o <= RD; o++) { const yy = y+o; if (yy<0||yy>=dh2) continue;
+                            const v = tmpD[yy*dw2+x]; if (v<m) m=v; } dmin[y*dw2+x]=m; }
+                    const bmin = (i) => dmin[((((i/pw)|0)/ds)|0)*dw2 + ((((i%pw))/ds)|0)];
+                    // Preliminary THIN mask (the official one comes later, band-
+                    // excluded): a floating lamp hangs off a THIN carrier (staff,
+                    // pole, string); broad emissive fields — sunbursts, cave light
+                    // shafts — lean against LARGE bodies and must never attach
+                    // (they are painted background, not detached lamp light).
+                    const nearP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) nearP[i] = depth[i] >= otsuD ? 1 : 0;
+                    let EP = nearP;
+                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (EP[i] && EP[i-1] && EP[i+1] && EP[i-pw] && EP[i+pw]) ne[i] = 1; }
+                        EP = ne; }
+                    // 8 geodesic passes (vs the 3 of the tear-protection thin mask):
+                    // a fur fringe is thin but hugs its body within a few px — only
+                    // structures extending FAR from any thick core (a staff) qualify
+                    // as carriers.
+                    let RP = EP;
+                    for (let p = 0; p < 8; p++) { const nr = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (!nearP[i]) continue;
+                            if (RP[i] || RP[i-1] || RP[i+1] || RP[i-pw] || RP[i+pw]) nr[i] = 1; }
+                        RP = nr; }
+                    const thinP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (nearP[i] && !RP[i]) thinP[i] = 1;
+                    const raised = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (depth[i] < otsuD && depth[i] - bmin(i) > fgTearStep) raised[i] = 1;
+                    const label = new Int32Array(PN);
+                    const qq = new Int32Array(PN);
+                    const CAP = (PN/100)|0;
+                    let comp = 0, nAttach = 0, nFlat = 0, nKeep = 0, pxChanged = 0;
+                    for (let s = 0; s < PN; s++) {
+                        if (!raised[s] || label[s]) continue;
+                        comp++;
+                        let head = 0, tail = 0; qq[tail++] = s; label[s] = comp;
+                        let maxRim = 0, attachD = -1, bodyAdj = false;
+                        const members = [];
+                        while (head < tail) {
+                            const i = qq[head++]; members.push(i);
+                            const x = i%pw, y = (i/pw)|0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) {
+                                if (j < 0) continue;
+                                if (raised[j]) { if (!label[j]) { label[j] = comp; qq[tail++] = j; } continue; }
+                                // softness is judged on the BOUNDARY only: an ink-edged
+                                // object (bird, ship, crystal) is sharp around its rim;
+                                // a glow fades softly into the sky everywhere. Internal
+                                // sharpness (a bright lamp core) must not veto. Steps
+                                // onto NEAR pixels are the attach interface, not a rim.
+                                if (depth[j] >= otsuD) {
+                                    if (thinP[j]) { if (depth[j] > attachD) attachD = depth[j]; }
+                                    else bodyAdj = true;
+                                    continue;
+                                }
+                                const st = Math.abs(depth[i]-depth[j]); if (st > maxRim) maxRim = st;
+                            }
+                        }
+                        if (members.length > CAP || maxRim >= fgTearStep) { nKeep++; continue; }
+                        if (attachD > 0) {          // hangs off a THIN carrier: ride it
+                            if (!haloM) haloM = new Uint8Array(PN);
+                            for (const i of members) { depth[i] = attachD; haloM[i] = 1; }
+                            nAttach++; pxChanged += members.length;
+                        } else if (bodyAdj) {        // leans on a large body: painted
+                            nKeep++;                 // relief/highlight — leave it be
+                        } else {
+                            for (const i of members) depth[i] = bmin(i);
+                            nFlat++; pxChanged += members.length;
+                        }
+                    }
+                    // GLOW-ATTACH: bright emissive blobs painted at FLOOR depth —
+                    // the lamp flame, its rays and halo: the depth generator never
+                    // saw them, so they ride the sky and shear off their staff at
+                    // off-axis poses (the measured +65px light detach). Detect
+                    // brightness ANOMALIES against the local background level
+                    // (the pale distant plain is its own local norm — not an
+                    // anomaly; isolated stars attach to nothing and are skipped),
+                    // at floor depth, touching a NEAR structure: assign them that
+                    // structure's depth and mark them into the rigid ribbon so
+                    // the halo-edge tear frees their rim.
+                    // DEFAULT OFF (bgGlowAttach): works exactly as intended on a
+                    // lamp-on-a-staff painting (verified: the starwatcher lamp and
+                    // its full glow ride the staff), but colour brightness alone
+                    // cannot reliably separate "detached lamp light" from painted
+                    // emissive BACKGROUND (sunbursts, cave light shafts) — on such
+                    // paintings it over-claims. Missing-object depth belongs to the
+                    // depth-regeneration stage; flip this flag per-import until then.
+                    if (bgGlowAttach) {
+                        const cImgD = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
+                        if (cImgD) {
+                            cx.clearRect(0, 0, pw, ph);
+                            cx.drawImage(cImgD, 0, 0, pw, ph);
+                            const cpxD = cx.getImageData(0, 0, pw, ph).data;
+                            const luma = new Float32Array(PN);
+                            for (let i = 0; i < PN; i++) luma[i] = (cpxD[i*4] + 2*cpxD[i*4+1] + cpxD[i*4+2]) / 4;
+                            // local background luma: ds=8 box mean, radius 10 (~80px)
+                            const ds8 = 8, dw8 = Math.ceil(pw/ds8), dh8 = Math.ceil(ph/ds8);
+                            const sum8 = new Float64Array(dw8*dh8), cnt8 = new Float64Array(dw8*dh8);
+                            for (let y = 0; y < ph; y++) { const r0 = ((y/ds8)|0)*dw8, r1 = y*pw;
+                                for (let x = 0; x < pw; x++) { const j = r0 + ((x/ds8)|0); sum8[j] += luma[r1+x]; cnt8[j]++; } }
+                            for (let j = 0; j < dw8*dh8; j++) sum8[j] /= Math.max(1, cnt8[j]);
+                            const R8 = 10, mean8 = new Float64Array(dw8*dh8), t8 = new Float64Array(dw8*dh8);
+                            for (let y = 0; y < dh8; y++) for (let x = 0; x < dw8; x++) { let s3 = 0, c3 = 0;
+                                for (let o = -R8; o <= R8; o++) { const xx = x+o; if (xx<0||xx>=dw8) continue; s3 += sum8[y*dw8+xx]; c3++; }
+                                t8[y*dw8+x] = s3/c3; }
+                            for (let x = 0; x < dw8; x++) for (let y = 0; y < dh8; y++) { let s3 = 0, c3 = 0;
+                                for (let o = -R8; o <= R8; o++) { const yy = y+o; if (yy<0||yy>=dh8) continue; s3 += t8[yy*dw8+x]; c3++; }
+                                mean8[y*dw8+x] = s3/c3; }
+                            const bgL = (i) => mean8[((((i/pw)|0)/ds8)|0)*dw8 + ((((i%pw))/ds8)|0)];
+                            const glowM = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++)
+                                if (depth[i] < otsuD && depth[i] - bmin(i) < 0.02 && luma[i] - bgL(i) > 45) glowM[i] = 1;
+                            const label2 = new Int32Array(PN);
+                            const glowClaim = new Uint8Array(PN);
+                            let comp2 = 0, nGlowAttach = 0;
+                            for (let s = 0; s < PN; s++) {
+                                if (!glowM[s] || label2[s]) continue;
+                                comp2++;
+                                let head = 0, tail = 0; qq[tail++] = s; label2[s] = comp2;
+                                let attachD = -1;
+                                const members = [];
+                                while (head < tail) {
+                                    const i = qq[head++]; members.push(i);
+                                    const x = i%pw, y = (i/pw)|0;
+                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                    for (const j of nbs) {
+                                        if (j < 0) continue;
+                                        if (glowM[j]) { if (!label2[j]) { label2[j] = comp2; qq[tail++] = j; } }
+                                        // only a THIN carrier attaches (lamp on a staff);
+                                        // sunbursts / light shafts leaning on bodies stay
+                                        else if (depth[j] >= otsuD && thinP[j] && depth[j] > attachD) attachD = depth[j];
+                                    }
+                                }
+                                if (attachD <= 0 || members.length > CAP) continue; // stars, shafts, big pale fields
+                                if (!haloM) haloM = new Uint8Array(PN);
+                                for (const i of members) { depth[i] = attachD; haloM[i] = 1; glowClaim[i] = 1; }
+                                nGlowAttach++; pxChanged += members.length;
+                            }
+                            // The glow's DIM outer halo sits below the anomaly
+                            // threshold and would stay on the sky as a detached
+                            // ghost disc. Grow the attachment geodesically from
+                            // the attached cores through the contiguous fading
+                            // halo — luma must DECAY outward (+6 noise slack), so
+                            // the growth cannot cross dark sky into stars or
+                            // unrelated content. Bounded at 80px.
+                            if (nGlowAttach > 0) {
+                                let head = 0, tail = 0;
+                                const gen = new Int16Array(PN);
+                                for (let i = 0; i < PN; i++) if (haloM[i] && glowM[i]) { qq[tail++] = i; gen[i] = 1; }
+                                let grown = 0;
+                                while (head < tail) {
+                                    const i = qq[head++];
+                                    if (gen[i] > 80) continue;
+                                    const x = i%pw, y = (i/pw)|0;
+                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                    for (const j of nbs) {
+                                        if (j < 0 || gen[j] || haloM[j]) continue;
+                                        if (depth[j] >= otsuD) continue;
+                                        if (depth[j] - bmin(j) >= 0.02) continue;
+                                        if (luma[j] - bgL(j) <= 8) continue;
+                                        if (luma[j] > luma[i] + 6) continue;
+                                        depth[j] = depth[i]; haloM[j] = 1; gen[j] = gen[i] + 1; glowClaim[j] = 1;
+                                        qq[tail++] = j; grown++;
+                                    }
+                                }
+                                pxChanged += grown;
+                                // The luma-decay growth stops at the dark ink strokes
+                                // drawn THROUGH the glow (the staff loop is a luma
+                                // moat), stranding the halo beyond them as a ghost
+                                // annulus. The glow is radially symmetric around the
+                                // lamp, so close it as a DISC: per claimed cluster,
+                                // centroid + max radius, then claim every floor-depth
+                                // far pixel within 2x that radius (capped at 120px) —
+                                // ink ring, stars-in-glow and all ride the lamp.
+                                const label3 = new Int32Array(PN);
+                                let comp3 = 0, discPx = 0;
+                                for (let s = 0; s < PN; s++) {
+                                    if (!glowClaim[s] || label3[s]) continue;
+                                    comp3++;
+                                    let head3 = 0, tail3 = 0; qq[tail3++] = s; label3[s] = comp3;
+                                    let sxs = 0, sys = 0, cN = 0, aD = 0;
+                                    const mem3 = [];
+                                    while (head3 < tail3) {
+                                        const i = qq[head3++]; mem3.push(i);
+                                        const x = i%pw, y = (i/pw)|0;
+                                        sxs += x; sys += y; cN++;
+                                        if (depth[i] > aD) aD = depth[i];
+                                        // 8-connected so ink strokes don't split the cluster
+                                        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+                                            const yy = y+oy, xx = x+ox;
+                                            if (yy<0||yy>=ph||xx<0||xx>=pw) continue;
+                                            const j = yy*pw+xx;
+                                            if (glowClaim[j] && !label3[j]) { label3[j] = comp3; qq[tail3++] = j; }
+                                        }
+                                    }
+                                    if (cN < 50) continue;      // specks: no disc
+                                    const cxm = sxs/cN, cym = sys/cN;
+                                    let r2max = 0;
+                                    for (const i of mem3) { const dx2 = (i%pw)-cxm, dy2 = ((i/pw)|0)-cym;
+                                        const r2 = dx2*dx2+dy2*dy2; if (r2 > r2max) r2max = r2; }
+                                    const R2 = Math.min(120, Math.sqrt(r2max) * 2);
+                                    const x0 = Math.max(0, (cxm-R2)|0), x1 = Math.min(pw-1, (cxm+R2)|0);
+                                    const y0 = Math.max(0, (cym-R2)|0), y1 = Math.min(ph-1, (cym+R2)|0);
+                                    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                                        const dx2 = x-cxm, dy2 = y-cym;
+                                        if (dx2*dx2+dy2*dy2 > R2*R2) continue;
+                                        const i = y*pw+x;
+                                        if (haloM[i] || depth[i] >= otsuD) continue;
+                                        if (depth[i] - bmin(i) >= 0.02) continue;
+                                        depth[i] = aD; haloM[i] = 1; discPx++;
+                                    }
+                                }
+                                pxChanged += discPx;
+                                console.log('[RUNG-PLUG] glow-attach: ' + nGlowAttach + ' emissive blobs attached, halo grown +' + grown + 'px, disc closure +' + discPx + 'px');
+                            }
+                        }
+                    }
+                    if (pxChanged > 0) {
+                        const hf2 = new Float32Array(PN);
+                        for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
+                            for (let x = 0; x < pw; x++) hf2[d2+x] = depth[s2+x]; }
+                        const hc2 = document.createElement('canvas'); hc2.width = pw; hc2.height = ph;
+                        const hx2 = hc2.getContext('2d'); const hid2 = hx2.createImageData(pw, ph);
+                        for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(depth[i] * 255)));
+                            hid2.data[i*4] = v; hid2.data[i*4+1] = v; hid2.data[i*4+2] = v; hid2.data[i*4+3] = 255; }
+                        hx2.putImageData(hid2, 0, 0);
+                        const hTex2 = new THREE.DataTexture(hf2, pw, ph, THREE.RedFormat, THREE.FloatType);
+                        hTex2.needsUpdate = true; hTex2.flipY = false;
+                        hTex2.minFilter = THREE.LinearFilter; hTex2.magFilter = THREE.LinearFilter;
+                        hTex2.generateMipmaps = false;
+                        if ('colorSpace' in hTex2) hTex2.colorSpace = THREE.NoColorSpace;
+                        hTex2.image2d = hc2;
+                        L.textures.depth = hTex2;
+                        if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex2;
+                        console.log('[RUNG-PLUG] despeckle: ' + nAttach + ' attached, ' + nFlat +
+                            ' flattened (' + pxChanged + 'px), ' + nKeep + ' kept (sharp/big)');
+                    }
+                }
                 if (bgPlugMode === 'directional') {
                     // Single directional plug computed straight from the depth: seal each
                     // disocclusion at the far side of its own edge, grown in by the edge's
@@ -7467,6 +7734,7 @@ function buildBackgroundLayer() {
                     for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
                     if (nThin > 0 && !L._thinHaloApplied) {
                         const hd = depth.slice(); let changed = 0;
+                        if (!haloM) haloM = new Uint8Array(PN);
                         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
                             if (thinM[i]) continue;
                             let m = -1;
@@ -7476,8 +7744,9 @@ function buildBackgroundLayer() {
                                 const j = yy * pw + xx;
                                 if (thinM[j] && depth[j] > m) m = depth[j];
                             }
-                            if (m > hd[i] + 0.004) { hd[i] = m; changed++; }
+                            if (m > hd[i] + 0.004) { hd[i] = m; haloM[i] = 1; changed++; }
                         }
+                        dispDepth = hd;
                         if (changed > 0) {
                             const hf = new Float32Array(PN);
                             for (let y = 0; y < ph; y++) { const s = y*pw, d = (ph-1-y)*pw;
@@ -7708,23 +7977,70 @@ function buildBackgroundLayer() {
                         // pepper; real cliffs still span >0.06 across their
                         // soft 2-3px ramps.
                         const tearD = (L._rawDepth && L._rawDepthW === pw && L._rawDepthH === ph) ? L._rawDepth : depth;
+                        // SOFT-CLIFF CORE (review-fix v5): the bake spreads some
+                        // silhouettes into 3-10px ramps whose per-triangle span never
+                        // exceeds fgTearStep, so the mesh rubbers instead of tearing
+                        // (silverwarrior's fur-edge streak smears). Detect the ramp
+                        // with a ±2px window span and tear only its steepest 1-2px
+                        // core (gradient non-maximum suppression, Canny-style), so
+                        // the rest-state gap stays as thin as a sharp-cliff tear.
+                        const cliffCore = new Uint8Array(PN);
+                        {
+                            const gm = (j) => Math.max(Math.abs(tearD[j+1]-tearD[j-1]), Math.abs(tearD[j+pw]-tearD[j-pw]));
+                            for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
+                                const i = y*pw+x;
+                                let mn2 = 2, mx2 = -1;
+                                for (let oy = -2; oy <= 2; oy++) { const r = i+oy*pw;
+                                    for (let ox = -2; ox <= 2; ox++) { const d = tearD[r+ox]; if (d<mn2)mn2=d; if(d>mx2)mx2=d; } }
+                                if (mx2 - mn2 <= fgTearStep) continue;
+                                const gx = Math.abs(tearD[i+1]-tearD[i-1]), gy2 = Math.abs(tearD[i+pw]-tearD[i-pw]);
+                                const g0 = Math.max(gx, gy2);
+                                const a = gx >= gy2 ? i-1 : i-pw, b = gx >= gy2 ? i+1 : i+pw;
+                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) cliffCore[i] = 1;
+                            }
+                        }
                         const src = g.userData._fullIndex;
                         const out = new src.constructor(src.length);
                         const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
                         const txv = new Int32Array(3), tyv = new Int32Array(3), dv = new Float32Array(3);
-                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0;
+                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0;
+                        const ribbon = (j) => (thinM && thinM[j]) || (haloM && haloM[j]);
                         for (let t = 0; t < src.length; t += 3) {
-                            let mn = 2, mx = -1, inPlug = false;
+                            let mn = 2, mx = -1, inPlug = false, nRib = 0, hasCore = false, farBacked = false;
+                            let dmn = 2, dmx = -1;
                             for (let k = 0; k < 3; k++) {
                                 const vi = src[t + k];
                                 const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
                                 txv[k] = tx; tyv[k] = ty;
-                                const d = tearD[ty * pw + tx]; dv[k] = d;
+                                const ti = ty * pw + tx;
+                                const d = tearD[ti]; dv[k] = d;
                                 if (d < mn) mn = d; if (d > mx) mx = d;
-                                if (bandCutMask[ty * pw + tx]) inPlug = true;
+                                const dd = dispDepth[ti];
+                                if (dd < dmn) dmn = dd; if (dd > dmx) dmx = dd;
+                                if (bandCutMask[ti]) inPlug = true;
+                                if (ribbon(ti)) nRib++;
+                                if (cliffCore[ti]) hasCore = true;
+                                if (plugDepth[ti] < otsuTearThr) farBacked = true;
                             }
                             let keep = true;
-                            if (mx - mn > fgTearStep) {
+                            // HALO-EDGE TEAR: the thin-feature ribbon (feature + halo)
+                            // stays rigid and intact; the triangles that SPAN its outer
+                            // boundary are the depth-channel rubber filaments (colour-
+                            // invisible sky-over-sky stretch). Their cliff exists only
+                            // in the DISPLAYED (haloed) depth — raw has no step there.
+                            // Backed by far plate (source background just outside the
+                            // ribbon), so the tear is colour-seamless by construction.
+                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && farBacked) {
+                                droppedHalo++; keep = false;
+                            }
+                            // SOFT-CLIFF CORE TEAR: no bandCutMask requirement — the
+                            // sub-threshold edges that need this are exactly the ones
+                            // the band never seeded (D3); the full-frame plate is
+                            // opaque everywhere, so the gap always opens onto content.
+                            else if (hasCore && farBacked && !(thinDil && (thinDil[tyv[0]*pw+txv[0]] || thinDil[tyv[1]*pw+txv[1]] || thinDil[tyv[2]*pw+txv[2]]))) {
+                                droppedCore++; keep = false;
+                            }
+                            else if (mx - mn > fgTearStep) {
                                 // Only tear BACKGROUND-backed cliffs: the plate holds one
                                 // depth per texel, so an internal FG-on-FG tear (arm over
                                 // torso) would reveal GLOBAL background depth instead of
@@ -7755,7 +8071,8 @@ function buildBackgroundLayer() {
                         }
                         g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
                         console.log('[RUNG-PLUG] FG pre-torn (plug-backed, thick only): ' + dropped +
-                            ' dropped, ' + keptThin + ' thin-feature kept, ' + keptUnbacked +
+                            ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' +
+                            keptThin + ' thin-feature kept, ' + keptUnbacked +
                             ' unbacked kept, of ' + (src.length / 3));
                     } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
                 }
