@@ -7547,6 +7547,17 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                // REBUILD IDEMPOTENCE: after a build with thin features the
+                // layer's depth texture is the HALOED one; reading it back
+                // would bake the halo into the next build's input, so the
+                // band/plug would grow around 2px-fattened features and the
+                // halo would re-derive from its own output. Keep the pristine
+                // plug-input depth from the first build and restore it here —
+                // a rebuild then runs on byte-identical input. A newly loaded
+                // image installs a texture without the halo tag, so the base
+                // refreshes naturally.
+                if (dSrc._isPlugHalo && L._plugBaseDepth && L._plugBaseDepth.length === PN) depth.set(L._plugBaseDepth);
+                else L._plugBaseDepth = depth.slice();
                 _mark('depth-read');
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
                 let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
@@ -7926,7 +7937,9 @@ function buildBackgroundLayer() {
                     thinM = new Uint8Array(PN);
                     let nThin = 0;
                     for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
-                    if (nThin > 0 && !L._thinHaloApplied) {
+                    // (no rebuild guard: the input depth is base-restored above,
+                    // so re-applying derives the identical halo texture)
+                    if (nThin > 0) {
                         const hd = depth.slice(); let changed = 0;
                         if (!haloM) haloM = new Uint8Array(PN);
                         // [PERF] the 5x5 max can only be nonzero within Chebyshev
@@ -7969,6 +7982,7 @@ function buildBackgroundLayer() {
                             hTex.generateMipmaps = false;
                             if ('colorSpace' in hTex) hTex.colorSpace = THREE.NoColorSpace;
                             hTex.image2d = hc;
+                            hTex._isPlugHalo = true; // rebuild reads restore the pristine base instead of this
                             L.textures.depth = hTex;
                             if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
                             L._thinHaloApplied = true;
@@ -8484,11 +8498,14 @@ function buildBackgroundLayer() {
                             ' far-mismatch kept, of ' + (src.length / 3));
 
                         // ---- MPI SLICE 1: depth-layer partition of the torn FG ----
+                        // cleanup from a previous build — UNCONDITIONAL, so a
+                        // rebuild with the partition toggled off restores the
+                        // monolithic mesh instead of leaving it hidden behind
+                        // stale layer meshes
+                        if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
+                        L.mesh.visible = true;
                         if (bgMPIMode) {
                             const tM = Date.now();
-                            // cleanup from a previous build
-                            if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
-                            L.mesh.visible = true;
                             // connected components; adjacency broken across cliffs
                             const compL = new Int32Array(PN);
                             const qq3 = new Int32Array(PN);
