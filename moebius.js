@@ -6427,11 +6427,15 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // mesh by construction; its value is the layer structure itself (per-
 // layer depth maps via the shared displacement texture, ordering, and
 // the export bundle for per-layer SD completion in slice 2).
-// Default OFF at load: the import auto-build runs before the initial
-// layout, and hiding the primary mesh at that moment flips the view fit
-// (observed: zoomed-out framing that persists for the whole session).
-// Enable AFTER load (UI toggle / harness evaluate), then rebuild.
-let bgMPIMode = false;
+// Default ON: the layer partition (with the under-sheet it gates) is the
+// verified path — pixel-identical whether the flag is set at load or
+// post-load (measured: button-build with the default flag vs the
+// harness's post-load enable, 0px diff at rest and at pose; camera
+// state identical). The historical "view-fit flip" was a comparison
+// against the MPI-OFF build, which is a genuinely different render:
+// without the under-sheet, halo tears fall back to rubber-stretch
+// streaks and the margins keep the JFA glow.
+let bgMPIMode = true;
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
 let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
 let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
