@@ -8053,8 +8053,35 @@ function buildBackgroundLayer() {
                     // ground, because the ground is not standing content.
                     const standCap = (bgBandMaxGrowPx | 0) * 4;
                     const standM = new Uint8Array(PN);
+                    let standFloor = null;   // shifted-window floor field (plate default under uncorrected rind)
                     {
-                        const floorBig = bgSlide2D(depth, pw, ph, standCap, true);
+                        let floorBig = bgSlide2D(depth, pw, ph, standCap, true);
+                        // SHIFTED-WINDOW FLOORS at the frame border: the van Herk
+                        // window clips at the image boundary, so near content
+                        // touching the frame sees only itself as its floor and is
+                        // never swept — its depth then stays in the plate and
+                        // diffuses sideways (measured: wolf-depth plate content
+                        // floating in the gap between the warrior's wolves at the
+                        // frame bottom, 204/255 protrusion). A border texel takes
+                        // the floor of the nearest FULLY-WINDOWED interior texel —
+                        // the window slides inside the frame instead of clipping.
+                        // Smooth ramps stay safe: border rows gain floor-domain
+                        // membership but sweeping still requires geodesic reach
+                        // from a cliff seed, which a ramp never produces.
+                        {
+                            const lox = Math.min(standCap, (pw - 1) >> 1), loy = Math.min(standCap, (ph - 1) >> 1);
+                            const fe = new Float32Array(PN);
+                            for (let y = 0; y < ph; y++) {
+                                const cy = y < loy ? loy : (y > ph - 1 - loy ? ph - 1 - loy : y);
+                                const rs = y * pw, cs = cy * pw;
+                                for (let x = 0; x < pw; x++) {
+                                    const cx2 = x < lox ? lox : (x > pw - 1 - lox ? pw - 1 - lox : x);
+                                    fe[rs + x] = floorBig[cs + cx2];
+                                }
+                            }
+                            floorBig = fe;
+                        }
+                        standFloor = floorBig;
                         const floorNear = bgSlide2D(depth, pw, ph, 4, true);
                         const sq = new Int32Array(PN), sd = new Uint16Array(PN);
                         let qh = 0, qt = 0;
@@ -8163,6 +8190,7 @@ function buildBackgroundLayer() {
                 // dune (its row line IS dune). One-sided reveals keep the flood
                 // value. Anchors are real visible surfaces, so the result is
                 // bounded by them — no protrusion channel.
+                const mCorr = new Uint8Array(PN);   // membrane established a corrected value here
                 {
                     const setP = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) setP[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
@@ -8215,7 +8243,8 @@ function buildBackgroundLayer() {
                             // between them — measured as plate protrusions on the
                             // cave and warrior assets. Within one tear-step is
                             // allowed (contact smoothing).
-                            if (v - plugDepth[i] <= fgTearStep && Math.abs(v - plugDepth[i]) > 0.002) { plugDepth[i] = v; corrected++; }
+                            if (v - plugDepth[i] <= fgTearStep && Math.abs(v - plugDepth[i]) > 0.002) { plugDepth[i] = v; mCorr[i] = 1; corrected++; }
+                            else if (Math.abs(v - plugDepth[i]) <= 0.002) mCorr[i] = 1; // already at the anchored continuation
                         }
                     }
                     console.log('[RUNG-PLUG] membrane correction: ' + corrected + 'px re-anchored to surface continuation lines');
@@ -8224,16 +8253,27 @@ function buildBackgroundLayer() {
                 // PLATE CEILING (contract): the plate stands in for the world
                 // WITHOUT the removed content — it can never sit NEARER than the
                 // world's own surface at that pixel (anything nearer is the FG
-                // mesh's to carry). Rind diffusion + membrane blending leave a
-                // few-quantum NEARER bias on swept floor strips (measured as
-                // plate protrusions at the pose); occluder cores are far behind
-                // their source, so this is a no-op there.
+                // mesh's to carry). Two tiers:
+                //  - membrane-corrected pixels are bounded by their real surface
+                //    anchors already; only the source-depth cap applies (kills the
+                //    few-quantum nearer bias diffusion leaves on swept floors).
+                //  - UNCORRECTED rind pixels (the membrane's pair gate rejected
+                //    every line — mixed-class flanks, wide frame-edge occluders)
+                //    have NO anchored information; they default to the LOCAL
+                //    FLOOR. Measured on the warrior: the wolves' unswept cores
+                //    fed near depth into the diffusion between them, the gate
+                //    rightly rejected the 0.65|0.82 rows, and the old src-cap
+                //    then LOCKED IN wolf depth — the 204/255 protrusion. The
+                //    floor is the nearest legitimate backing surface.
                 if (underMask) {
-                    let nCeil = 0;
+                    let nCeil = 0, nFloorCap = 0;
                     for (let i = 0; i < PN; i++) {
-                        if (underMask[i] && !band[i] && plugDepth[i] > depth[i]) { plugDepth[i] = depth[i]; nCeil++; }
+                        if (!underMask[i] || band[i]) continue;
+                        let cap = depth[i];
+                        if (standFloor && !mCorr[i] && standFloor[i] < cap) { cap = standFloor[i]; }
+                        if (plugDepth[i] > cap) { plugDepth[i] = cap; if (cap === depth[i]) nCeil++; else nFloorCap++; }
                     }
-                    if (nCeil) console.log('[RUNG-PLUG] plate ceiling: ' + nCeil + 'px clamped to the source surface');
+                    if (nCeil + nFloorCap) console.log('[RUNG-PLUG] plate ceiling: ' + nCeil + 'px at source, ' + nFloorCap + 'px defaulted to the local floor (no membrane anchor)');
                 }
                     }
                 }
