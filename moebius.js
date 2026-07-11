@@ -6436,6 +6436,7 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // without the under-sheet, halo tears fall back to rubber-stretch
 // streaks and the margins keep the JFA glow.
 let bgMPIMode = true;
+let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
 let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
 let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
@@ -6449,6 +6450,7 @@ let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), m
 // between the backdrop plate and the FG layers — and the cliffs then
 // tear against it (far-side match vs the under-sheet's carried depth).
 let mpiMidMesh = null;
+let mpiStripMeshes = null; // per-layer plate sheets (MPI slice 3, live)
 // Band fill opacity. With the band tightened to a silhouette strip the fill is
 // short-range, so it should read as a SOLID, complete inpaint — no streaks AND
 // no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
@@ -7495,6 +7497,7 @@ function buildBackgroundLayer() {
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
         let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
+        let _stripD = null, _stripC = null, _stripO = null, _stripPW = 0, _stripPH = 0, _stripFrontD = null; // per-layer plates, live (MPI slice 3): two overlap slots
         bgExtendExport = null;
         const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
         if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
@@ -8749,6 +8752,166 @@ function buildBackgroundLayer() {
                     const tF = Date.now();
                     const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
                 _mark('fillsrc+pullpush');
+                    // ---- MPI slice 3, LIVE: PER-LAYER PLATES (weight-free) ----
+                    // Every layer extends ITS OWN surface under adjacent
+                    // strictly-nearer layers: depth by the band's slope-continuing
+                    // extrapolation, colours carried from the layer's own visible
+                    // texels (coarse — the SD pass later upgrades texture, not
+                    // structure). Up to two overlapping continuations per texel
+                    // (sky AND armor behind a sword) live in two slot sheets; the
+                    // z-buffer picks per reveal. PURELY ADDITIVE: the plate is not
+                    // touched (its correctness is the floor-default ceiling's job;
+                    // the v1 plate clamp corrupted verified plug values and was
+                    // reverted). Seeds are excluded near thin features, whose
+                    // 2-4px bodies poisoned the v1 gradient measurements. Strips
+                    // the plate already carries (level within a tear step) or that
+                    // sit behind it (never visible) are pruned.
+                    if (bgMPIMode && bgMPIStrips && bgMPIExport && bgMPIExport.pw === pw && bgMPIExport.texLayer) {
+                        const t7 = Date.now();
+                        const texL = bgMPIExport.texLayer, K7 = bgMPIExport.layers;
+                        const SWEEP7 = (bgBandMaxGrowPx | 0) * 4, STEP7 = fgTearStep;
+                        // seed exclusion zone: 2px dilation of thin features + halo skirts
+                        let thinGate = null;
+                        if (thinM || haloM) {
+                            thinGate = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) thinGate[i] = ((thinM && thinM[i]) || (haloM && haloM[i])) ? 1 : 0;
+                            for (let p7 = 0; p7 < 2; p7++) { const ng7 = thinGate.slice();
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                    if (!thinGate[i] && (thinGate[i-1] || thinGate[i+1] || thinGate[i-pw] || thinGate[i+pw])) ng7[i] = 1; }
+                                thinGate = ng7; }
+                        }
+                        const slotD = [new Float32Array(PN), new Float32Array(PN)];
+                        const slotC = [new Uint8Array(PN * 3), new Uint8Array(PN * 3)];
+                        const slotO = [new Uint8Array(PN), new Uint8Array(PN)];
+                        const q7 = new Int32Array(PN), src7 = new Int32Array(PN), dst7 = new Uint16Array(PN);
+                        const own7 = new Uint8Array(PN), e7 = new Float32Array(PN);
+                        const endL = new Int32Array(PN), endR = new Int32Array(PN), endU = new Int32Array(PN), endD2 = new Int32Array(PN);
+                        const extrap7 = (a, i) => {
+                            const ax = a % pw, ay = (a / pw) | 0, ix = i % pw, iy = (i / pw) | 0;
+                            const dx = ix - ax, dy = iy - ay, dist = Math.sqrt(dx*dx + dy*dy);
+                            const baseD = depth[a];
+                            if (dist < 2) return baseD;
+                            const ux = dx / dist, uy = dy / dist;
+                            let prev = baseD, base = baseD, back = baseD, ok = true;
+                            for (let k5 = 1; k5 <= 8; k5++) {
+                                const sx5 = Math.round(ax - ux*k5), sy5 = Math.round(ay - uy*k5);
+                                if (sx5 < 0 || sx5 >= pw || sy5 < 0 || sy5 >= ph) { ok = false; break; }
+                                const dv = depth[sy5*pw + sx5];
+                                if (Math.abs(dv - prev) > STEP7) { ok = false; break; }
+                                prev = dv; if (k5 === 4) base = dv; if (k5 === 8) back = dv;
+                            }
+                            let e = ok ? base + ((base - back) / 4) * (dist + 4) : baseD;
+                            if (e > baseD) e = Math.min(e, Math.max(baseD, depth[i] - STEP7));
+                            return Math.max(0, Math.min(1, e));
+                        };
+                        let claimed7 = 0;
+                        for (let k = 1; k <= K7; k++) {
+                            own7.fill(0);
+                            let qh7 = 0, qt7 = 0;
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                                if (texL[i] !== k || (thinGate && thinGate[i])) continue;
+                                let hit = false;
+                                if (x > 0    && texL[i-1]  !== k && depth[i-1]  - depth[i] > STEP7) hit = true;
+                                else if (x < pw-1 && texL[i+1]  !== k && depth[i+1]  - depth[i] > STEP7) hit = true;
+                                else if (y > 0    && texL[i-pw] !== k && depth[i-pw] - depth[i] > STEP7) hit = true;
+                                else if (y < ph-1 && texL[i+pw] !== k && depth[i+pw] - depth[i] > STEP7) hit = true;
+                                if (hit) { own7[i] = 1; src7[i] = i; dst7[i] = 0; q7[qt7++] = i; }
+                            }
+                            while (qh7 < qt7) {
+                                const i = q7[qh7++], dc = dst7[i];
+                                if (dc >= SWEEP7) continue;
+                                const si = src7[i], x = i % pw, y = (i / pw) | 0;
+                                const nbs7 = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                for (const j of nbs7) {
+                                    if (j < 0 || own7[j] || texL[j] === k) continue;
+                                    const e = extrap7(si, j);
+                                    if (depth[j] - e <= STEP7) continue;   // only under strictly nearer content
+                                    own7[j] = 1; src7[j] = si; dst7[j] = dc + 1; e7[j] = e; q7[qt7++] = j;
+                                }
+                            }
+                            if (!qt7) continue;
+                            // PAIR VALIDATION (the membrane's both-sided anchor rule,
+                            // applied to strips): a surface may extend under an
+                            // occluder only where it FLANKS it — the strip pixel's
+                            // row OR column must exit the claimed region into
+                            // layer-k (or depth-consistent) surface on BOTH ends.
+                            // Armor around a sword qualifies; a bird's flank under
+                            // its barely-nearer sibling does not (measured: 0.37
+                            // flecks hanging in the sky beside the birds). The
+                            // frame boundary counts as an anchor — the world
+                            // continues past it.
+                            for (let y = 0; y < ph; y++) { const row = y * pw;
+                                let last = -2; // -2: frame boundary
+                                for (let x = 0; x < pw; x++) { const i = row + x;
+                                    if (own7[i]) endL[i] = last; else last = i;
+                                }
+                                last = -2;
+                                for (let x = pw - 1; x >= 0; x--) { const i = row + x;
+                                    if (own7[i]) endR[i] = last; else last = i;
+                                }
+                            }
+                            for (let x = 0; x < pw; x++) {
+                                let last = -2;
+                                for (let y = 0; y < ph; y++) { const i = y * pw + x;
+                                    if (own7[i]) endU[i] = last; else last = i;
+                                }
+                                last = -2;
+                                for (let y = ph - 1; y >= 0; y--) { const i = y * pw + x;
+                                    if (own7[i]) endD2[i] = last; else last = i;
+                                }
+                            }
+                            const anchOK = (j, e) => j === -2 || (j >= 0 && (texL[j] === k || Math.abs(depth[j] - e) <= bgBandStep));
+                            for (let h7 = 0; h7 < qt7; h7++) { const i = q7[h7];
+                                if (dst7[i] === 0) continue;               // seeds are visible surface, not strip
+                                const e = e7[i], si = src7[i];
+                                const rowOK = anchOK(endL[i], e) && anchOK(endR[i], e);
+                                const colOK = anchOK(endU[i], e) && anchOK(endD2[i], e);
+                                if (!rowOK && !colOK) continue;
+                                let s7 = -1;
+                                if (!slotO[0][i]) s7 = 0;
+                                else if (!slotO[1][i]) s7 = 1;
+                                else { s7 = (slotD[0][i] < slotD[1][i]) ? 0 : 1; if (e <= slotD[s7][i]) s7 = -1; } // keep the two nearest
+                                if (s7 >= 0) {
+                                    slotO[s7][i] = k; slotD[s7][i] = e; claimed7++;
+                                    // colours from the VALIDATED same-row/column anchors
+                                    // (inverse-distance blend) — tonally continuous with
+                                    // the surface at this height, unlike the BFS seed,
+                                    // whose colour can come from 100px away and lands as
+                                    // a flat foreign slab in the reveal
+                                    let rC = 0, gC = 0, bC = 0, wS = 0;
+                                    const addA = (j) => { if (j < 0) return;
+                                        const dxa = (j % pw) - (i % pw), dya = ((j / pw) | 0) - ((i / pw) | 0);
+                                        const w = 1 / Math.max(1, Math.abs(dxa) + Math.abs(dya));
+                                        rC += cpx[j*4] * w; gC += cpx[j*4+1] * w; bC += cpx[j*4+2] * w; wS += w; };
+                                    if (rowOK) { addA(endL[i]); addA(endR[i]); }
+                                    if (colOK) { addA(endU[i]); addA(endD2[i]); }
+                                    if (wS > 0) { slotC[s7][i*3] = rC/wS; slotC[s7][i*3+1] = gC/wS; slotC[s7][i*3+2] = bC/wS; }
+                                    else { slotC[s7][i*3] = cpx[si*4]; slotC[s7][i*3+1] = cpx[si*4+1]; slotC[s7][i*3+2] = cpx[si*4+2]; }
+                                }
+                            }
+                        }
+                        // prune what the plate already carries or hides
+                        let kept7 = 0;
+                        for (let s7 = 0; s7 < 2; s7++) for (let i = 0; i < PN; i++) {
+                            if (!slotO[s7][i]) continue;
+                            if (Math.abs(slotD[s7][i] - plugDepth[i]) <= STEP7 || slotD[s7][i] < plugDepth[i] - STEP7) slotO[s7][i] = 0;
+                            else kept7++;
+                        }
+                        // soften carried-colour dashes (4 Jacobi passes inside each slot)
+                        for (let s7 = 0; s7 < 2; s7++) {
+                            const O = slotO[s7], C = slotC[s7];
+                            const idxL = [];
+                            for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                if (O[i] && O[i-1] === O[i] && O[i+1] === O[i] && O[i-pw] === O[i] && O[i+pw] === O[i]) idxL.push(i); }
+                            for (let p7 = 0; p7 < 4; p7++) {
+                                for (const i of idxL) for (let c7 = 0; c7 < 3; c7++)
+                                    C[i*3+c7] = (C[i*3+c7] + C[(i-1)*3+c7] + C[(i+1)*3+c7] + C[(i-pw)*3+c7] + C[(i+pw)*3+c7]) / 5;
+                            }
+                        }
+                        _stripD = slotD; _stripC = slotC; _stripO = slotO; _stripPW = pw; _stripPH = ph; _stripFrontD = depth;
+                        console.log('[MPI] per-layer plates (live, v2 additive): ' + claimed7 + 'px claimed, ' + kept7 + 'px kept after prune (' + (Date.now()-t7) + 'ms)');
+                _mark('layer-strips');
+                    }
                     // debug capture (harness probes): which path coloured each pixel
                     const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
                     const fillRGB = new Float32Array(PN * 3);
@@ -9009,7 +9172,8 @@ function buildBackgroundLayer() {
                             _midBand = midBand; _midDepthV = midDepthV; _midRimC = midRimC; _midFillRGB = midFillRGB; _midPW = pw; _midPH = ph; _midFrontD = depth;
                         }
                         if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth,
-                            thinM, haloM, dispD: dispDepth, rawD: (L._rawDepth && L._rawDepthW === pw) ? L._rawDepth : depth, bandCutMask };
+                            thinM, haloM, dispD: dispDepth, rawD: (L._rawDepth && L._rawDepthW === pw) ? L._rawDepth : depth, bandCutMask,
+                            stripO: _stripO, stripD: _stripD };
                         // soften the flat rim-colour patches (Jacobi, completed set
                         // only). 24 passes: along busy silhouettes (vehicle line at
                         // the dune edge) adjacent rims alternate dark/light and 8
@@ -9363,6 +9527,81 @@ function buildBackgroundLayer() {
                     console.log('[MPI] under-sheet mesh: ' + (midIdx.length/3) + ' tris between plate and FG');
                 }
             } catch (e) { console.warn('[MPI] under-sheet mesh failed:', e); }
+        }
+        // ---- per-layer plate sheets (MPI slice 3, live): one mesh per overlap
+        // slot, same recipe as the under-sheet (interior-only triangles that do
+        // not span depth jumps, own depth + colour textures). Bias -0.0025 sits
+        // between the under-sheet (-0.002) and the plate (-0.004): coincident
+        // surfaces resolve by design — the under-sheet wins where both carry the
+        // same floor, strips sit in front of the plate they refine.
+        if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
+        if (_stripO && L.mesh.geometry && L.mesh.geometry.parameters) {
+            try {
+                const gU2 = L.mesh.geometry, gp2 = gU2.parameters;
+                const PW = _stripPW, PH = _stripPH;
+                const full2 = gU2.userData._fullIndex || gU2.index.array;
+                const vw3 = ((gp2.widthSegments || 1) | 0) + 1, vh3 = ((gp2.heightSegments || 1) | 0) + 1;
+                const sx3 = (PW - 1) / Math.max(1, vw3 - 1), sy3 = (PH - 1) / Math.max(1, vh3 - 1);
+                mpiStripMeshes = [];
+                for (let s7 = 0; s7 < 2; s7++) {
+                    const O = _stripO[s7], Dd = _stripD[s7], Cc = _stripC[s7];
+                    let nAny = 0; for (let i = 0; i < O.length; i++) if (O[i]) { nAny = 1; break; }
+                    if (!nAny) continue;
+                    const mD2 = new Float32Array(O.length);
+                    const mF2 = new Uint8Array(O.length * 4);
+                    const frontD = _stripFrontD;
+                    for (let y = 0; y < PH; y++) { const s = y*PW, d = (PH-1-y)*PW;
+                        for (let x = 0; x < PW; x++) {
+                            const i = s+x, o = (d+x)*4;
+                            mD2[d+x] = O[i] ? Dd[i] : (frontD ? Math.max(0, frontD[i] - 0.004) : 0);
+                            if (O[i]) { mF2[o]=Cc[i*3]; mF2[o+1]=Cc[i*3+1]; mF2[o+2]=Cc[i*3+2]; mF2[o+3]=255; }
+                            else mF2[o+3]=0;
+                        }
+                    }
+                    const dT2 = new THREE.DataTexture(mD2, PW, PH, THREE.RedFormat, THREE.FloatType);
+                    dT2.needsUpdate = true; dT2.flipY = false;
+                    dT2.minFilter = THREE.LinearFilter; dT2.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in dT2) dT2.colorSpace = THREE.NoColorSpace;
+                    const fT2 = new THREE.DataTexture(mF2, PW, PH, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    fT2.needsUpdate = true; fT2.flipY = false;
+                    fT2.minFilter = THREE.LinearFilter; fT2.magFilter = THREE.LinearFilter;
+                    if ('encoding' in fT2) fT2.encoding = THREE.sRGBEncoding;
+                    if ('colorSpace' in fT2) fT2.colorSpace = THREE.SRGBColorSpace;
+                    const sIdx = [];
+                    for (let t = 0; t < full2.length; t += 3) {
+                        let all3 = true, dmin = 2, dmax = -1;
+                        for (let k = 0; k < 3 && all3; k++) {
+                            const vi = full2[t+k];
+                            const tx = Math.round((vi % vw3) * sx3), ty = Math.round(((vi / vw3) | 0) * sy3);
+                            const ti = ty*PW+tx;
+                            if (!O[ti]) { all3 = false; break; }
+                            const dv = Dd[ti]; if (dv < dmin) dmin = dv; if (dv > dmax) dmax = dv;
+                        }
+                        if (all3 && dmax - dmin <= fgTearStep) sIdx.push(full2[t], full2[t+1], full2[t+2]);
+                    }
+                    if (!sIdx.length) continue;
+                    const sg = new THREE.BufferGeometry();
+                    sg.setAttribute('position', gU2.attributes.position);
+                    sg.setAttribute('uv', gU2.attributes.uv);
+                    if (gU2.attributes.normal) sg.setAttribute('normal', gU2.attributes.normal);
+                    sg.setIndex(new THREE.BufferAttribute(new full2.constructor(sIdx), 1));
+                    const sm2 = L.mesh.material.clone();
+                    sm2.uniforms.displacementMap.value = dT2;
+                    sm2.uniforms.map.value = fT2;
+                    sm2.uniforms.u_isBackgroundLayer.value = true;
+                    sm2.uniforms.u_useEdgeMask.value = false;
+                    if (sm2.uniforms.u_useBandCut) { sm2.uniforms.u_useBandCut.value = false; sm2.uniforms.u_bandMask.value = null; }
+                    sm2.uniforms.displacementBias.value = (sm2.uniforms.displacementBias.value || 0) - 0.0025;
+                    const smesh = new THREE.Mesh(sg, sm2);
+                    smesh.position.copy(L.mesh.position);
+                    smesh.rotation.copy(L.mesh.rotation);
+                    smesh.scale.copy(L.mesh.scale);
+                    smesh.renderOrder = (L.mesh.renderOrder || 0) - 0.4;
+                    scene.add(smesh);
+                    mpiStripMeshes.push(smesh);
+                    console.log('[MPI] layer-strip sheet ' + s7 + ': ' + (sIdx.length/3) + ' tris');
+                }
+            } catch (e) { console.warn('[MPI] layer-strip sheets failed:', e); }
         }
 
         _mark('meshes');
