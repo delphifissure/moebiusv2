@@ -6418,6 +6418,23 @@ let bgPlugMode = 'directional';
 // replace it. Set false to keep the BG layer flush with the image rectangle.
 let bgSceneExtend = true;
 let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their thin carrier; over-claims on paintings with emissive backgrounds
+// ---- MPI (depth-segmented multiplane layers, slice 1) ----
+// Partition the torn FG into depth layers: connected components cut ONLY
+// along depth cliffs (> fgTearStep), so smooth surfaces (the dune ramp)
+// stay whole while occlusion boundaries split. Each layer is a mesh with
+// its own index subset over the SHARED geometry buffers and the SHARED
+// material/textures — slice 1 is render-identical to the single torn
+// mesh by construction; its value is the layer structure itself (per-
+// layer depth maps via the shared displacement texture, ordering, and
+// the export bundle for per-layer SD completion in slice 2).
+// Default OFF at load: the import auto-build runs before the initial
+// layout, and hiding the primary mesh at that moment flips the view fit
+// (observed: zoomed-out framing that persists for the whole session).
+// Enable AFTER load (UI toggle / harness evaluate), then rebuild.
+let bgMPIMode = false;
+let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
+let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
+let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
 // Band fill opacity. With the band tightened to a silhouette strip the fill is
 // short-range, so it should read as a SOLID, complete inpaint — no streaks AND
 // no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
@@ -8118,6 +8135,94 @@ function buildBackgroundLayer() {
                             ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' +
                             keptThin + ' thin-feature kept, ' + keptUnbacked +
                             ' far-mismatch kept, of ' + (src.length / 3));
+
+                        // ---- MPI SLICE 1: depth-layer partition of the torn FG ----
+                        if (bgMPIMode) {
+                            const tM = Date.now();
+                            // cleanup from a previous build
+                            if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
+                            L.mesh.visible = true;
+                            // connected components; adjacency broken across cliffs
+                            const compL = new Int32Array(PN);
+                            const qq3 = new Int32Array(PN);
+                            let nc = 0;
+                            for (let s = 0; s < PN; s++) {
+                                if (compL[s]) continue;
+                                nc++;
+                                let h3 = 0, t3 = 0; qq3[t3++] = s; compL[s] = nc;
+                                while (h3 < t3) {
+                                    const i = qq3[h3++]; const x = i%pw, y = (i/pw)|0;
+                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                    for (const j of nbs) {
+                                        if (j < 0 || compL[j]) continue;
+                                        if (Math.abs(depth[i] - depth[j]) > fgTearStep) continue;
+                                        compL[j] = nc; qq3[t3++] = j;
+                                    }
+                                }
+                            }
+                            const szC = new Float64Array(nc+1), sdC = new Float64Array(nc+1);
+                            for (let i = 0; i < PN; i++) { szC[compL[i]]++; sdC[compL[i]] += depth[i]; }
+                            const orderC = Array.from({length: nc}, (_, k) => k+1).sort((a,b) => szC[b]-szC[a]);
+                            const K = Math.min(bgMPIMaxLayers, nc);
+                            const keptC = orderC.slice(0, K);
+                            const layerOf = new Int32Array(nc+1);
+                            keptC.forEach((c, idx) => layerOf[c] = idx+1);
+                            const meanD = keptC.map(c => sdC[c]/szC[c]);
+                            // small components join the nearest kept layer by mean depth
+                            // (assignment decides only which mesh carries them and which
+                            // completion scope they belong to — their per-texel depth is
+                            // already correct in the shared displacement texture)
+                            for (let c = 1; c <= nc; c++) {
+                                if (layerOf[c]) continue;
+                                const m = sdC[c]/szC[c];
+                                let best = 0, bd = 9;
+                                for (let k2 = 0; k2 < K; k2++) { const d2 = Math.abs(meanD[k2]-m); if (d2 < bd) { bd = d2; best = k2; } }
+                                layerOf[c] = best+1;
+                            }
+                            const texLayer = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) texLayer[i] = layerOf[compL[i]];
+                            // partition the torn index by majority texel layer (kept
+                            // triangles never span a cliff, so votes rarely split)
+                            const fIdx = g.index.array;
+                            const bucketsL = Array.from({length: K}, () => []);
+                            for (let t4 = 0; t4 < fIdx.length; t4 += 3) {
+                                let l0 = 0, l1 = 0, l2 = 0;
+                                for (let k2 = 0; k2 < 3; k2++) {
+                                    const vi = fIdx[t4+k2];
+                                    const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
+                                    const lv = texLayer[ty*pw+tx];
+                                    if (k2 === 0) l0 = lv; else if (k2 === 1) l1 = lv; else l2 = lv;
+                                }
+                                const lw = (l1 === l2) ? l1 : l0;
+                                bucketsL[lw-1].push(fIdx[t4], fIdx[t4+1], fIdx[t4+2]);
+                            }
+                            // back-to-front meshes over the SHARED attributes + material
+                            const rankOrder = Array.from({length: K}, (_, k) => k).sort((a,b) => meanD[a]-meanD[b]);
+                            mpiLayers = [];
+                            let texCount = new Float64Array(K+1);
+                            for (let i = 0; i < PN; i++) texCount[texLayer[i]]++;
+                            rankOrder.forEach((k2, rank) => {
+                                if (!bucketsL[k2].length) return;
+                                const lg = new THREE.BufferGeometry();
+                                lg.setAttribute('position', g.attributes.position);
+                                lg.setAttribute('uv', g.attributes.uv);
+                                if (g.attributes.normal) lg.setAttribute('normal', g.attributes.normal);
+                                lg.setIndex(new THREE.BufferAttribute(new fIdx.constructor(bucketsL[k2]), 1));
+                                const lm = new THREE.Mesh(lg, L.mesh.material); // shared material: uniforms stay in sync
+                                lm.position.copy(L.mesh.position);
+                                lm.rotation.copy(L.mesh.rotation);
+                                lm.scale.copy(L.mesh.scale);
+                                lm.renderOrder = (L.mesh.renderOrder || 0) + rank * 1e-3; // back-to-front hint; z-buffer decides
+                                scene.add(lm);
+                                mpiLayers.push({ mesh: lm, meanD: meanD[k2], tris: bucketsL[k2].length/3, texels: texCount[k2+1] });
+                            });
+                            // the partition replaces the monolithic torn mesh
+                            L.mesh.visible = false;
+                            bgMPIExport = { pw, ph, layers: K, texLayer, meanD };
+                            window._mpiDebug = { pw, ph, K, texLayer, meanD, comp: compL, nc };
+                            console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
+                                mpiLayers.map(Lr => Lr.tris + 't@' + Lr.meanD.toFixed(2)).join(', '));
+                        }
                     } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
                 }
 
