@@ -6557,11 +6557,18 @@ function bgPullPushFill(cpx, valid, W, H) {
             const o=y*nW+x, wc=Math.min(1,sw); nww[o]=wc; if(sw>0){ ncw[o*3]=sr/sw*wc; ncw[o*3+1]=sg/sw*wc; ncw[o*3+2]=sb/sw*wc; } }
         levels.push({cw:ncw, ww:nww, W:nW, H:nH});
     }
+    // [PERF] unrolled bilinear sample — the array-of-arrays destructuring
+    // allocated 5 arrays per unfilled pixel per level. Results identical.
+    const _smp = [0, 0, 0];
     function sample(c, fx, fy){ const x0=Math.floor(fx), y0=Math.floor(fy), x1=Math.min(c.W-1,x0+1), y1=Math.min(c.H-1,y0+1);
         const tx=fx-x0, ty=fy-y0; let r=0,g=0,b=0,ws=0;
-        for (const [xx,yy,wt] of [[x0,y0,(1-tx)*(1-ty)],[x1,y0,tx*(1-ty)],[x0,y1,(1-tx)*ty],[x1,y1,tx*ty]]){
-            const o=Math.max(0,yy)*c.W+Math.max(0,xx), w=c.ww[o]; if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; } }
-        return ws>0 ? [r/ws,g/ws,b/ws] : null; }
+        let o, w, wt;
+        o=Math.max(0,y0)*c.W+Math.max(0,x0); w=c.ww[o]; wt=(1-tx)*(1-ty); if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y0)*c.W+Math.max(0,x1); w=c.ww[o]; wt=tx*(1-ty);     if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y1)*c.W+Math.max(0,x0); w=c.ww[o]; wt=(1-tx)*ty;     if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y1)*c.W+Math.max(0,x1); w=c.ww[o]; wt=tx*ty;         if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        if (ws<=0) return null;
+        _smp[0]=r/ws; _smp[1]=g/ws; _smp[2]=b/ws; return _smp; }
     for (let l=levels.length-2; l>=0; l--){ const fine=levels[l], coarse=levels[l+1];
         for (let y=0;y<fine.H;y++) for (let x=0;x<fine.W;x++){ const o=y*fine.W+x;
             if (fine.ww[o] < 0.999){ const s=sample(coarse,(x-0.5)/2,(y-0.5)/2); if(s){ const a=fine.ww[o];
@@ -6569,6 +6576,37 @@ function bgPullPushFill(cpx, valid, W, H) {
     }
     const out=new Uint8Array(W*H*3), L0=levels[0];
     for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
+    return out;
+}
+// O(N) sliding window min/max (van Herk–Gil-Werman), 1D strided pass —
+// EXACT replacement for naive windowed scans (results identical, cost
+// independent of radius). Used by the ramp collapse, cliff-core windows
+// and the under-sheet floor. `n` elements at src[base + i*stride].
+function bgSlide1D(src, dst, n, r, stride, base, isMin) {
+    const k = 2*r + 1;
+    if (!bgSlide1D._f || bgSlide1D._f.length < n) { bgSlide1D._f = new Float32Array(n); bgSlide1D._g = new Float32Array(n); }
+    const f = bgSlide1D._f, g = bgSlide1D._g;
+    for (let i = 0; i < n; i++) {
+        const v = src[base + i*stride];
+        f[i] = (i % k === 0) ? v : (isMin ? Math.min(f[i-1], v) : Math.max(f[i-1], v));
+    }
+    for (let i = n - 1; i >= 0; i--) {
+        const v = src[base + i*stride];
+        g[i] = (i % k === k-1 || i === n-1) ? v : (isMin ? Math.min(g[i+1], v) : Math.max(g[i+1], v));
+    }
+    for (let i = 0; i < n; i++) {
+        const lo = i - r, hi = i + r;
+        let v;
+        if (lo < 0) v = f[Math.min(hi, n-1)];
+        else v = isMin ? Math.min(g[lo], f[Math.min(hi, n-1)]) : Math.max(g[lo], f[Math.min(hi, n-1)]);
+        dst[base + i*stride] = v;
+    }
+}
+// separable 2D windowed min/max over a (2r+1)^2 CLAMPED window — exact
+function bgSlide2D(src, W, H, r, isMin) {
+    const tmp = new Float32Array(W*H), out = new Float32Array(W*H);
+    for (let y = 0; y < H; y++) bgSlide1D(src, tmp, W, r, 1, y*W, isMin);
+    for (let x = 0; x < W; x++) bgSlide1D(tmp, out, H, r, W, x, isMin);
     return out;
 }
 // DIRECTIONAL PLUG: the single plug that seals every disocclusion at the depth of
@@ -6585,24 +6623,52 @@ function bgDirectionalPlug(depth, W, H, opts) {
     for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
         const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
     const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
-    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1), q = [];
+    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1);
+    const q = new Int32Array(N); let qt = 0;   // [PERF] typed queue (each pixel enqueued at most once)
+    const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
-        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, bestJ=-1, isE=false;
-        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        const di = depth[i]; let bestFar=1e9, bestJ=-1, isE=false;
+        // [PERF] unrolled neighbours — no per-pixel array allocation
+        if (x>0)   { const j=i-1; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (x<W-1) { const j=i+1; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (y>0)   { const j=i-W; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (y<H-1) { const j=i+W; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
         if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ;
-            const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
-            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2); q.push(i); } }
-    for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
-        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
-        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; rimSrc[j]=rimSrc[i]; budget[j]=budget[i]-1; q.push(j); } } }
+            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(di)-pxAt(bestFar))))+2); q[qt++]=i; } }
+    for (let h=0;h<qt;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
+        const ri = rim[i]+STEP, rv = rim[i], rs = rimSrc[i], b1 = budget[i]-1;
+        let j;
+        if (x>0)   { j=i-1; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (x<W-1) { j=i+1; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (y>0)   { j=i-W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (y<H-1) { j=i+W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } } }
     const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
     const ring = new Uint8Array(N);
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
         if((x>0&&!band[i-1])||(x<W-1&&!band[i+1])||(y>0&&!band[i-W])||(y<H-1&&!band[i+W])) ring[i]=1; }
-    let A=plug.slice(), B=plug.slice();
-    for (let s=0;s<SWEEPS;s++){ for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]){B[i]=A[i];continue;}
-        B[i]=0.25*(A[y*W+Math.max(0,x-1)]+A[y*W+Math.min(W-1,x+1)]+A[Math.max(0,y-1)*W+x]+A[Math.min(H-1,y+1)*W+x]); } const t=A;A=B;B=t; }
-    for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+    // [PERF] harmonic sweeps over a COMPACT interior list with precomputed
+    // clamped neighbour indices (was SWEEPS x full-frame = 300M visits to
+    // update the band interior only). Untouched pixels are equal in both
+    // buffers by initialisation — results identical.
+    {
+        let nInt = 0;
+        for (let i=0;i<N;i++) if (band[i] && !ring[i]) nInt++;
+        const IL = new Int32Array(nInt), NBI = new Int32Array(nInt*4);
+        nInt = 0;
+        for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]) continue;
+            IL[nInt] = i;
+            NBI[nInt*4]   = y*W+Math.max(0,x-1);
+            NBI[nInt*4+1] = y*W+Math.min(W-1,x+1);
+            NBI[nInt*4+2] = Math.max(0,y-1)*W+x;
+            NBI[nInt*4+3] = Math.min(H-1,y+1)*W+x;
+            nInt++; }
+        let A=plug.slice(), B=plug.slice();
+        for (let s=0;s<SWEEPS;s++){
+            for (let k=0;k<nInt;k++){ const i=IL[k];
+                B[i]=0.25*(A[NBI[k*4]]+A[NBI[k*4+1]]+A[NBI[k*4+2]]+A[NBI[k*4+3]]); }
+            const t=A;A=B;B=t; }
+        for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+    }
     return { plug, band, rimSrc };
 }
 (function(){
@@ -7362,6 +7428,9 @@ function buildBackgroundLayer() {
         mat.uniforms.map.value = bgColorTarget.texture;
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
+        // [PERF] coarse stage timer — logged as one line at build end
+        const _pt0 = Date.now(); let _ptPrev = _pt0; const _perf = [];
+        const _mark = (n) => { const t = Date.now(); if (t - _ptPrev > 15) _perf.push(n + ' ' + (t - _ptPrev) + 'ms'); _ptPrev = t; };
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
@@ -7419,6 +7488,7 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                _mark('depth-read');
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
                 let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
@@ -7690,12 +7760,13 @@ function buildBackgroundLayer() {
                     // untouched; the bake's silhouette pepper collapses with it.
                     {
                         const d0 = depth.slice();
+                        // [PERF] van Herk windowed min/max, exact — the naive 5x5
+                        // scan was 63M reads. Interior loop bounds unchanged.
+                        const w2mn = bgSlide2D(d0, pw, ph, 2, true), w2mx = bgSlide2D(d0, pw, ph, 2, false);
                         let snapped = 0;
                         for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
                             const i = y*pw+x;
-                            let mn2 = 2, mx2 = -1;
-                            for (let oy = -2; oy <= 2; oy++) { const r = i+oy*pw;
-                                for (let ox = -2; ox <= 2; ox++) { const d = d0[r+ox]; if (d<mn2)mn2=d; if(d>mx2)mx2=d; } }
+                            const mn2 = w2mn[i], mx2 = w2mx[i];
                             if (mx2 - mn2 <= fgTearStep) continue;
                             const v = d0[i];
                             const t2 = (v - mn2 <= mx2 - v) ? mn2 : mx2;
@@ -7703,6 +7774,7 @@ function buildBackgroundLayer() {
                         }
                         if (snapped > 0) { pxChanged += snapped; console.log('[RUNG-PLUG] ramp collapse: ' + snapped + 'px binarized'); }
                     }
+                _mark('despeckle+collapse');
                     if (pxChanged > 0) {
                         const hf2 = new Float32Array(PN);
                         for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
@@ -7733,6 +7805,7 @@ function buildBackgroundLayer() {
                     let bandN = 0; for (let i = 0; i < PN; i++) bandN += band[i];
                     console.log('[RUNG-PLUG] inputs: directional plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
                         ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)');
+                _mark('directional-plug');
                 } else {
                     // legacy global fg/bg plug: band (PNG) + Otsu valid + harmonic
                     cx.clearRect(0, 0, pw, ph);
@@ -7796,8 +7869,21 @@ function buildBackgroundLayer() {
                     if (nThin > 0 && !L._thinHaloApplied) {
                         const hd = depth.slice(); let changed = 0;
                         if (!haloM) haloM = new Uint8Array(PN);
+                        // [PERF] the 5x5 max can only be nonzero within Chebyshev
+                        // distance 2 of a thin pixel: gate the window scan to an
+                        // 8-connected double dilation of thinM (exact same support)
+                        let tGate = thinM.slice();
+                        for (let p = 0; p < 2; p++) { const ng = tGate.slice();
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (tGate[i]) continue;
+                                if (tGate[i-1] || tGate[i+1] || tGate[i-pw] || tGate[i+pw] ||
+                                    tGate[i-pw-1] || tGate[i-pw+1] || tGate[i+pw-1] || tGate[i+pw+1]) ng[i] = 1; }
+                            tGate = ng; }
+                        // frame border: the interior-only dilation can miss it — scan it unconditionally (tiny)
+                        for (let x = 0; x < pw; x++) { tGate[x] = 1; tGate[pw+x] = 1; tGate[(ph-1)*pw+x] = 1; tGate[(ph-2)*pw+x] = 1; }
+                        for (let y = 0; y < ph; y++) { const r = y*pw; tGate[r] = 1; tGate[r+1] = 1; tGate[r+pw-1] = 1; tGate[r+pw-2] = 1; }
                         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                            if (thinM[i]) continue;
+                            if (thinM[i] || !tGate[i]) continue;
                             let m = -1;
                             for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
                                 const yy = y + oy, xx = x + ox;
@@ -7827,6 +7913,7 @@ function buildBackgroundLayer() {
                             if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
                             L._thinHaloApplied = true;
                             console.log('[RUNG-PLUG] thin-feature depth halo: ' + nThin + 'px thin, ' + changed + 'px haloed');
+                _mark('thin-halo');
                         }
                     }
                 }
@@ -7930,6 +8017,7 @@ function buildBackgroundLayer() {
                         for (let i = 0; i < PN; i++) if (fgm[i]) plugDepth[i] = dsm[i*3] / 255;
                         underMask = fgm;
                         console.log('[RUNG-PLUG] plug depth completed under occluders (' + nFg + 'px rind, diffused)');
+                _mark('completion-flood');
                     }
                 }
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
@@ -7952,6 +8040,7 @@ function buildBackgroundLayer() {
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
+                _mark('plug-texture');
 
                 // --- BAND-GATED FG STRETCH CUT: bake the cut mask ---
                 // Dilate the band a few px so the far-side half of a stretched
@@ -8007,6 +8096,7 @@ function buildBackgroundLayer() {
                         // canvas width; a rubber triangle runs at a small fraction of it
                         const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
                         if (fu.u_bandCutUvRate) fu.u_bandCutUvRate.value = _uvRateThr;
+                        _mark('bandcut-bake');
                         console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
                     }
                 }
@@ -8065,17 +8155,16 @@ function buildBackgroundLayer() {
                         const cliffCore = new Uint8Array(PN);
                         const cliffFar = new Float32Array(PN);  // window min at each core px: the ramp's local far side
                         {
+                            // [PERF] van Herk windowed min/max, exact
+                            const c2mn = bgSlide2D(tearD, pw, ph, 2, true), c2mx = bgSlide2D(tearD, pw, ph, 2, false);
                             const gm = (j) => Math.max(Math.abs(tearD[j+1]-tearD[j-1]), Math.abs(tearD[j+pw]-tearD[j-pw]));
                             for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
                                 const i = y*pw+x;
-                                let mn2 = 2, mx2 = -1;
-                                for (let oy = -2; oy <= 2; oy++) { const r = i+oy*pw;
-                                    for (let ox = -2; ox <= 2; ox++) { const d = tearD[r+ox]; if (d<mn2)mn2=d; if(d>mx2)mx2=d; } }
-                                if (mx2 - mn2 <= fgTearStep) continue;
+                                if (c2mx[i] - c2mn[i] <= fgTearStep) continue;
                                 const gx = Math.abs(tearD[i+1]-tearD[i-1]), gy2 = Math.abs(tearD[i+pw]-tearD[i-pw]);
                                 const g0 = Math.max(gx, gy2);
                                 const a = gx >= gy2 ? i-1 : i-pw, b = gx >= gy2 ? i+1 : i+pw;
-                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) { cliffCore[i] = 1; cliffFar[i] = mn2; }
+                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) { cliffCore[i] = 1; cliffFar[i] = c2mn[i]; }
                             }
                         }
                         // ---- MPI SLICE 2: UNDER-SHEET as a FLOOR FIELD ----
@@ -8092,17 +8181,7 @@ function buildBackgroundLayer() {
                         // far sliver — the backdrop is the true next surface).
                         if (bgMPIMode) {
                             const RB = bgBandMaxGrowPx | 0;
-                            const fl = new Float32Array(PN), tmpF = new Float32Array(PN);
-                            for (let y = 0; y < ph; y++) { const r0 = y*pw;
-                                for (let x = 0; x < pw; x++) { let m = 2;
-                                    const x0 = Math.max(0, x-RB), x1 = Math.min(pw-1, x+RB);
-                                    for (let xx = x0; xx <= x1; xx++) { const v = depth[r0+xx]; if (v < m) m = v; }
-                                    tmpF[r0+x] = m; } }
-                            for (let x = 0; x < pw; x++) {
-                                for (let y = 0; y < ph; y++) { let m = 2;
-                                    const y0 = Math.max(0, y-RB), y1 = Math.min(ph-1, y+RB);
-                                    for (let yy = y0; yy <= y1; yy++) { const v = tmpF[yy*pw+x]; if (v < m) m = v; }
-                                    fl[y*pw+x] = m; } }
+                            const fl = bgSlide2D(depth, pw, ph, RB, true);   // [PERF] van Herk O(N), exact
                             midBand = new Uint8Array(PN);
                             midDepthV = fl;
                             midRimC = new Int32Array(PN).fill(-1);
@@ -8114,39 +8193,42 @@ function buildBackgroundLayer() {
                             }
                             if (nSheet > 0) console.log('[MPI] under-sheet floor: ' + nSheet + 'px above-floor (radius ' + RB + 'px)');
                             else { midBand = null; midDepthV = null; midRimC = null; }
+                            _mark('undersheet-floor');
                         }
                         const src = g.userData._fullIndex;
                         const out = new src.constructor(src.length);
                         const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
-                        const txv = new Int32Array(3), tyv = new Int32Array(3), dv = new Float32Array(3);
+                        const idMap = (vw === pw && vh === ph);   // [PERF] 1 vertex/texel: ti === vi
+                        const tiv = new Int32Array(3), dv = new Float32Array(3);
                         let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0;
-                        const ribbon = (j) => (thinM && thinM[j]) || (haloM && haloM[j]);
+                        // [PERF] flat masks instead of per-vertex closure calls / float math
+                        const ribMask = new Uint8Array(PN);
+                        if (thinM) for (let i = 0; i < PN; i++) if (thinM[i]) ribMask[i] = 1;
+                        if (haloM) for (let i = 0; i < PN; i++) if (haloM[i]) ribMask[i] = 1;
+                        const coreOKMask = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) if (cliffCore[i] &&
+                            (Math.abs(plugDepth[i] - cliffFar[i]) <= 2*fgTearStep ||
+                             (midBand && midBand[i] && Math.abs(midDepthV[i] - cliffFar[i]) <= 2*fgTearStep))) coreOKMask[i] = 1;
                         for (let t = 0; t < src.length; t += 3) {
                             let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false, midOK = false;
                             let dmn = 2, dmx = -1, mnTi = -1;
                             for (let k = 0; k < 3; k++) {
                                 const vi = src[t + k];
-                                const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
-                                txv[k] = tx; tyv[k] = ty;
-                                const ti = ty * pw + tx;
+                                const ti = idMap ? vi : (Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx));
+                                tiv[k] = ti;
                                 const d = tearD[ti]; dv[k] = d;
                                 if (d < mn) mn = d;
                                 if (d > mx) mx = d;
                                 const dd = dispDepth[ti];
                                 if (dd < dmn) { dmn = dd; mnTi = ti; }
                                 if (dd > dmx) dmx = dd;
-                                if (ribbon(ti)) nRib++;
-                                // a core vertex qualifies only if the plate behind it
-                                // carries the ramp's own local far side (2x step: the
-                                // +/-2px window may not reach the ramp's true foot) —
-                                // or the UNDER-SHEET does (internal soft cliffs: fur)
-                                if (cliffCore[ti] && (Math.abs(plugDepth[ti] - cliffFar[ti]) <= 2*fgTearStep ||
-                                    (midBand && midBand[ti] && Math.abs(midDepthV[ti] - cliffFar[ti]) <= 2*fgTearStep))) coreOK = true;
+                                if (ribMask[ti]) nRib++;
+                                if (coreOKMask[ti]) coreOK = true;
                                 if (thinDil && thinDil[ti]) thinVeto = true;
                             }
                             // under-sheet backing: evaluated after dmn is final
                             if (midBand) for (let k = 0; k < 3 && !midOK; k++) {
-                                const ti = tyv[k]*pw + txv[k];
+                                const ti = tiv[k];
                                 if (midBand[ti] && Math.abs(midDepthV[ti] - dmn) <= fgTearStep) midOK = true;
                             }
                             // FAR-SIDE MATCH — the one gate all three rules share: a
@@ -8193,6 +8275,7 @@ function buildBackgroundLayer() {
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
                         }
                         g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
+                        _mark('tear-loop');
                         console.log('[RUNG-PLUG] FG pre-torn (far-side match): ' + dropped +
                             ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' + droppedMid + ' under-sheet, ' +
                             keptThin + ' thin-feature kept, ' + keptUnbacked +
@@ -8214,12 +8297,13 @@ function buildBackgroundLayer() {
                                 let h3 = 0, t3 = 0; qq3[t3++] = s; compL[s] = nc;
                                 while (h3 < t3) {
                                     const i = qq3[h3++]; const x = i%pw, y = (i/pw)|0;
-                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                                    for (const j of nbs) {
-                                        if (j < 0 || compL[j]) continue;
-                                        if (Math.abs(depth[i] - depth[j]) > fgTearStep) continue;
-                                        compL[j] = nc; qq3[t3++] = j;
-                                    }
+                                    const di = depth[i];
+                                    // [PERF] unrolled neighbours (no per-pixel array alloc)
+                                    let j;
+                                    if (x > 0)    { j = i-1;  if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (x < pw-1) { j = i+1;  if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (y > 0)    { j = i-pw; if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (y < ph-1) { j = i+pw; if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
                                 }
                             }
                             const szC = new Float64Array(nc+1), sdC = new Float64Array(nc+1);
@@ -8245,18 +8329,28 @@ function buildBackgroundLayer() {
                             for (let i = 0; i < PN; i++) texLayer[i] = layerOf[compL[i]];
                             // partition the torn index by majority texel layer (kept
                             // triangles never span a cliff, so votes rarely split)
+                            // [PERF] two-pass counted fill into typed arrays (the JS-
+                            // array push version was 15M pushes) + identity fast path
                             const fIdx = g.index.array;
-                            const bucketsL = Array.from({length: K}, () => []);
-                            for (let t4 = 0; t4 < fIdx.length; t4 += 3) {
-                                let l0 = 0, l1 = 0, l2 = 0;
-                                for (let k2 = 0; k2 < 3; k2++) {
-                                    const vi = fIdx[t4+k2];
-                                    const tx = Math.round((vi % vw) * sx), ty = Math.round(((vi / vw) | 0) * sy);
-                                    const lv = texLayer[ty*pw+tx];
-                                    if (k2 === 0) l0 = lv; else if (k2 === 1) l1 = lv; else l2 = lv;
-                                }
+                            const idMap2 = (vw === pw && vh === ph);
+                            const triLayer = new Uint8Array(fIdx.length / 3);
+                            const cnt = new Int32Array(K);
+                            for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                const l0 = texLayer[idMap2 ? v0 : (Math.round(((v0 / vw) | 0) * sy) * pw + Math.round((v0 % vw) * sx))];
+                                const l1 = texLayer[idMap2 ? v1 : (Math.round(((v1 / vw) | 0) * sy) * pw + Math.round((v1 % vw) * sx))];
+                                const l2 = texLayer[idMap2 ? v2 : (Math.round(((v2 / vw) | 0) * sy) * pw + Math.round((v2 % vw) * sx))];
                                 const lw = (l1 === l2) ? l1 : l0;
-                                bucketsL[lw-1].push(fIdx[t4], fIdx[t4+1], fIdx[t4+2]);
+                                triLayer[tr] = lw;
+                                cnt[lw-1] += 3;
+                            }
+                            const bucketsL = Array.from({length: K}, (_, k2) => new fIdx.constructor(cnt[k2]));
+                            const fillPos = new Int32Array(K);
+                            for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                const k2 = triLayer[tr] - 1;
+                                const b = bucketsL[k2]; let fp = fillPos[k2];
+                                b[fp] = fIdx[t4]; b[fp+1] = fIdx[t4+1]; b[fp+2] = fIdx[t4+2];
+                                fillPos[k2] = fp + 3;
                             }
                             // back-to-front meshes over the SHARED attributes + material
                             const rankOrder = Array.from({length: K}, (_, k) => k).sort((a,b) => meanD[a]-meanD[b]);
@@ -8282,7 +8376,8 @@ function buildBackgroundLayer() {
                             L.mesh.visible = false;
                             bgMPIExport = { pw, ph, layers: K, texLayer, meanD };
                             window._mpiDebug = { pw, ph, K, texLayer, meanD, comp: compL, nc };
-                            console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
+                            _mark('mpi-partition');
+                        console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
                                 mpiLayers.map(Lr => Lr.tris + 't@' + Lr.meanD.toFixed(2)).join(', '));
                         }
                     } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
@@ -8307,11 +8402,13 @@ function buildBackgroundLayer() {
                     const fillSrc = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3;
                         fillSrc[i] = (!band[i] && !(underMask && underMask[i]) && lum>=45) ? 1 : 0; }
-                    if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
-                        const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
-                        for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
+                    if (rimSrc) { // [PERF] unrolled — no per-pixel array allocation
+                        const rej = (i, j) => band[j] && depth[i] > depth[rimSrc[j] >= 0 ? rimSrc[j] : i] + 0.06;
+                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
+                            if ((x>0 && rej(i, i-1)) || (x<pw-1 && rej(i, i+1)) || (y>0 && rej(i, i-pw)) || (y<ph-1 && rej(i, i+pw))) fillSrc[i]=0; } }
                     const tF = Date.now();
                     const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
+                _mark('fillsrc+pullpush');
                     // debug capture (harness probes): which path coloured each pixel
                     const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
                     const fillRGB = new Float32Array(PN * 3);
@@ -8408,27 +8505,63 @@ function buildBackgroundLayer() {
                         // (tolerance/bound reused from the existing fill logic).
                         {
                             const tolD = 0.06, REACH = 400;
-                            const inSet = (j) => band[j] || underMask[j];
                             let fixedN = 0;
+                            // [PERF] skip tables: the march spent most of the build
+                            // stepping 1px at a time ACROSS the completed set. These
+                            // teleport to the next non-set pixel in each direction
+                            // (distance counted exactly as stepping would have) —
+                            // identical results, ~10x fewer iterations.
+                            const setM = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) setM[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
+                            const skipR = new Int32Array(PN), skipL = new Int32Array(PN);
+                            const skipD = new Int32Array(PN), skipU = new Int32Array(PN);
+                            for (let y = 0; y < ph; y++) {
+                                let nxt = -1;
+                                for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; skipR[i] = nxt; if (!setM[i]) nxt = i; }
+                                nxt = -1;
+                                for (let x = 0; x < pw; x++) { const i = y*pw+x; skipL[i] = nxt; if (!setM[i]) nxt = i; }
+                            }
+                            for (let x = 0; x < pw; x++) {
+                                let nxt = -1;
+                                for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; skipD[i] = nxt; if (!setM[i]) nxt = i; }
+                                nxt = -1;
+                                for (let y = 0; y < ph; y++) { const i = y*pw+x; skipU[i] = nxt; if (!setM[i]) nxt = i; }
+                            }
+                            // march one direction: teleport while in-set, step while out
+                            const march = (i0, td, skip, delta, distDiv, rowLocal) => {
+                                let j = i0, st = 0;
+                                const row0 = (i0 / pw) | 0;
+                                while (st < REACH) {
+                                    if (j === i0 || setM[j]) {
+                                        const nj = skip[j];
+                                        if (nj < 0) return -1;
+                                        st += Math.abs(nj - j) / distDiv;
+                                        j = nj;
+                                    } else {
+                                        j += delta; st += 1;
+                                        if (j < 0 || j >= PN) return -1;
+                                        if (rowLocal && ((j / pw) | 0) !== row0) return -1;
+                                    }
+                                    if (st > REACH) return -1;   // original tested up to st === REACH inclusive
+                                    if (!setM[j] && fillSrc[j] && Math.abs(depth[j] - td) <= tolD) return j; // hit
+                                }
+                                return -1;
+                            };
+                            // (march returns the hit index; cost recovered from geometry)
                             for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                                 const i = y*pw+x;
-                                if (!inSet(i)) continue;
+                                if (!setM[i]) continue;
                                 const td = plugDepth[i];
                                 let bestJ = -1, bestCost = 1e9;
-                                for (let k = 0; k < 4; k++) {
-                                    const dx = (k===0)?1:(k===1)?-1:0, dy = (k===2)?1:(k===3)?-1:0;
-                                    const pen = (k >= 2) ? 2 : 1;   // scenes stratify horizontally: prefer same-row
-                                    let cx2 = x, cy2 = y, st = 0;
-                                    while (st < REACH) {
-                                        cx2 += dx; cy2 += dy; st++;
-                                        if (cx2 < 0 || cx2 >= pw || cy2 < 0 || cy2 >= ph) break;
-                                        const j = cy2*pw+cx2;
-                                        if (inSet(j)) continue;                    // still crossing the completed set
-                                        if (fillSrc[j] && Math.abs(depth[j] - td) <= tolD) {
-                                            if (st * pen < bestCost) { bestCost = st * pen; bestJ = j; }
-                                            break;                                 // first hit per direction
-                                        }
-                                    }
+                                {
+                                    const hR = march(i, td, skipR, 1, 1, true);
+                                    if (hR >= 0) { const c = (hR - i); if (c < bestCost) { bestCost = c; bestJ = hR; } }
+                                    const hL = march(i, td, skipL, -1, 1, true);
+                                    if (hL >= 0) { const c = (i - hL); if (c < bestCost) { bestCost = c; bestJ = hL; } }
+                                    const hD = march(i, td, skipD, pw, pw, false);
+                                    if (hD >= 0) { const c = 2 * ((hD - i) / pw); if (c < bestCost) { bestCost = c; bestJ = hD; } }
+                                    const hU = march(i, td, skipU, -pw, pw, false);
+                                    if (hU >= 0) { const c = 2 * ((i - hU) / pw); if (c < bestCost) { bestCost = c; bestJ = hU; } }
                                 }
                                 if (bestJ >= 0) {
                                     // step a few px deeper past the rim (same escape the
@@ -8448,6 +8581,7 @@ function buildBackgroundLayer() {
                                 // flood-carried rim colour (still never foreground)
                             }
                             console.log('[RUNG-PLUG] depth-consistent continuation: ' + fixedN + 'px recoloured');
+                _mark('continuation');
                         }
                         // ---- UNDER-SHEET COLOURS (MPI slice 2): same rule, target =
                         // the sheet's carried far-side depth. The sheet behind the
@@ -8496,26 +8630,41 @@ function buildBackgroundLayer() {
                             // soften flat patches (Jacobi, sheet only; 24 passes — the
                             // same count the backdrop plate needed to kill the per-row
                             // source-alternation comb, for the same reason)
-                            let A3 = new Float32Array(PN*3);
-                            for (let i = 0; i < PN; i++) if (midBand[i]) { A3[i*3]=midFillRGB[i*3]; A3[i*3+1]=midFillRGB[i*3+1]; A3[i*3+2]=midFillRGB[i*3+2]; }
-                            let B3 = new Float32Array(PN*3);
-                            for (let p = 0; p < 24; p++) {
-                                B3.set(A3);
-                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
-                                    if (!midBand[i]) continue;
-                                    let s0=0,s1=0,s2=0,c0=0;
-                                    for (const j of [i, i-1, i+1, i-pw, i+pw]) { if (!midBand[j]) continue;
-                                        s0+=A3[j*3]; s1+=A3[j*3+1]; s2+=A3[j*3+2]; c0++; }
-                                    if (c0) { B3[i*3]=s0/c0; B3[i*3+1]=s1/c0; B3[i*3+2]=s2/c0; }
+                            // [PERF] compact member list + precomputed in-band
+                            // neighbours (the full-frame scan with per-pixel array
+                            // allocation dominated this stage). Results identical.
+                            {
+                                let nM2 = 0;
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) if (midBand[y*pw+x]) nM2++;
+                                const ML = new Int32Array(nM2); nM2 = 0;
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x; if (midBand[i]) ML[nM2++] = i; }
+                                const NB4 = new Int32Array(nM2*4);
+                                for (let q3 = 0; q3 < nM2; q3++) { const i = ML[q3];
+                                    NB4[q3*4]   = midBand[i-1]  ? i-1  : -1;
+                                    NB4[q3*4+1] = midBand[i+1]  ? i+1  : -1;
+                                    NB4[q3*4+2] = midBand[i-pw] ? i-pw : -1;
+                                    NB4[q3*4+3] = midBand[i+pw] ? i+pw : -1;
                                 }
-                                const tt = A3; A3 = B3; B3 = tt;
-                            }
-                            for (let i = 0; i < PN; i++) if (midBand[i]) {
-                                midFillRGB[i*3]=Math.max(0,Math.min(255,A3[i*3]|0));
-                                midFillRGB[i*3+1]=Math.max(0,Math.min(255,A3[i*3+1]|0));
-                                midFillRGB[i*3+2]=Math.max(0,Math.min(255,A3[i*3+2]|0));
+                                let A3 = new Float32Array(PN*3);
+                                for (let i = 0; i < PN; i++) if (midBand[i]) { A3[i*3]=midFillRGB[i*3]; A3[i*3+1]=midFillRGB[i*3+1]; A3[i*3+2]=midFillRGB[i*3+2]; }
+                                let B3 = A3.slice();
+                                for (let p = 0; p < 24; p++) {
+                                    for (let q3 = 0; q3 < nM2; q3++) { const i = ML[q3], i3 = i*3;
+                                        let s0 = A3[i3], s1 = A3[i3+1], s2 = A3[i3+2], c0 = 1;
+                                        for (let k3 = 0; k3 < 4; k3++) { const j = NB4[q3*4+k3];
+                                            if (j >= 0) { const j3 = j*3; s0 += A3[j3]; s1 += A3[j3+1]; s2 += A3[j3+2]; c0++; } }
+                                        B3[i3] = s0/c0; B3[i3+1] = s1/c0; B3[i3+2] = s2/c0;
+                                    }
+                                    const tt = A3; A3 = B3; B3 = tt;
+                                }
+                                for (let i = 0; i < PN; i++) if (midBand[i]) {
+                                    midFillRGB[i*3]=Math.max(0,Math.min(255,A3[i*3]|0));
+                                    midFillRGB[i*3+1]=Math.max(0,Math.min(255,A3[i*3+1]|0));
+                                    midFillRGB[i*3+2]=Math.max(0,Math.min(255,A3[i*3+2]|0));
+                                }
                             }
                             console.log('[MPI] under-sheet colours: ' + midCont + 'px row-continued, rest pruned (no continuation exists)');
+                _mark('midsheet-colours');
                             // hoist for the mesh build at function end (outside this block's scope)
                             _midBand = midBand; _midDepthV = midDepthV; _midRimC = midRimC; _midFillRGB = midFillRGB; _midPW = pw; _midPH = ph; _midFrontD = depth;
                         }
@@ -8526,18 +8675,40 @@ function buildBackgroundLayer() {
                         // the dune edge) adjacent rims alternate dark/light and 8
                         // passes left a visible vertical comb; ~5px diffusion
                         // radius kills the period.
-                        let A2 = fillRGB, B2 = new Float32Array(PN * 3);
-                        for (let p = 0; p < 24; p++) {
-                            B2.set(A2);
+                        // [PERF] compact index list + ping-pong over BOTH buffers
+                        // (results identical to the full-frame scan: untouched
+                        // pixels are equal in both buffers by initialisation).
+                        {
+                            let nJ = 0;
                             for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
-                                if (!(underMask[i] || band[i])) continue;
-                                for (let c = 0; c < 3; c++)
-                                    B2[i*3+c] = 0.2 * A2[i*3+c] + 0.2 * (A2[(i-1)*3+c] + A2[(i+1)*3+c] + A2[(i-pw)*3+c] + A2[(i+pw)*3+c]);
+                                if (underMask[i] || band[i]) nJ++; }
+                            const JL = new Int32Array(nJ);
+                            nJ = 0;
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (underMask[i] || band[i]) JL[nJ++] = i; }
+                            // planar channels: 3 independent streams, better cache
+                            // behaviour than interleaved (results identical)
+                            const P0a = new Float32Array(PN), P1a = new Float32Array(PN), P2a = new Float32Array(PN);
+                            for (let i = 0; i < PN; i++) { P0a[i] = fillRGB[i*3]; P1a[i] = fillRGB[i*3+1]; P2a[i] = fillRGB[i*3+2]; }
+                            let A0 = P0a, A1 = P1a, A2p = P2a;
+                            let B0 = P0a.slice(), B1 = P1a.slice(), B2p = P2a.slice();
+                            for (let p = 0; p < 24; p++) {
+                                for (let q2 = 0; q2 < nJ; q2++) { const i = JL[q2];
+                                    const l = i-1, r = i+1, u = i-pw, d = i+pw;
+                                    // float grouping kept EXACTLY as the original (0.2*self + 0.2*sum4)
+                                    B0[i] = 0.2 * A0[i] + 0.2 * (A0[l] + A0[r] + A0[u] + A0[d]);
+                                    B1[i] = 0.2 * A1[i] + 0.2 * (A1[l] + A1[r] + A1[u] + A1[d]);
+                                    B2p[i] = 0.2 * A2p[i] + 0.2 * (A2p[l] + A2p[r] + A2p[u] + A2p[d]);
+                                }
+                                let t2 = A0; A0 = B0; B0 = t2;
+                                t2 = A1; A1 = B1; B1 = t2;
+                                t2 = A2p; A2p = B2p; B2p = t2;
                             }
-                            const t2 = A2; A2 = B2; B2 = t2;
+                            for (let q2 = 0; q2 < nJ; q2++) { const i = JL[q2];
+                                fillRGB[i*3] = A0[i]; fillRGB[i*3+1] = A1[i]; fillRGB[i*3+2] = A2p[i]; }
                         }
-                        if (A2 !== fillRGB) fillRGB.set(A2);
                     }
+                _mark('jacobi-main');
                     const order = { length: 0 }; // (retained name for the log below)
                     for (let i = 0; i < PN; i++) if (band[i]) order.length++;
                     // Stash directional gap data for the SD-export bundle (native res, top-row-first)
@@ -8549,12 +8720,39 @@ function buildBackgroundLayer() {
                     // Bleed the band's fill colour a few px OUT into the surrounding
                     // non-band so the fill texture's bilinear edge blends fill->fill,
                     // not fill->black. Alpha stays sharp (= band); only RGB is bled.
-                    { let filled = new Uint8Array(PN); for (let i=0;i<PN;i++) filled[i]=band[i]?1:0;
+                    { // [PERF] frontier generations instead of BLEED full-frame passes
+                      // with buffer copies. Exact: candidates are discovered from the
+                      // previous generation, then coloured by checking their own
+                      // neighbours in the ORIGINAL l,r,u,d priority against the
+                      // previous-generation state — identical pixels, identical colours.
+                      const filled = new Uint8Array(PN);
+                      for (let i = 0; i < PN; i++) filled[i] = band[i] ? 1 : 0;
                       const BLEED = Math.max(3, (bgBandCutDilatePx|0) + 1); // must cover the cut ring
-                      for (let p=0;p<BLEED;p++){ const prev=filled.slice();
-                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(prev[i])continue;
-                          const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
-                          for (const j of nb){ if(j>=0&&prev[j]){ fillRGB[i*3]=fillRGB[j*3];fillRGB[i*3+1]=fillRGB[j*3+1];fillRGB[i*3+2]=fillRGB[j*3+2]; filled[i]=1; break; } } } } }
+                      let frontier = [];
+                      for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                          if (!filled[i]) continue;
+                          if ((x>0&&!filled[i-1])||(x<pw-1&&!filled[i+1])||(y>0&&!filled[i-pw])||(y<ph-1&&!filled[i+pw])) frontier.push(i); }
+                      const stamp = new Int32Array(PN);
+                      for (let p = 1; p <= BLEED; p++) {
+                          const cand = [];
+                          for (let f = 0; f < frontier.length; f++) {
+                              const i = frontier[f]; const x = i%pw, y = (i/pw)|0;
+                              let j;
+                              if (x > 0)    { j = i-1;  if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (x < pw-1) { j = i+1;  if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (y > 0)    { j = i-pw; if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (y < ph-1) { j = i+pw; if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                          }
+                          for (let c = 0; c < cand.length; c++) {
+                              const i = cand[c]; const x = i%pw, y = (i/pw)|0;
+                              // original neighbour priority: left, right, up, down (prev state)
+                              const j = (x>0&&filled[i-1]) ? i-1 : (x<pw-1&&filled[i+1]) ? i+1 : (y>0&&filled[i-pw]) ? i-pw : (y<ph-1&&filled[i+pw]) ? i+pw : -1;
+                              if (j >= 0) { fillRGB[i*3]=fillRGB[j*3]; fillRGB[i*3+1]=fillRGB[j*3+1]; fillRGB[i*3+2]=fillRGB[j*3+2]; }
+                          }
+                          for (let c = 0; c < cand.length; c++) filled[cand[c]] = 1;
+                          frontier = cand;
+                      }
+                    }
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
@@ -8564,7 +8762,8 @@ function buildBackgroundLayer() {
                         fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2];
                         fill[o+3] = bandAlpha[i];
                     }
-                    const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    _mark('bleed+filltex');
+                        const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
                     fillDT.needsUpdate = true; fillDT.flipY = false;
                     fillDT.minFilter = THREE.LinearFilter; fillDT.magFilter = THREE.LinearFilter;
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
@@ -8718,7 +8917,8 @@ function buildBackgroundLayer() {
                             bgExtGeom = new THREE.PlaneGeometry(gW, gH, segW, segH);
                             // stash for the SD outpaint bundle (top-row-first, extended res)
                             bgExtendExport = { mx, my, pw, ph, EPW, EPH, depth: extDepth, fill: extFill, mask: extMask };
-                            console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
+                            _mark('scene-extension');
+                        console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
                                 EPW + 'x' + EPH + ' (' + (Date.now()-tX) + 'ms)');
                         }
                     }
@@ -8819,6 +9019,8 @@ function buildBackgroundLayer() {
             } catch (e) { console.warn('[MPI] under-sheet mesh failed:', e); }
         }
 
+        _mark('meshes');
+        console.log('[PERF] build ' + (Date.now() - _pt0) + 'ms | ' + _perf.join(' | '));
         console.log('[BG-LAYER] built: band + plug depth + baked color, mesh added behind layer 0');
         return true;
     } catch (e) {
