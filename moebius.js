@@ -6644,8 +6644,22 @@ function bgDirectionalPlug(depth, W, H, opts) {
         if (y<H-1) { j=i+W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } } }
     const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
     const ring = new Uint8Array(N);
+    // TOPOLOGY (slope continuation): ring pixels adjacent to the TRUE far-side
+    // surface anchor at that surface's OWN depth instead of the carried rim
+    // value. The harmonic sweeps then interpolate between real surface
+    // anchors at the reveal edge and the flat rim cap deep inside — the plug
+    // CONTINUES the surface's slope across the reveal (a ground plane keeps
+    // being a ground plane) instead of plateauing at the rim sample. Anchors
+    // are only taken from neighbours within STEP of the rim (same surface
+    // class), so the plug can never anchor to the occluder and protrude.
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
-        if((x>0&&!band[i-1])||(x<W-1&&!band[i+1])||(y>0&&!band[i-W])||(y<H-1&&!band[i+W])) ring[i]=1; }
+        let isRing = false, anchor = -1, anchorD = 1e9;
+        let j;
+        if (x>0)   { j=i-1; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (x<W-1) { j=i+1; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (y>0)   { j=i-W; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (y<H-1) { j=i+W; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (isRing){ ring[i]=1; if(anchor>=0) plug[i]=depth[anchor]; } }
     // [PERF] harmonic sweeps over a COMPACT interior list with precomputed
     // clamped neighbour indices (was SWEEPS x full-frame = 300M visits to
     // update the band interior only). Untouched pixels are equal in both
@@ -7492,6 +7506,7 @@ function buildBackgroundLayer() {
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
                 let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
+                let floorField = null;  // local lower envelope (shared: floor rind + under-sheet)
                 let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
                 let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
                 let midRimC = null;     // carried far-side rim pixel index (colour base)
@@ -7995,6 +8010,29 @@ function buildBackgroundLayer() {
                         }
                     }
                     console.log('[RUNG-PLUG] completion flood: unified nearest-rim-first, gate 0.02');
+                    // FLOOR RIND (generality): the flood only enters through BAND
+                    // seeds — dark-on-dark soft silhouettes never seed a band, so
+                    // their near content stayed in the plate (measured: the
+                    // dancer's-thigh doppelganger blob on the cave asset). An
+                    // occluder is anything standing ABOVE ITS LOCAL FLOOR — the
+                    // under-sheet's own field, no global class threshold. Sweep
+                    // the missed pixels into the rind; they take diffused +
+                    // membrane depth and continuation colours (no carried rim).
+                    floorField = bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
+                    {
+                        // sweep radius = 4x the band budget (~ the maximum parallax
+                        // shift): plate content deeper inside an occluder than the
+                        // maximum reveal can never be exposed, so this radius covers
+                        // every exposable pixel — wide occluders included (the
+                        // budget-radius floor saw a wide core as its own floor).
+                        const floorBig = bgSlide2D(depth, pw, ph, (bgBandMaxGrowPx | 0) * 4, true);
+                        let nFloorAdd = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (fgm[i] || band[i]) continue;
+                            if (depth[i] - floorBig[i] > fgTearStep) { fgm[i] = 1; nFloorAdd++; }
+                        }
+                        if (nFloorAdd) console.log('[RUNG-PLUG] floor rind: +' + nFloorAdd + 'px above-local-floor (band-less silhouettes)');
+                    }
                     // Reject rims that are themselves under an occluder (internal
                     // figure cliffs: arm-over-torso seeds carry FIGURE colours —
                     // bright dashes in the fill). Those pixels fall back to the
@@ -8018,6 +8056,78 @@ function buildBackgroundLayer() {
                         underMask = fgm;
                         console.log('[RUNG-PLUG] plug depth completed under occluders (' + nFg + 'px rind, diffused)');
                 _mark('completion-flood');
+                // ---- MEMBRANE CORRECTION (topology): the plug must CONTINUE the
+                // surfaces it fills across, not plateau at carried rim values. The
+                // nearest-rim-first flood prefers NEAR rims (right for ground
+                // contacts) but behind TALL objects it extends the ground upward
+                // above the horizon — the depth analog of the colour bug fixed in
+                // the doppelganger addendum. Correction: where a completed pixel's
+                // row (and/or column) is bounded on BOTH sides by non-completed
+                // surface pixels of the SAME class (within bgBandStep), its depth
+                // moves to the inverse-distance-weighted blend of those linear
+                // continuation lines. Sky rows bridge sky across the mountain; the
+                // horizon stripe continues itself; the under-leg corridor stays
+                // dune (its row line IS dune). One-sided reveals keep the flood
+                // value. Anchors are real visible surfaces, so the result is
+                // bounded by them — no protrusion channel.
+                {
+                    const setP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) setP[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
+                    const sR = new Int32Array(PN), sL = new Int32Array(PN), sD = new Int32Array(PN), sU = new Int32Array(PN);
+                    for (let y = 0; y < ph; y++) {
+                        let nxt = -1;
+                        for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; sR[i] = nxt; if (!setP[i]) nxt = i; }
+                        nxt = -1;
+                        for (let x = 0; x < pw; x++) { const i = y*pw+x; sL[i] = nxt; if (!setP[i]) nxt = i; }
+                    }
+                    for (let x = 0; x < pw; x++) {
+                        let nxt = -1;
+                        for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; sD[i] = nxt; if (!setP[i]) nxt = i; }
+                        nxt = -1;
+                        for (let y = 0; y < ph; y++) { const i = y*pw+x; sU[i] = nxt; if (!setP[i]) nxt = i; }
+                    }
+                    let corrected = 0;
+                    const SAME = bgBandStep;   // same-surface gate, existing constant
+                    for (let i = 0; i < PN; i++) {
+                        if (!setP[i]) continue;
+                        let num = 0, den = 0;
+                        const aL = sL[i], aR = sR[i];
+                        if (aL >= 0 && aR >= 0) {
+                            const dl = depth[aL], dr = depth[aR];
+                            if (Math.abs(dl - dr) <= SAME) {
+                                const distL = i - aL, distR = aR - i;   // same row: index distance = x distance
+                                const v = dl + (dr - dl) * (distL / (distL + distR));
+                                const w = 1 / (distL + distR);
+                                num += v * w; den += w;
+                            }
+                        }
+                        const aU = sU[i], aD = sD[i];
+                        if (aU >= 0 && aD >= 0) {
+                            const du = depth[aU], dd2 = depth[aD];
+                            if (Math.abs(du - dd2) <= SAME) {
+                                const distU = (i - aU) / pw, distD = (aD - i) / pw;
+                                const v = du + (dd2 - du) * (distU / (distU + distD));
+                                const w = 1 / (distU + distD);
+                                num += v * w; den += w;
+                            }
+                        }
+                        if (den > 0) {
+                            const v = num / den;
+                            // ONE-SIDED: the flood value is the contract's lower bound
+                            // (the LOCAL far rim). The membrane may move the plug
+                            // FARTHER (ground wrongly carried above the horizon → sky)
+                            // but never meaningfully NEARER: in CONCAVE scenes (cave
+                            // corridors, gaps between bodies) both row anchors are
+                            // near walls and the bridge would cross the passage
+                            // between them — measured as plate protrusions on the
+                            // cave and warrior assets. Within one tear-step is
+                            // allowed (contact smoothing).
+                            if (v - plugDepth[i] <= fgTearStep && Math.abs(v - plugDepth[i]) > 0.002) { plugDepth[i] = v; corrected++; }
+                        }
+                    }
+                    console.log('[RUNG-PLUG] membrane correction: ' + corrected + 'px re-anchored to surface continuation lines');
+                    _mark('membrane');
+                }
                     }
                 }
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
@@ -8181,7 +8291,7 @@ function buildBackgroundLayer() {
                         // far sliver — the backdrop is the true next surface).
                         if (bgMPIMode) {
                             const RB = bgBandMaxGrowPx | 0;
-                            const fl = bgSlide2D(depth, pw, ph, RB, true);   // [PERF] van Herk O(N), exact
+                            const fl = floorField || bgSlide2D(depth, pw, ph, RB, true);   // shared with the floor rind
                             midBand = new Uint8Array(PN);
                             midDepthV = fl;
                             midRimC = new Int32Array(PN).fill(-1);
@@ -8844,7 +8954,11 @@ function buildBackgroundLayer() {
                                     extFill[di*3+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
                                     extFill[di*3+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
                                 } else {
-                                    extDepth[di] = extDepthSmooth[di*3] / 255;
+                                    // one-quantum setback: the margin depth passed through an
+                                    // 8-bit channel; quantization UP can exceed the plate's
+                                    // z-bias under bilinear sampling and win the z-test over
+                                    // the FG at the frame weld (measured protrusion seam).
+                                    extDepth[di] = Math.max(0, extDepthSmooth[di*3] - 1) / 255;
                                     extFill[di*3]   = extColorSmooth[di*3];
                                     extFill[di*3+1] = extColorSmooth[di*3+1];
                                     extFill[di*3+2] = extColorSmooth[di*3+2];
@@ -8961,9 +9075,11 @@ function buildBackgroundLayer() {
                 for (let y = 0; y < phh; y++) { const s = y*pww, d = (phh-1-y)*pww;
                     for (let x = 0; x < pww; x++) {
                         const i = s+x, o = (d+x)*4;
-                        // outside the band: FRONT surface, so boundary triangles weld
-                        // to the surroundings instead of walling to the far plane
-                        mD[d+x] = midBand[i] ? midDepthV[i] : depth[i];
+                        // outside the band: FRONT surface with a small setback (the
+                        // plate's own bias constant), so half-texel bilinear blends at
+                        // the sheet boundary can never beat the FG's z (measured
+                        // protrusion flecks at ribbon/sheet boundaries)
+                        mD[d+x] = midBand[i] ? midDepthV[i] : Math.max(0, depth[i] - 0.004);
                         if (midBand[i]) { mF[o]=midFillRGB[i*3]; mF[o+1]=midFillRGB[i*3+1]; mF[o+2]=midFillRGB[i*3+2]; mF[o+3]=255; }
                         else { mF[o+3]=0; }
                     }
