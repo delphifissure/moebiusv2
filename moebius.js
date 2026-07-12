@@ -6074,11 +6074,51 @@ function exportSDBundle() {
             meta.outpaintMarginPx = [xE.mx, xE.my];
             meta.outpaintSourceRes = [xE.pw, xE.ph];
         }
-        // PER-LAYER completion set (MPI slice 3b) — one color/depth/mask triple
-        // per layer with strip content; SD inpaints each layer with its own
-        // context only, then the results reimport as per-layer textures.
-        const nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
-        if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
+        // PER-LAYER completion set — v2 planes when the full-plane stack is
+        // built (one color/depth/mask triple per plane with claimed content;
+        // filenames round-trip through Import SD Layer Results), else the v1
+        // strip set.
+        let nLayerFiles = 0;
+        if (bgMPIV2Export && bgMPIV2Export.length) {
+            const layersMetaV2 = [];
+            for (const R of bgMPIV2Export) {
+                let nClm = 0; for (let i = 0; i < R.clm.length; i++) nClm += R.clm[i];
+                layersMetaV2.push({ tag: R.tag, bin: R.k, meanDepth: +R.meanD.toFixed(4), size: [R.bw, R.bh], claimTexels: nClm });
+                if (!nClm) continue;
+                const mkV = (fill) => { const cv = document.createElement('canvas'); cv.width = R.bw; cv.height = R.bh;
+                    const cc = cv.getContext('2d'); const id = cc.createImageData(R.bw, R.bh); fill(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+                const BNr = R.bw * R.bh;
+                // texture rows are bottom-first; PNGs are top-first
+                const flip = (y) => (R.bh - 1 - y);
+                files.push({ name: `v2_${R.tag}_bin${R.k}_color.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = (flip(y)*R.bw + x) * 4, o = (y*R.bw + x) * 4;
+                        d[o] = R.cT[s]; d[o+1] = R.cT[s+1]; d[o+2] = R.cT[s+2]; d[o+3] = R.cT[s+3];
+                    } }) });
+                files.push({ name: `v2_${R.tag}_bin${R.k}_depth.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = flip(y)*R.bw + x, o = (y*R.bw + x) * 4;
+                        const v = Math.max(0, Math.min(255, (R.dT[s]*255) | 0));
+                        d[o] = v; d[o+1] = v; d[o+2] = v; d[o+3] = R.cT[s*4+3];
+                    } }) });
+                files.push({ name: `v2_${R.tag}_bin${R.k}_mask_inpaint.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = flip(y)*R.bw + x, o = (y*R.bw + x) * 4;
+                        const v = R.clm[s] ? 255 : 0;
+                        d[o] = v; d[o+1] = v; d[o+2] = v; d[o+3] = 255;
+                    } }) });
+                meta.files[`v2_${R.tag}_bin${R.k}_color.png`] = `v2 plane ${R.tag}/bin${R.k}: visible + coarse completion (alpha = plane extent) — SD context`;
+                meta.files[`v2_${R.tag}_bin${R.k}_depth.png`] = `v2 plane ${R.tag}/bin${R.k}: smoothed plane depth — ControlNet conditioning`;
+                meta.files[`v2_${R.tag}_bin${R.k}_mask_inpaint.png`] = `v2 plane ${R.tag}/bin${R.k}: white = claimed region to regenerate with this plane's context`;
+                nLayerFiles++;
+            }
+            meta.mpiV2Planes = { count: bgMPIV2Export.length, emitted: nLayerFiles, planes: layersMetaV2,
+                note: 'inpaint each plane independently; reimport via Import SD Layer Results (filenames as emitted)' };
+            console.log('[SD-BUNDLE] v2 plane completion set: ' + nLayerFiles + ' planes emitted');
+        } else {
+            nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
+            if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
+        }
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -6531,6 +6571,7 @@ let bgMPIMode = true;
 let bgMPIFullPlanes = true;  // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on; v1 remains via the checkbox
 let bgMPIV2Bins = 10;        // v2 quantile bins (separate from the v1 partition's top-K)
 let mpiFullMeshes = null;    // v2 layer plane meshes
+let bgMPIV2Export = null;    // v2 per-plane SD records: {tag,k,rank,bw,bh,meanD,cT,dT,clm,cTex}
 let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
 let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
@@ -7334,11 +7375,11 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         // soften anchor-continuation striation (4 Jacobi passes over the
         // claimed texels; visible texels stay untouched and act as boundary
         // conditions, so silhouette-adjacent colours pull real content in)
+        const clm = new Uint8Array(BN);
+        for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
+            for (let x = 0; x < bw; x++) { const gx = bx0+x, i = gy*pw+gx;
+                if (reg[i] && !isV[i]) clm[dRow+x] = 1; } }
         {
-            const clm = new Uint8Array(BN);
-            for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
-                for (let x = 0; x < bw; x++) { const gx = bx0+x, i = gy*pw+gx;
-                    if (reg[i] && !isV[i]) clm[dRow+x] = 1; } }
             const idxC = [];
             for (let y = 1; y < bh-1; y++) for (let x = 1; x < bw-1; x++) { const o = y*bw+x;
                 if (clm[o] && cT[(o-1)*4+3] && cT[(o+1)*4+3] && cT[(o-bw)*4+3] && cT[(o+bw)*4+3]) idxC.push(o); }
@@ -7424,6 +7465,7 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         m2.uniforms.u_useEdgeMask.value = false;
         if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
         m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
+        if (bgMPIV2Export) bgMPIV2Export.push({ tag, k, rank, bw, bh, meanD: meanDV[k0], cT, dT, clm, cTex });
         const mesh2 = new THREE.Mesh(g2, m2);
         mesh2.userData.v2Plane = true;      // depth pass: counts as scene (FG-class), not completion
         mesh2.userData.v2rank = rank;       // far -> near
@@ -8370,6 +8412,7 @@ function buildBackgroundLayer() {
                 // is skipped: this branch replaces it and returns.
                 if (bgMPIFullPlanes) {
                     const tV0 = Date.now();
+                    bgMPIV2Export = [];
                     if (mpiFullMeshes) { for (const m of mpiFullMeshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } mpiFullMeshes = null; }
                     if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
                     if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
@@ -10215,6 +10258,33 @@ function _wireDebugSheetControls() {
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
     const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', buildBackgroundLayer);
+    // AUTO-BUILD: the layer stack builds itself when media is ready and
+    // whenever the primary layer's depth SOURCE changes (new upload). The
+    // build itself swaps display textures, so the guard records the
+    // post-build identity — no rebuild loop. Button text doubles as the
+    // status indicator (the build is synchronous; the text paints first
+    // because the build is deferred one tick).
+    window.bgAutoBuild = true;
+    {
+        let lastDepthKey = null, building = false;
+        const btn = document.getElementById('bgLayerBuildBtn');
+        setInterval(() => {
+            if (!window.bgAutoBuild || building || (typeof isSweeping !== 'undefined' && isSweeping)) return;
+            const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+            if (!L0 || !L0.mesh || !L0.textures || !L0.textures.depth) return;
+            const key = L0.textures.depth.uuid;
+            if (key === lastDepthKey) return;
+            building = true;
+            const label = btn ? btn.textContent : '';
+            if (btn) btn.textContent = '⏳ building layers…';
+            setTimeout(() => {
+                try { buildBackgroundLayer(); } catch (e) { console.error('[AUTO-BUILD]', e); }
+                lastDepthKey = mediaLayers[0]?.textures?.depth?.uuid || key;
+                if (btn) btn.textContent = label;
+                building = false;
+            }, 60);
+        }, 800);
+    }
     document.getElementById('bgColorImport')?.addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
@@ -12142,8 +12212,9 @@ async function snapshotAndFill() {
 // conditioning input and stays as the live pipeline established it, so
 // structure (and every verified contract property) is untouched.
 async function importMPILayerPatches() {
+    if (bgMPIV2Export && bgMPIV2Export.length) return importMPIV2PlanePatches();
     if (!bgMPIStripExport || !mpiStripMeshes || !mpiStripMeshes.length) {
-        alert('Build the BG layer first (with MPI strips on) — there are no layer sheets to update.');
+        alert('Build the BG layer first — there are no layer sheets to update.');
         return;
     }
     const input = document.createElement('input');
@@ -12171,6 +12242,56 @@ async function importMPILayerPatches() {
         if (nPx) applied++; else skipped.push(f.name + ' (layer ' + k + ' owns no strip texels)');
     }
     alert('Layer import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+// V2 PLANE REIMPORT: accept any subset of SD-inpainted
+// v2_{tag}_bin{k}_color.png files (filenames as the bundle emitted them)
+// and write each one's pixels into that plane's LIVE colour texture at
+// its claimed texels. Colours only — plane depth was the conditioning
+// input and stays, so structure is untouched.
+async function importMPIV2PlanePatches() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/*'; input.multiple = true;
+    const fileList = await new Promise((resolve) => {
+        input.onchange = (e) => resolve(Array.from(e.target.files || []));
+        input.click();
+    });
+    if (!fileList.length) return;
+    const loadImg = (file) => new Promise((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = (e) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = e.target.result; };
+        rd.onerror = reject; rd.readAsDataURL(file);
+    });
+    let applied = 0; const skipped = [];
+    for (const f of fileList) {
+        const m = /v2_(L\d+)_bin(\d+)_color/i.exec(f.name);
+        if (!m) { skipped.push(f.name + ' (name must contain v2_{tag}_bin{k}_color)'); continue; }
+        const R = bgMPIV2Export.find(r => r.tag === m[1] && r.k === parseInt(m[2], 10));
+        if (!R) { skipped.push(f.name + ' (no such plane in the current build)'); continue; }
+        let img;
+        try { img = await loadImg(f); } catch (e) { skipped.push(f.name + ' (unreadable)'); continue; }
+        const nPx = applyMPIV2PlaneImage(R, img);
+        console.log('[MPI-V2-IMPORT] ' + R.tag + '/bin' + R.k + ': ' + nPx + 'px updated from ' + f.name);
+        if (nPx) applied++; else skipped.push(f.name + ' (plane has no claimed texels)');
+    }
+    alert('v2 plane import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+function applyMPIV2PlaneImage(R, img) {
+    const cv = document.createElement('canvas'); cv.width = R.bw; cv.height = R.bh;
+    const cc = cv.getContext('2d', { willReadFrequently: true });
+    cc.drawImage(img, 0, 0, R.bw, R.bh);
+    const px = cc.getImageData(0, 0, R.bw, R.bh).data;   // top-first
+    let nPx = 0;
+    for (let y = 0; y < R.bh; y++) { const srcRow = y * R.bw, dstRow = (R.bh - 1 - y) * R.bw;  // texture rows bottom-first
+        for (let x = 0; x < R.bw; x++) {
+            const s = (srcRow + x) * 4, d = dstRow + x;
+            if (!R.clm[d]) continue;
+            if (px[s + 3] < 8) continue;   // transparent in the SD output: keep coarse
+            R.cT[d*4] = px[s]; R.cT[d*4+1] = px[s+1]; R.cT[d*4+2] = px[s+2];
+            nPx++;
+        }
+    }
+    if (nPx) R.cTex.needsUpdate = true;
+    return nPx;
 }
 // Write one layer's SD colours into the strip slot textures (colours only;
 // depth stays as conditioned). Accepts any drawable (img or canvas).
