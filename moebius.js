@@ -7342,11 +7342,9 @@ function applyLiveBake(L) {
                 const GAP = 0.05;
                 const D = out.sharpened;
                 const adopt = new Float32Array(N);
-                const queue = [];
-                // Seed within r<=3: the depth silhouette rarely touches the
-                // stroke exactly — estimators put the cliff a couple px off.
-                // Propagate within r<=2 so 1-2px classification breaks
-                // (stroke junctions, AA'd corners) don't sever the run.
+                // Per-texel seed candidates (near non-stroke content within
+                // 3px — estimators put the cliff a couple px off the stroke).
+                const seedD = new Float32Array(N);
                 for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                     const i = y*w+x; if (!stroke[i]) continue;
                     let best = 0;
@@ -7356,7 +7354,45 @@ function applyLiveBake(L) {
                         const j = yy*w+xx;
                         if (!stroke[j] && D[j] > D[i] + GAP && D[j] > best) best = D[j];
                     }
-                    if (best > 0) { adopt[i] = best; queue.push(i); }
+                    if (best > 0) seedD[i] = best;
+                }
+                // CONTACT-FRACTION GATE (A37): a stroke touching nearer
+                // content is AMBIGUOUS — an occluder's outline (lift it) and
+                // a small far figure standing behind a ridge (leave it!) are
+                // locally identical; lifting the latter paints background
+                // content on top of the foreground. The discriminator is the
+                // CONNECTED COMPONENT's contact fraction: an outline HUGS
+                // its occluder (most texels have near content within 3px),
+                // and appendages like a staff are connected to that outline
+                // component, so they ride along; a far figure only touches
+                // the ridge at its feet (contact ~5%) and stays put.
+                const comp = new Int32Array(N);
+                const cSize = [0], cContact = [0];
+                const bfs = new Int32Array(N);
+                let nComp = 0;
+                for (let s = 0; s < N; s++) {
+                    if (!stroke[s] || comp[s]) continue;
+                    nComp++; cSize.push(0); cContact.push(0);
+                    let bh = 0, bt = 0; bfs[bt++] = s; comp[s] = nComp;
+                    while (bh < bt) {
+                        const i = bfs[bh++]; const x = i%w, y = (i/w)|0;
+                        cSize[nComp]++; if (seedD[i] > 0) cContact[nComp]++;
+                        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                            if (!dx && !dy) continue;
+                            const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                            const j = yy*w+xx;
+                            if (stroke[j] && !comp[j]) { comp[j] = nComp; bfs[bt++] = j; }
+                        }
+                    }
+                }
+                const compOK = new Uint8Array(nComp + 1);
+                let liftComps = 0;
+                for (let c = 1; c <= nComp; c++) {
+                    if (cSize[c] > 0 && cContact[c] / cSize[c] >= 0.25) { compOK[c] = 1; liftComps++; }
+                }
+                const queue = [];
+                for (let i = 0; i < N; i++) {
+                    if (seedD[i] > 0 && compOK[comp[i]]) { adopt[i] = seedD[i]; queue.push(i); }
                 }
                 let head = 0;
                 while (head < queue.length) {
