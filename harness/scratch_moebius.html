@@ -382,9 +382,6 @@
           <button id="importSDPatchButton" class="control-button" title="Import inpainted color and depth images back into the scene." style="background-color: #17a2b8; margin-bottom: 6px;">
             📤 Import SD Inpaint Result
           </button>
-          <button id="importMPILayersButton" class="control-button" title="Import SD-inpainted layer{k}_color.png files (any subset, filenames as exported): each replaces its layer's coarse strip colours in place." style="background-color: #17a2b8; margin-bottom: 6px;">
-            📤 Import SD Layer Results
-          </button>
           <button id="toggleSDPatchButton" class="control-button" title="Toggle visibility of imported SD patch." style="background-color: #6c757d;">
             👁️ Toggle SD Patch
           </button>
@@ -604,13 +601,7 @@
   </div>
 
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@latest/dist/tf-backend-webgl.min.js"></script>
-  
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
-  
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@latest/dist/face-landmarks-detection.min.js"></script>
-
+  <script src="vendor/three.min.js"></script>
+  <script>window.tf={setBackend:async()=>{},ready:async()=>{}};window.faceLandmarksDetection={SupportedModels:{MediaPipeFaceMesh:"m"},createDetector:async()=>({estimateFaces:async()=>[]})};console.log("[HARNESS] face libs stubbed");</script>
 <script src="moebius.js"></script> </body>
 </html>

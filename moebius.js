@@ -4825,8 +4825,8 @@ function renderNormalizedDepthPass() {
                     precision highp float;
                     
                     // Gap detection uniforms (shared with main material)
-                    uniform sampler2D u_depthMap;
-                    uniform sampler2D u_texture;
+                    uniform sampler2D displacementMap; // (D8 fix: shared uniform actually bound in image mode)
+                    uniform sampler2D map;
                     uniform sampler2D u_edgeMask;
                     uniform vec2 u_textureSize;
                     uniform vec2 u_resolution;
@@ -4851,7 +4851,7 @@ function renderNormalizedDepthPass() {
                     }
                     
                     float getDepth(vec2 uv) {
-                        return texture2D(u_depthMap, uv).r;
+                        return texture2D(displacementMap, uv).r;
                     }
                     
                     uniform bool u_isBackgroundLayer;
@@ -4865,7 +4865,7 @@ function renderNormalizedDepthPass() {
                             return;
                         }
 
-                        vec4 originalColor = texture2D(u_texture, vUv);
+                        vec4 originalColor = texture2D(map, vUv);
                         
                         bool isGap = false;
                         bool isTunnel = false; // Track if gap was detected by tunnel logic
@@ -4873,25 +4873,30 @@ function renderNormalizedDepthPass() {
                         
                         // TUNNEL DETECTION: Only flag pixels that are clearly interpolating
                         // between FG and BG depths (not just any mismatch)
-                        float sourceDepth = texture2D(u_depthMap, vUv).r;
+                        float sourceDepth = texture2D(displacementMap, vUv).r;
                         vec2 texel = 1.0 / u_textureSize;
                         
                         // Sample neighbors to find local depth range in source
-                        float d1 = texture2D(u_depthMap, vUv + vec2(-texel.x, -texel.y)).r;
-                        float d2 = texture2D(u_depthMap, vUv + vec2( 0.0,     -texel.y)).r;
-                        float d3 = texture2D(u_depthMap, vUv + vec2( texel.x, -texel.y)).r;
-                        float d4 = texture2D(u_depthMap, vUv + vec2(-texel.x,  0.0)).r;
-                        float d5 = texture2D(u_depthMap, vUv + vec2( texel.x,  0.0)).r;
-                        float d6 = texture2D(u_depthMap, vUv + vec2(-texel.x,  texel.y)).r;
-                        float d7 = texture2D(u_depthMap, vUv + vec2( 0.0,      texel.y)).r;
-                        float d8 = texture2D(u_depthMap, vUv + vec2( texel.x,  texel.y)).r;
+                        float d1 = texture2D(displacementMap, vUv + vec2(-texel.x, -texel.y)).r;
+                        float d2 = texture2D(displacementMap, vUv + vec2( 0.0,     -texel.y)).r;
+                        float d3 = texture2D(displacementMap, vUv + vec2( texel.x, -texel.y)).r;
+                        float d4 = texture2D(displacementMap, vUv + vec2(-texel.x,  0.0)).r;
+                        float d5 = texture2D(displacementMap, vUv + vec2( texel.x,  0.0)).r;
+                        float d6 = texture2D(displacementMap, vUv + vec2(-texel.x,  texel.y)).r;
+                        float d7 = texture2D(displacementMap, vUv + vec2( 0.0,      texel.y)).r;
+                        float d8 = texture2D(displacementMap, vUv + vec2( texel.x,  texel.y)).r;
                         
                         float maxSourceDepth = max(sourceDepth, max(max(max(d1, d2), max(d3, d4)), max(max(d5, d6), max(d7, d8))));
                         float minSourceDepth = min(sourceDepth, min(min(min(d1, d2), min(d3, d4)), min(min(d5, d6), min(d7, d8))));
                         float sourceRange = maxSourceDepth - minSourceDepth;
                         
-                        // Only consider tunnel detection if there's a significant depth discontinuity nearby
-                        if (sourceRange > 0.04) {
+                        // Only consider tunnel detection if there's a significant depth discontinuity nearby.
+                        // REVIEW: with the pre-torn FG these heuristics are obsolete
+                        // (torn cliffs are honest holes) and, once their samplers were
+                        // actually bound (D8 fix), they misfire on untorn sub-band
+                        // cliffs (striping at the dune/vehicle line). Explicitly off.
+                        const bool TUNNEL_HEURISTICS = false;
+                        if (TUNNEL_HEURISTICS && sourceRange > 0.04) {
                             // Check if interpolated depth falls BETWEEN the extremes (tunnel interpolation)
                             float marginFromMin = vNormalizedDepth - minSourceDepth;
                             float marginFromMax = maxSourceDepth - vNormalizedDepth;
@@ -5877,6 +5882,62 @@ function _canvasToPngBytes(canvas) {
 // interior gaps = flooded rim target plug, border = 0), the inpaint mask
 // (interior disocclusions), the outpaint mask (border void), the FG-occluder
 // mask, and a metadata json.
+// PER-LAYER SD FILES (MPI slice 3b): for every layer with strip content,
+// emit color (visible texels + coarse strip continuation, alpha = known),
+// depth (same coverage), and an inpaint mask (white = the strip region SD
+// should regenerate WITH layer-k context only). SD upgrades the texture
+// inside the landed structure; depth conditioning comes from the strip
+// depth, which already continues each surface's own slope. Returns the
+// number of layers emitted; testable independently of the zip path.
+function bgBuildMPILayerFiles(files, meta, canvasToPng) {
+    if (!bgMPIExport || !bgMPIStripExport || bgMPIExport.pw !== bgMPIStripExport.pw) return 0;
+    const mE = bgMPIExport, sE = bgMPIStripExport;
+    const mpw = mE.pw, mph = mE.ph, mN = mpw * mph;
+    const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+    const cImg = L0 && ((L0.textures.color && L0.textures.color.image) || (L0.elements && L0.elements.color));
+    if (!cImg) return 0;
+    const cv0 = document.createElement('canvas'); cv0.width = mpw; cv0.height = mph;
+    const cc0 = cv0.getContext('2d', { willReadFrequently: true });
+    cc0.drawImage(cImg, 0, 0, mpw, mph);
+    const scpx = cc0.getImageData(0, 0, mpw, mph).data;
+    const mk = (drawFn) => { const cv = document.createElement('canvas'); cv.width = mpw; cv.height = mph;
+        const cc = cv.getContext('2d'); const id = cc.createImageData(mpw, mph); drawFn(id.data); cc.putImageData(id, 0, 0); return canvasToPng(cv); };
+    const layersMeta = [];
+    let emitted = 0;
+    for (let k = 1; k <= mE.layers; k++) {
+        // strip ownership for this layer across both overlap slots
+        let nStrip = 0, nVis = 0;
+        for (let i = 0; i < mN; i++) {
+            if (sE.slotO[0][i] === k || sE.slotO[1][i] === k) nStrip++;
+            if (mE.texLayer[i] === k) nVis++;
+        }
+        layersMeta.push({ layer: k, meanDepth: +mE.meanD[k-1].toFixed(4), visibleTexels: nVis, stripTexels: nStrip });
+        if (!nStrip) continue;   // nothing to regenerate for this layer
+        const slotOf = (i) => sE.slotO[0][i] === k ? 0 : (sE.slotO[1][i] === k ? 1 : -1);
+        files.push({ name: `layer${k}_color.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4;
+                if (mE.texLayer[i] === k) { d[o]=scpx[o]; d[o+1]=scpx[o+1]; d[o+2]=scpx[o+2]; d[o+3]=255; }
+                else { const s = slotOf(i);
+                    if (s >= 0) { d[o]=sE.slotC[s][i*3]; d[o+1]=sE.slotC[s][i*3+1]; d[o+2]=sE.slotC[s][i*3+2]; d[o+3]=255; }
+                    else d[o+3]=0; } } }) });
+        files.push({ name: `layer${k}_depth.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4; let v = 0, a = 0;
+                if (mE.texLayer[i] === k) { v = Math.max(0, Math.min(255, (sE.depth[i]*255) | 0)); a = 255; }
+                else { const s = slotOf(i);
+                    if (s >= 0) { v = Math.max(0, Math.min(255, (sE.slotD[s][i]*255) | 0)); a = 255; } }
+                d[o]=v; d[o+1]=v; d[o+2]=v; d[o+3]=a; } }) });
+        files.push({ name: `layer${k}_mask_inpaint.png`, bytes: mk(d => {
+            for (let i = 0; i < mN; i++) { const o = i*4; const v = slotOf(i) >= 0 ? 255 : 0;
+                d[o]=v; d[o+1]=v; d[o+2]=v; d[o+3]=255; } }) });
+        meta.files[`layer${k}_color.png`] = `MPI layer ${k}: visible texels + coarse strip continuation (alpha = known content) — SD context`;
+        meta.files[`layer${k}_depth.png`] = `MPI layer ${k}: depth over the same coverage (slope-continued in strips) — ControlNet depth conditioning`;
+        meta.files[`layer${k}_mask_inpaint.png`] = `MPI layer ${k}: white = strip region to regenerate using ONLY this layer's context`;
+        emitted++;
+    }
+    meta.mpiLayers = { nativeRes: [mpw, mph], count: mE.layers, emitted, layers: layersMeta,
+        note: 'per-layer completion: inpaint each layer independently at its own depth; overlap slots resolved back-to-front by the viewer' };
+    return emitted;
+}
 function exportSDBundle() {
     try {
         if (!renderer || !postProcessScene || !postProcessCamera) { alert('Renderer not ready'); return; }
@@ -5982,6 +6043,11 @@ function exportSDBundle() {
             meta.outpaintMarginPx = [xE.mx, xE.my];
             meta.outpaintSourceRes = [xE.pw, xE.ph];
         }
+        // PER-LAYER completion set (MPI slice 3b) — one color/depth/mask triple
+        // per layer with strip content; SD inpaints each layer with its own
+        // context only, then the results reimport as per-layer textures.
+        const nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
+        if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -6412,6 +6478,41 @@ let bgPlugMode = 'directional';
 // exports a proper outpaint plate (mask + extended colour + extended depth) to
 // replace it. Set false to keep the BG layer flush with the image rectangle.
 let bgSceneExtend = true;
+let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their thin carrier; over-claims on paintings with emissive backgrounds
+// ---- MPI (depth-segmented multiplane layers, slice 1) ----
+// Partition the torn FG into depth layers: connected components cut ONLY
+// along depth cliffs (> fgTearStep), so smooth surfaces (the dune ramp)
+// stay whole while occlusion boundaries split. Each layer is a mesh with
+// its own index subset over the SHARED geometry buffers and the SHARED
+// material/textures — slice 1 is render-identical to the single torn
+// mesh by construction; its value is the layer structure itself (per-
+// layer depth maps via the shared displacement texture, ordering, and
+// the export bundle for per-layer SD completion in slice 2).
+// Default ON: the layer partition (with the under-sheet it gates) is the
+// verified path — pixel-identical whether the flag is set at load or
+// post-load (measured: button-build with the default flag vs the
+// harness's post-load enable, 0px diff at rest and at pose; camera
+// state identical). The historical "view-fit flip" was a comparison
+// against the MPI-OFF build, which is a genuinely different render:
+// without the under-sheet, halo tears fall back to rubber-stretch
+// streaks and the margins keep the JFA glow.
+let bgMPIMode = true;
+let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
+let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
+let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
+let mpiLayers = null;      // [{mesh, meanD, tris, texels}] back-to-front
+let bgMPIExport = null;    // { pw, ph, layers, texLayer (per-texel layer id), meanD[] }
+let bgMPIStripExport = null; // { pw, ph, slotO, slotD, slotC, depth } — live per-layer plates, for the SD bundle
+// ---- MPI slice 2: the UNDER-SHEET (band-limited second depth) ----
+// Everything the single plate cannot fix is INTERNAL overlap: cliffs whose
+// far side is another part of the same scene stack (arm over torso, fur
+// over body, troll limb over cave), where the plate's one-depth-per-texel
+// holds the backdrop instead. The under-sheet completes the LOCAL far
+// surface in a parallax-budget band behind each such cliff, rendered
+// between the backdrop plate and the FG layers — and the cliffs then
+// tear against it (far-side match vs the under-sheet's carried depth).
+let mpiMidMesh = null;
+let mpiStripMeshes = null; // per-layer plate sheets (MPI slice 3, live)
 // Band fill opacity. With the band tightened to a silhouette strip the fill is
 // short-range, so it should read as a SOLID, complete inpaint — no streaks AND
 // no transparent gaps inside the silhouette. Keep bgFillSolid = true for that.
@@ -6477,6 +6578,13 @@ let bgBandCutMaxGrad = 0.04;
 // 0.3 = "stretched more than ~3x". Lower = stricter (less cutting).
 let bgBandCutStretchFrac = 0.3;
 let bgBandCutDilatePx = 4;     // dilate the cut mask so far-side stretch fragments are covered too
+// PRE-TORN FOREGROUND (review-fix): drop FG triangles that span a depth cliff
+// at build time, so rubber-band triangles cannot exist at all. Reveals become
+// honest holes (the plug / screen-space fill shows through) from any angle,
+// zoom, or canvas size — no per-fragment stretch heuristics. When active, the
+// band-gated cut is redundant and stays disarmed.
+let fgPreTear = true;
+let fgTearStep = 0.06;         // min 3-vertex depth span that counts as a cliff
 // Coarse-extension data stashed at BG-build for the SD outpaint bundle
 // (native/extended res, top-row-first): { mx, my, pw, ph, EPW, EPH,
 //  depth:Float32(EPN), fill:Uint8(EPN*3), mask:Uint8(EPN) (1 = margin/outpaint) }
@@ -6518,11 +6626,18 @@ function bgPullPushFill(cpx, valid, W, H) {
             const o=y*nW+x, wc=Math.min(1,sw); nww[o]=wc; if(sw>0){ ncw[o*3]=sr/sw*wc; ncw[o*3+1]=sg/sw*wc; ncw[o*3+2]=sb/sw*wc; } }
         levels.push({cw:ncw, ww:nww, W:nW, H:nH});
     }
+    // [PERF] unrolled bilinear sample — the array-of-arrays destructuring
+    // allocated 5 arrays per unfilled pixel per level. Results identical.
+    const _smp = [0, 0, 0];
     function sample(c, fx, fy){ const x0=Math.floor(fx), y0=Math.floor(fy), x1=Math.min(c.W-1,x0+1), y1=Math.min(c.H-1,y0+1);
         const tx=fx-x0, ty=fy-y0; let r=0,g=0,b=0,ws=0;
-        for (const [xx,yy,wt] of [[x0,y0,(1-tx)*(1-ty)],[x1,y0,tx*(1-ty)],[x0,y1,(1-tx)*ty],[x1,y1,tx*ty]]){
-            const o=Math.max(0,yy)*c.W+Math.max(0,xx), w=c.ww[o]; if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; } }
-        return ws>0 ? [r/ws,g/ws,b/ws] : null; }
+        let o, w, wt;
+        o=Math.max(0,y0)*c.W+Math.max(0,x0); w=c.ww[o]; wt=(1-tx)*(1-ty); if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y0)*c.W+Math.max(0,x1); w=c.ww[o]; wt=tx*(1-ty);     if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y1)*c.W+Math.max(0,x0); w=c.ww[o]; wt=(1-tx)*ty;     if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        o=Math.max(0,y1)*c.W+Math.max(0,x1); w=c.ww[o]; wt=tx*ty;         if(w>0){ r+=c.cw[o*3]/w*wt; g+=c.cw[o*3+1]/w*wt; b+=c.cw[o*3+2]/w*wt; ws+=wt; }
+        if (ws<=0) return null;
+        _smp[0]=r/ws; _smp[1]=g/ws; _smp[2]=b/ws; return _smp; }
     for (let l=levels.length-2; l>=0; l--){ const fine=levels[l], coarse=levels[l+1];
         for (let y=0;y<fine.H;y++) for (let x=0;x<fine.W;x++){ const o=y*fine.W+x;
             if (fine.ww[o] < 0.999){ const s=sample(coarse,(x-0.5)/2,(y-0.5)/2); if(s){ const a=fine.ww[o];
@@ -6530,6 +6645,37 @@ function bgPullPushFill(cpx, valid, W, H) {
     }
     const out=new Uint8Array(W*H*3), L0=levels[0];
     for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
+    return out;
+}
+// O(N) sliding window min/max (van Herk–Gil-Werman), 1D strided pass —
+// EXACT replacement for naive windowed scans (results identical, cost
+// independent of radius). Used by the ramp collapse, cliff-core windows
+// and the under-sheet floor. `n` elements at src[base + i*stride].
+function bgSlide1D(src, dst, n, r, stride, base, isMin) {
+    const k = 2*r + 1;
+    if (!bgSlide1D._f || bgSlide1D._f.length < n) { bgSlide1D._f = new Float32Array(n); bgSlide1D._g = new Float32Array(n); }
+    const f = bgSlide1D._f, g = bgSlide1D._g;
+    for (let i = 0; i < n; i++) {
+        const v = src[base + i*stride];
+        f[i] = (i % k === 0) ? v : (isMin ? Math.min(f[i-1], v) : Math.max(f[i-1], v));
+    }
+    for (let i = n - 1; i >= 0; i--) {
+        const v = src[base + i*stride];
+        g[i] = (i % k === k-1 || i === n-1) ? v : (isMin ? Math.min(g[i+1], v) : Math.max(g[i+1], v));
+    }
+    for (let i = 0; i < n; i++) {
+        const lo = i - r, hi = i + r;
+        let v;
+        if (lo < 0) v = f[Math.min(hi, n-1)];
+        else v = isMin ? Math.min(g[lo], f[Math.min(hi, n-1)]) : Math.max(g[lo], f[Math.min(hi, n-1)]);
+        dst[base + i*stride] = v;
+    }
+}
+// separable 2D windowed min/max over a (2r+1)^2 CLAMPED window — exact
+function bgSlide2D(src, W, H, r, isMin) {
+    const tmp = new Float32Array(W*H), out = new Float32Array(W*H);
+    for (let y = 0; y < H; y++) bgSlide1D(src, tmp, W, r, 1, y*W, isMin);
+    for (let x = 0; x < W; x++) bgSlide1D(tmp, out, H, r, W, x, isMin);
     return out;
 }
 // DIRECTIONAL PLUG: the single plug that seals every disocclusion at the depth of
@@ -6546,24 +6692,107 @@ function bgDirectionalPlug(depth, W, H, opts) {
     for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
         const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
     const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
-    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1), q = [];
+    const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1);
+    const q = new Int32Array(N); let qt = 0;   // [PERF] typed queue (each pixel enqueued at most once)
+    const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
-        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1]; let bestFar=1e9, bestJ=-1, isE=false;
-        for (const j of nbs){ if(j<0)continue; if(depth[i]-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        const di = depth[i]; let bestFar=1e9, bestJ=-1, isE=false;
+        // [PERF] unrolled neighbours — no per-pixel array allocation
+        if (x>0)   { const j=i-1; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (x<W-1) { const j=i+1; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (y>0)   { const j=i-W; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
+        if (y<H-1) { const j=i+W; if (di-depth[j] > STEP){ isE=true; if(depth[j]<bestFar){bestFar=depth[j];bestJ=j;} } }
         if (isE){ band[i]=1; rim[i]=bestFar; rimSrc[i]=bestJ;
-            const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
-            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(depth[i])-pxAt(bestFar))))+2); q.push(i); } }
-    for (let h=0;h<q.length;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
-        const nbs=[x>0?i-1:-1,x<W-1?i+1:-1,y>0?i-W:-1,y<H-1?i+W:-1];
-        for (const j of nbs){ if(j<0||band[j])continue; if(depth[j] >= rim[i]+STEP){ band[j]=1; rim[j]=rim[i]; rimSrc[j]=rimSrc[i]; budget[j]=budget[i]-1; q.push(j); } } }
-    const plug = new Float32Array(N); for (let i=0;i<N;i++) plug[i]=band[i]?rim[i]:depth[i];
+            budget[i]=Math.min(MAXW, Math.max(4,Math.ceil(Math.abs(pxAt(di)-pxAt(bestFar))))+2); q[qt++]=i; } }
+    for (let h=0;h<qt;h++){ const i=q[h]; if(budget[i]<=0)continue; const x=i%W,y=(i/W)|0;
+        const ri = rim[i]+STEP, rv = rim[i], rs = rimSrc[i], b1 = budget[i]-1;
+        let j;
+        if (x>0)   { j=i-1; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (x<W-1) { j=i+1; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (y>0)   { j=i-W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } }
+        if (y<H-1) { j=i+W; if(!band[j] && depth[j]>=ri){ band[j]=1; rim[j]=rv; rimSrc[j]=rs; budget[j]=b1; q[qt++]=j; } } }
+    // SLOPE-CONTINUING INITIALISATION: every band pixel starts at the far
+    // surface's own gradient extrapolated from its rim source over the grown
+    // distance (a ground plane continues its slope into the reveal; sky, with
+    // zero gradient, stays flat; a narrow slot cannot bridge its walls
+    // because the gradient is the slot's own far surface's). The flat rim
+    // value was the measured plateau error (slope x band width), and the
+    // harmonic sweeps could not fix it: 120 Jacobi passes cannot converge a
+    // budget-deep strip from a flat initialisation. The gradient is measured
+    // over 4px behind the rim source, aborts at any cliff (falls back to the
+    // flat rim), and nearer-going extrapolation is clamped below the local
+    // occluder depth — no protrusion channel.
+    const plug = new Float32Array(N);
+    for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x;
+        if (!band[i]) { plug[i]=depth[i]; continue; }
+        plug[i]=rim[i];
+        const a = rimSrc[i];
+        if (a < 0) continue;
+        const ax = a%W, ay = (a/W)|0;
+        const dx = x-ax, dy = y-ay, dist = Math.sqrt(dx*dx+dy*dy);
+        if (dist < 2) continue;
+        const ux = dx/dist, uy = dy/dist;
+        // Sample the surface at 4 and 8 px BEHIND the rim source. The first
+        // ~3px beside a cliff are collapse-modified (ramp collapse pulls them
+        // toward the window minimum); measuring the gradient from the rim
+        // pixel itself reads that dip as a slope AWAY from the reveal and
+        // extrapolates the wrong direction (measured: rim-slope*dist errors
+        // on the synthetic suite). Base and gradient both come from the
+        // clean zone; the path is continuity-checked the whole way.
+        let ok = true, prev = depth[a], base = 0, back = 0;
+        for (let k=1;k<=8;k++){
+            const sx = Math.round(ax-ux*k), sy = Math.round(ay-uy*k);
+            if (sx<0||sx>=W||sy<0||sy>=H){ ok=false; break; }
+            const dv = depth[sy*W+sx];
+            if (Math.abs(dv-prev) > STEP){ ok=false; break; }
+            prev = dv; if (k===4) base = dv; if (k===8) back = dv;
+        }
+        if (!ok) continue;
+        const g = (base-back)/4;
+        let e = base + g*(dist+4);
+        if (g > 0) e = Math.min(e, Math.max(rim[i], depth[i]-STEP));
+        plug[i] = Math.max(0, Math.min(1, e));
+    }
     const ring = new Uint8Array(N);
+    // TOPOLOGY (slope continuation): ring pixels adjacent to the TRUE far-side
+    // surface anchor at that surface's OWN depth instead of the carried rim
+    // value. The harmonic sweeps then interpolate between real surface
+    // anchors at the reveal edge and the flat rim cap deep inside — the plug
+    // CONTINUES the surface's slope across the reveal (a ground plane keeps
+    // being a ground plane) instead of plateauing at the rim sample. Anchors
+    // are only taken from neighbours within STEP of the rim (same surface
+    // class), so the plug can never anchor to the occluder and protrude.
     for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i])continue;
-        if((x>0&&!band[i-1])||(x<W-1&&!band[i+1])||(y>0&&!band[i-W])||(y<H-1&&!band[i+W])) ring[i]=1; }
-    let A=plug.slice(), B=plug.slice();
-    for (let s=0;s<SWEEPS;s++){ for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]){B[i]=A[i];continue;}
-        B[i]=0.25*(A[y*W+Math.max(0,x-1)]+A[y*W+Math.min(W-1,x+1)]+A[Math.max(0,y-1)*W+x]+A[Math.min(H-1,y+1)*W+x]); } const t=A;A=B;B=t; }
-    for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+        let isRing = false, anchor = -1, anchorD = 1e9;
+        let j;
+        if (x>0)   { j=i-1; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (x<W-1) { j=i+1; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (y>0)   { j=i-W; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (y<H-1) { j=i+W; if(!band[j]){ isRing=true; if(Math.abs(depth[j]-rim[i])<=STEP && depth[j]<anchorD){ anchorD=depth[j]; anchor=j; } } }
+        if (isRing){ ring[i]=1; if(anchor>=0) plug[i]=depth[anchor]; } }
+    // [PERF] harmonic sweeps over a COMPACT interior list with precomputed
+    // clamped neighbour indices (was SWEEPS x full-frame = 300M visits to
+    // update the band interior only). Untouched pixels are equal in both
+    // buffers by initialisation — results identical.
+    {
+        let nInt = 0;
+        for (let i=0;i<N;i++) if (band[i] && !ring[i]) nInt++;
+        const IL = new Int32Array(nInt), NBI = new Int32Array(nInt*4);
+        nInt = 0;
+        for (let y=0;y<H;y++) for (let x=0;x<W;x++){ const i=y*W+x; if(!band[i]||ring[i]) continue;
+            IL[nInt] = i;
+            NBI[nInt*4]   = y*W+Math.max(0,x-1);
+            NBI[nInt*4+1] = y*W+Math.min(W-1,x+1);
+            NBI[nInt*4+2] = Math.max(0,y-1)*W+x;
+            NBI[nInt*4+3] = Math.min(H-1,y+1)*W+x;
+            nInt++; }
+        let A=plug.slice(), B=plug.slice();
+        for (let s=0;s<SWEEPS;s++){
+            for (let k=0;k<nInt;k++){ const i=IL[k];
+                B[i]=0.25*(A[NBI[k*4]]+A[NBI[k*4+1]]+A[NBI[k*4+2]]+A[NBI[k*4+3]]); }
+            const t=A;A=B;B=t; }
+        for (let i=0;i<N;i++) if(band[i]) plug[i]=A[i];
+    }
     return { plug, band, rimSrc };
 }
 (function(){
@@ -6711,7 +6940,62 @@ function applyLiveBake(L) {
         cx.clearRect(0, 0, w, h); cx.drawImage(cImg, 0, 0, w, h);
         const cpx = cx.getImageData(0, 0, w, h).data;
         const t0 = Date.now();
+        L._rawDepth = depth.slice(); L._rawDepthW = w; L._rawDepthH = h; // pre-bake depth for tear decisions
         const out = MoebiusEdgeBake.bakeEdges(depth, cpx, w, h, {});
+        // NEAR-PROTECTION CLAMP (review, v2): the colour-guided weighted
+        // median leaks FAR depth into dark/thin NEAR features (staff shaft
+        // perforated, hood interior blacked out — far-depth holes inside the
+        // figure in the depth composite; the RAW map is clean). Rule, global-
+        // class-free: a pixel sitting ON its local near plateau (raw >=
+        // boxMax(raw, 2px) - 0.02) may never end up farther than raw. Ramp
+        // pixels (raw below the local max) may snap either way — that is the
+        // bake\'s legitimate job.
+        {
+            const N = w * h, r2 = 2;
+            const tmpM = new Float32Array(N), bmax = new Float32Array(N);
+            for (let y = 0; y < h; y++) { const row = y * w;
+                for (let x = 0; x < w; x++) { let m = -1;
+                    for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = depth[row+xx]; if (v > m) m = v; }
+                    tmpM[row+x] = m; } }
+            for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = -1;
+                for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v > m) m = v; }
+                bmax[y*w+x] = m; } }
+            // local far minimum (same window) for skin binarization
+            const bmin = new Float32Array(N);
+            for (let y = 0; y < h; y++) { const row = y * w;
+                for (let x = 0; x < w; x++) { let m = 2;
+                    for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = depth[row+xx]; if (v < m) m = v; }
+                    tmpM[row+x] = m; } }
+            for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = 2;
+                for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v < m) m = v; }
+                bmin[y*w+x] = m; } }
+            let clamped = 0, nans = 0, snapped = 0;
+            for (let i = 0; i < N; i++) {
+                const s = out.sharpened[i];
+                if (!isFinite(s)) { out.sharpened[i] = depth[i]; nans++; continue; }
+                // NaN-proof comparison: !(s >= x) also catches NaN
+                if (depth[i] >= bmax[i] - 0.02 && !(s >= depth[i] - 0.02)) { out.sharpened[i] = depth[i]; clamped++; continue; }
+                // SKIN BINARIZATION: within the sharpened silhouette skin a pixel
+                // must be the local near plateau or the local far minimum — the
+                // bake's pepper (intermediate values) poisons the plug's rim
+                // depths (mid-gray slabs floating in the reveals) and the tear.
+                if (bmax[i] - bmin[i] > 0.06) {
+                    const dN = Math.abs(s - bmax[i]), dF = Math.abs(s - bmin[i]);
+                    if (dN > 0.05 && dF > 0.05) { out.sharpened[i] = (dN < dF) ? bmax[i] : bmin[i]; snapped++; }
+                }
+            }
+            if (clamped || nans || snapped) console.log('[RUNG-A] bake regularized: ' + clamped + 'px plateau-restored, ' + snapped + 'px skin-binarized, ' + nans + 'px NaN');
+        }
+        // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
+        // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
+        // (UNPACK colorspace), so a canvas displacementMap arrives ~v^2.2 in
+        // the vertex shader while the plug's DataTexture carries raw values —
+        // the FG and the plate lived in two different depth spaces (the real
+        // source of plate-in-front-of-FG protrusion and weld mismatch).
+        const sfN = w * h; const sf = new Float32Array(sfN);
+        for (let y = 0; y < h; y++) { const s = y*w, d = (h-1-y)*w;
+            for (let x = 0; x < w; x++) sf[d+x] = out.sharpened[s+x]; }
+        // keep a canvas copy for code paths that read .image via drawImage
         const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
         const octx = oc.getContext('2d');
         const oid = octx.createImageData(w, h);
@@ -6728,7 +7012,12 @@ function applyLiveBake(L) {
             mid.data[i*4] = v; mid.data[i*4+1] = v; mid.data[i*4+2] = v; mid.data[i*4+3] = 255;
         }
         mctx.putImageData(mid, 0, 0);
-        const sTex = new THREE.Texture(oc); sTex.needsUpdate = true;
+        const sTex = new THREE.DataTexture(sf, w, h, THREE.RedFormat, THREE.FloatType);
+        sTex.needsUpdate = true; sTex.flipY = false;
+        sTex.minFilter = THREE.LinearFilter; sTex.magFilter = THREE.LinearFilter;
+        sTex.generateMipmaps = false;
+        if ('colorSpace' in sTex) sTex.colorSpace = THREE.NoColorSpace;
+        sTex.image2d = oc;   // CPU-readable copy for drawImage consumers
         const mTex = new THREE.Texture(mc); mTex.needsUpdate = true;
         L.textures.depth = sTex;
         L.textures.edgeMask = mTex;
@@ -7263,10 +7552,16 @@ function buildBackgroundLayer() {
         mat.uniforms.map.value = bgColorTarget.texture;
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
         // No GPU readback, no encoding guesses — all three inputs are verified offline.
+        // [PERF] coarse stage timer — logged as one line at build end
+        const _pt0 = Date.now(); let _ptPrev = _pt0; const _perf = [];
+        const _mark = (n) => { const t = Date.now(); if (t - _ptPrev > 15) _perf.push(n + ' ' + (t - _ptPrev) + 'ms'); _ptPrev = t; };
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
+        let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
+        let _stripD = null, _stripC = null, _stripO = null, _stripPW = 0, _stripPH = 0, _stripFrontD = null; // per-layer plates, live (MPI slice 3): two overlap slots
         bgExtendExport = null;
+        bgMPIStripExport = null;
         const _depthImgReady = L.textures.depth && (L.textures.depth.image || L.textures.depth.isDataTexture);
         if (_depthImgReady && (bgPlugMode === 'directional' || (typeof MoebiusPlug !== 'undefined' && bgBandImg && (bgValidImg || bgValidMode !== 'png')))) {
             try {
@@ -7289,7 +7584,9 @@ function buildBackgroundLayer() {
                 const cx = cv.getContext('2d', { willReadFrequently: true });
                 // read sharpened depth from the layer's depth texture (img/canvas =
                 // top-row-first, matching the band/valid PNGs read below)
-                if (dImg && dImg.tagName) {
+                if (dSrc.image2d) {
+                    cx.drawImage(dSrc.image2d, 0, 0, pw, ph);
+                } else if (dImg && dImg.tagName) {
                     cx.drawImage(dImg, 0, 0, pw, ph);
                 } else {
                     // DataTexture fallback — render to a temp target and read back.
@@ -7317,9 +7614,326 @@ function buildBackgroundLayer() {
                 const dpx = cx.getImageData(0, 0, pw, ph).data;
                 const depth = new Float32Array(PN);
                 for (let i = 0; i < PN; i++) depth[i] = dpx[i * 4] / 255;
+                // REBUILD IDEMPOTENCE: after a build with thin features the
+                // layer's depth texture is the HALOED one; reading it back
+                // would bake the halo into the next build's input, so the
+                // band/plug would grow around 2px-fattened features and the
+                // halo would re-derive from its own output. Keep the pristine
+                // plug-input depth from the first build and restore it here —
+                // a rebuild then runs on byte-identical input. A newly loaded
+                // image installs a texture without the halo tag, so the base
+                // refreshes naturally.
+                if (dSrc._isPlugHalo && L._plugBaseDepth && L._plugBaseDepth.length === PN) depth.set(L._plugBaseDepth);
+                else L._plugBaseDepth = depth.slice();
+                _mark('depth-read');
+                let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
+                let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
+                let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
+                let floorField = null;  // local lower envelope (shared: floor rind + under-sheet)
+                let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
+                let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
+                let midRimC = null;     // carried far-side rim pixel index (colour base)
+                let midFillRGB = null;  // under-sheet colours (depth-consistent continuation at carried depth)
                 let band, plugDepth, rimSrc = null;
                 let bandCutMask = null; // dilated band; where the FG may cut AND the fill must be opaque
                 let underMask = null;   // occluder rind removed from the plug depth (world-without-FG)
+                let underRimC = null;   // per-completed-pixel LOCAL rim source index (fill colour)
+                // ---- SOURCE-DEPTH DESPECKLE / GLOW-ATTACH (review-fix v5) ----
+                // Soft mid-depth blobs floating over the smooth far field (the lamp
+                // glow, sparkle haze) are source depth-map defects: their ramps
+                // (~0.01/px over tens of px) are below every tear detector, so they
+                // anchor stretched displacement walls that the depth pass's
+                // glancing-angle discards then chop into dash-row streaks. Detect
+                // raised-vs-local-floor components that are SOFT everywhere (ink-
+                // edged objects — birds, crystals, people — are sharp somewhere and
+                // are kept; big regions like continuous dune ramps are size-capped).
+                // A soft blob touching a NEAR structure attaches to it (glow rides
+                // the staff; its rim is freed by the halo-edge tear); an isolated
+                // one flattens into the local floor. Self-idempotent on rebuilds.
+                {
+                    const otsuD = bgOtsuThreshold(depth, null);
+                    const ds = 4, dw2 = Math.ceil(pw/ds), dh2 = Math.ceil(ph/ds);
+                    let dmin = new Float32Array(dw2*dh2).fill(2);
+                    for (let y = 0; y < ph; y++) { const r0 = ((y/ds)|0)*dw2, r1 = y*pw;
+                        for (let x = 0; x < pw; x++) { const j = r0 + ((x/ds)|0);
+                            const v = depth[r1+x]; if (v < dmin[j]) dmin[j] = v; } }
+                    const RD = 6; // 24px full-res floor window: wider than the glow blobs
+                    const tmpD = new Float32Array(dw2*dh2);
+                    for (let y = 0; y < dh2; y++) for (let x = 0; x < dw2; x++) { let m = 2;
+                        for (let o = -RD; o <= RD; o++) { const xx = x+o; if (xx<0||xx>=dw2) continue;
+                            const v = dmin[y*dw2+xx]; if (v<m) m=v; } tmpD[y*dw2+x]=m; }
+                    for (let x = 0; x < dw2; x++) for (let y = 0; y < dh2; y++) { let m = 2;
+                        for (let o = -RD; o <= RD; o++) { const yy = y+o; if (yy<0||yy>=dh2) continue;
+                            const v = tmpD[yy*dw2+x]; if (v<m) m=v; } dmin[y*dw2+x]=m; }
+                    const bmin = (i) => dmin[((((i/pw)|0)/ds)|0)*dw2 + ((((i%pw))/ds)|0)];
+                    // Preliminary THIN mask (the official one comes later, band-
+                    // excluded): a floating lamp hangs off a THIN carrier (staff,
+                    // pole, string); broad emissive fields — sunbursts, cave light
+                    // shafts — lean against LARGE bodies and must never attach
+                    // (they are painted background, not detached lamp light).
+                    const nearP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) nearP[i] = depth[i] >= otsuD ? 1 : 0;
+                    let EP = nearP;
+                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (EP[i] && EP[i-1] && EP[i+1] && EP[i-pw] && EP[i+pw]) ne[i] = 1; }
+                        EP = ne; }
+                    // 8 geodesic passes (vs the 3 of the tear-protection thin mask):
+                    // a fur fringe is thin but hugs its body within a few px — only
+                    // structures extending FAR from any thick core (a staff) qualify
+                    // as carriers.
+                    let RP = EP;
+                    for (let p = 0; p < 8; p++) { const nr = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (!nearP[i]) continue;
+                            if (RP[i] || RP[i-1] || RP[i+1] || RP[i-pw] || RP[i+pw]) nr[i] = 1; }
+                        RP = nr; }
+                    const thinP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (nearP[i] && !RP[i]) thinP[i] = 1;
+                    const raised = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (depth[i] < otsuD && depth[i] - bmin(i) > fgTearStep) raised[i] = 1;
+                    const label = new Int32Array(PN);
+                    const qq = new Int32Array(PN);
+                    const CAP = (PN/100)|0;
+                    let comp = 0, nAttach = 0, nFlat = 0, nKeep = 0, pxChanged = 0;
+                    for (let s = 0; s < PN; s++) {
+                        if (!raised[s] || label[s]) continue;
+                        comp++;
+                        let head = 0, tail = 0; qq[tail++] = s; label[s] = comp;
+                        let maxRim = 0, attachD = -1, bodyAdj = false;
+                        const members = [];
+                        while (head < tail) {
+                            const i = qq[head++]; members.push(i);
+                            const x = i%pw, y = (i/pw)|0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) {
+                                if (j < 0) continue;
+                                if (raised[j]) { if (!label[j]) { label[j] = comp; qq[tail++] = j; } continue; }
+                                // softness is judged on the BOUNDARY only: an ink-edged
+                                // object (bird, ship, crystal) is sharp around its rim;
+                                // a glow fades softly into the sky everywhere. Internal
+                                // sharpness (a bright lamp core) must not veto. Steps
+                                // onto NEAR pixels are the attach interface, not a rim.
+                                if (depth[j] >= otsuD) {
+                                    if (thinP[j]) { if (depth[j] > attachD) attachD = depth[j]; }
+                                    else bodyAdj = true;
+                                    continue;
+                                }
+                                const st = Math.abs(depth[i]-depth[j]); if (st > maxRim) maxRim = st;
+                            }
+                        }
+                        if (members.length > CAP || maxRim >= fgTearStep) { nKeep++; continue; }
+                        if (attachD > 0) {          // hangs off a THIN carrier: ride it
+                            if (!haloM) haloM = new Uint8Array(PN);
+                            for (const i of members) { depth[i] = attachD; haloM[i] = 1; }
+                            nAttach++; pxChanged += members.length;
+                        } else if (bodyAdj) {        // leans on a large body: painted
+                            nKeep++;                 // relief/highlight — leave it be
+                        } else {
+                            for (const i of members) depth[i] = bmin(i);
+                            nFlat++; pxChanged += members.length;
+                        }
+                    }
+                    // GLOW-ATTACH: bright emissive blobs painted at FLOOR depth —
+                    // the lamp flame, its rays and halo: the depth generator never
+                    // saw them, so they ride the sky and shear off their staff at
+                    // off-axis poses (the measured +65px light detach). Detect
+                    // brightness ANOMALIES against the local background level
+                    // (the pale distant plain is its own local norm — not an
+                    // anomaly; isolated stars attach to nothing and are skipped),
+                    // at floor depth, touching a NEAR structure: assign them that
+                    // structure's depth and mark them into the rigid ribbon so
+                    // the halo-edge tear frees their rim.
+                    // DEFAULT OFF (bgGlowAttach): works exactly as intended on a
+                    // lamp-on-a-staff painting (verified: the starwatcher lamp and
+                    // its full glow ride the staff), but colour brightness alone
+                    // cannot reliably separate "detached lamp light" from painted
+                    // emissive BACKGROUND (sunbursts, cave light shafts) — on such
+                    // paintings it over-claims. Missing-object depth belongs to the
+                    // depth-regeneration stage; flip this flag per-import until then.
+                    if (bgGlowAttach) {
+                        const cImgD = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
+                        if (cImgD) {
+                            cx.clearRect(0, 0, pw, ph);
+                            cx.drawImage(cImgD, 0, 0, pw, ph);
+                            const cpxD = cx.getImageData(0, 0, pw, ph).data;
+                            const luma = new Float32Array(PN);
+                            for (let i = 0; i < PN; i++) luma[i] = (cpxD[i*4] + 2*cpxD[i*4+1] + cpxD[i*4+2]) / 4;
+                            // local background luma: ds=8 box mean, radius 10 (~80px)
+                            const ds8 = 8, dw8 = Math.ceil(pw/ds8), dh8 = Math.ceil(ph/ds8);
+                            const sum8 = new Float64Array(dw8*dh8), cnt8 = new Float64Array(dw8*dh8);
+                            for (let y = 0; y < ph; y++) { const r0 = ((y/ds8)|0)*dw8, r1 = y*pw;
+                                for (let x = 0; x < pw; x++) { const j = r0 + ((x/ds8)|0); sum8[j] += luma[r1+x]; cnt8[j]++; } }
+                            for (let j = 0; j < dw8*dh8; j++) sum8[j] /= Math.max(1, cnt8[j]);
+                            const R8 = 10, mean8 = new Float64Array(dw8*dh8), t8 = new Float64Array(dw8*dh8);
+                            for (let y = 0; y < dh8; y++) for (let x = 0; x < dw8; x++) { let s3 = 0, c3 = 0;
+                                for (let o = -R8; o <= R8; o++) { const xx = x+o; if (xx<0||xx>=dw8) continue; s3 += sum8[y*dw8+xx]; c3++; }
+                                t8[y*dw8+x] = s3/c3; }
+                            for (let x = 0; x < dw8; x++) for (let y = 0; y < dh8; y++) { let s3 = 0, c3 = 0;
+                                for (let o = -R8; o <= R8; o++) { const yy = y+o; if (yy<0||yy>=dh8) continue; s3 += t8[yy*dw8+x]; c3++; }
+                                mean8[y*dw8+x] = s3/c3; }
+                            const bgL = (i) => mean8[((((i/pw)|0)/ds8)|0)*dw8 + ((((i%pw))/ds8)|0)];
+                            const glowM = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++)
+                                if (depth[i] < otsuD && depth[i] - bmin(i) < 0.02 && luma[i] - bgL(i) > 45) glowM[i] = 1;
+                            const label2 = new Int32Array(PN);
+                            const glowClaim = new Uint8Array(PN);
+                            let comp2 = 0, nGlowAttach = 0;
+                            for (let s = 0; s < PN; s++) {
+                                if (!glowM[s] || label2[s]) continue;
+                                comp2++;
+                                let head = 0, tail = 0; qq[tail++] = s; label2[s] = comp2;
+                                let attachD = -1;
+                                const members = [];
+                                while (head < tail) {
+                                    const i = qq[head++]; members.push(i);
+                                    const x = i%pw, y = (i/pw)|0;
+                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                    for (const j of nbs) {
+                                        if (j < 0) continue;
+                                        if (glowM[j]) { if (!label2[j]) { label2[j] = comp2; qq[tail++] = j; } }
+                                        // only a THIN carrier attaches (lamp on a staff);
+                                        // sunbursts / light shafts leaning on bodies stay
+                                        else if (depth[j] >= otsuD && thinP[j] && depth[j] > attachD) attachD = depth[j];
+                                    }
+                                }
+                                if (attachD <= 0 || members.length > CAP) continue; // stars, shafts, big pale fields
+                                if (!haloM) haloM = new Uint8Array(PN);
+                                for (const i of members) { depth[i] = attachD; haloM[i] = 1; glowClaim[i] = 1; }
+                                nGlowAttach++; pxChanged += members.length;
+                            }
+                            // The glow's DIM outer halo sits below the anomaly
+                            // threshold and would stay on the sky as a detached
+                            // ghost disc. Grow the attachment geodesically from
+                            // the attached cores through the contiguous fading
+                            // halo — luma must DECAY outward (+6 noise slack), so
+                            // the growth cannot cross dark sky into stars or
+                            // unrelated content. Bounded at 80px.
+                            if (nGlowAttach > 0) {
+                                let head = 0, tail = 0;
+                                const gen = new Int16Array(PN);
+                                for (let i = 0; i < PN; i++) if (haloM[i] && glowM[i]) { qq[tail++] = i; gen[i] = 1; }
+                                let grown = 0;
+                                while (head < tail) {
+                                    const i = qq[head++];
+                                    if (gen[i] > 80) continue;
+                                    const x = i%pw, y = (i/pw)|0;
+                                    const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                    for (const j of nbs) {
+                                        if (j < 0 || gen[j] || haloM[j]) continue;
+                                        if (depth[j] >= otsuD) continue;
+                                        if (depth[j] - bmin(j) >= 0.02) continue;
+                                        if (luma[j] - bgL(j) <= 8) continue;
+                                        if (luma[j] > luma[i] + 6) continue;
+                                        depth[j] = depth[i]; haloM[j] = 1; gen[j] = gen[i] + 1; glowClaim[j] = 1;
+                                        qq[tail++] = j; grown++;
+                                    }
+                                }
+                                pxChanged += grown;
+                                // The luma-decay growth stops at the dark ink strokes
+                                // drawn THROUGH the glow (the staff loop is a luma
+                                // moat), stranding the halo beyond them as a ghost
+                                // annulus. The glow is radially symmetric around the
+                                // lamp, so close it as a DISC: per claimed cluster,
+                                // centroid + max radius, then claim every floor-depth
+                                // far pixel within 2x that radius (capped at 120px) —
+                                // ink ring, stars-in-glow and all ride the lamp.
+                                const label3 = new Int32Array(PN);
+                                let comp3 = 0, discPx = 0;
+                                for (let s = 0; s < PN; s++) {
+                                    if (!glowClaim[s] || label3[s]) continue;
+                                    comp3++;
+                                    let head3 = 0, tail3 = 0; qq[tail3++] = s; label3[s] = comp3;
+                                    let sxs = 0, sys = 0, cN = 0, aD = 0;
+                                    const mem3 = [];
+                                    while (head3 < tail3) {
+                                        const i = qq[head3++]; mem3.push(i);
+                                        const x = i%pw, y = (i/pw)|0;
+                                        sxs += x; sys += y; cN++;
+                                        if (depth[i] > aD) aD = depth[i];
+                                        // 8-connected so ink strokes don't split the cluster
+                                        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+                                            const yy = y+oy, xx = x+ox;
+                                            if (yy<0||yy>=ph||xx<0||xx>=pw) continue;
+                                            const j = yy*pw+xx;
+                                            if (glowClaim[j] && !label3[j]) { label3[j] = comp3; qq[tail3++] = j; }
+                                        }
+                                    }
+                                    if (cN < 50) continue;      // specks: no disc
+                                    const cxm = sxs/cN, cym = sys/cN;
+                                    let r2max = 0;
+                                    for (const i of mem3) { const dx2 = (i%pw)-cxm, dy2 = ((i/pw)|0)-cym;
+                                        const r2 = dx2*dx2+dy2*dy2; if (r2 > r2max) r2max = r2; }
+                                    const R2 = Math.min(120, Math.sqrt(r2max) * 2);
+                                    const x0 = Math.max(0, (cxm-R2)|0), x1 = Math.min(pw-1, (cxm+R2)|0);
+                                    const y0 = Math.max(0, (cym-R2)|0), y1 = Math.min(ph-1, (cym+R2)|0);
+                                    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                                        const dx2 = x-cxm, dy2 = y-cym;
+                                        if (dx2*dx2+dy2*dy2 > R2*R2) continue;
+                                        const i = y*pw+x;
+                                        if (haloM[i] || depth[i] >= otsuD) continue;
+                                        if (depth[i] - bmin(i) >= 0.02) continue;
+                                        depth[i] = aD; haloM[i] = 1; discPx++;
+                                    }
+                                }
+                                pxChanged += discPx;
+                                console.log('[RUNG-PLUG] glow-attach: ' + nGlowAttach + ' emissive blobs attached, halo grown +' + grown + 'px, disc closure +' + discPx + 'px');
+                            }
+                        }
+                    }
+                    // ---- RAMP COLLAPSE (review-fix v6): the streak generator ----
+                    // The bake leaves 3-10px transition APRONS along silhouettes,
+                    // quantized into terrace treads. Every tread is an intermediate-
+                    // depth texel band below fgTearStep: no tear rule can touch it,
+                    // and under parallax each tread shears horizontally by its own
+                    // depth — rendered as the parallel streak bands (FG-only depth
+                    // attribution: the eagle, boots and staff surroundings shred
+                    // into terraces). Cutting one line through the ramp (the NMS
+                    // core tear) leaves the remaining treads still connected, still
+                    // shearing. So remove the INTERMEDIATE DEPTHS themselves:
+                    // binarize every ramp pixel (local +/-2px window span > step)
+                    // to whichever side — window min or max — is closer in value.
+                    // Silhouette aprons become 1-texel cliffs (the sharp tear
+                    // handles them); smooth real slopes (window span < step) are
+                    // untouched; the bake's silhouette pepper collapses with it.
+                    {
+                        const d0 = depth.slice();
+                        // [PERF] van Herk windowed min/max, exact — the naive 5x5
+                        // scan was 63M reads. Interior loop bounds unchanged.
+                        const w2mn = bgSlide2D(d0, pw, ph, 2, true), w2mx = bgSlide2D(d0, pw, ph, 2, false);
+                        let snapped = 0;
+                        for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
+                            const i = y*pw+x;
+                            const mn2 = w2mn[i], mx2 = w2mx[i];
+                            if (mx2 - mn2 <= fgTearStep) continue;
+                            const v = d0[i];
+                            const t2 = (v - mn2 <= mx2 - v) ? mn2 : mx2;
+                            if (Math.abs(t2 - v) > 0.002) { depth[i] = t2; snapped++; }
+                        }
+                        if (snapped > 0) { pxChanged += snapped; console.log('[RUNG-PLUG] ramp collapse: ' + snapped + 'px binarized'); }
+                    }
+                _mark('despeckle+collapse');
+                    if (pxChanged > 0) {
+                        const hf2 = new Float32Array(PN);
+                        for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
+                            for (let x = 0; x < pw; x++) hf2[d2+x] = depth[s2+x]; }
+                        const hc2 = document.createElement('canvas'); hc2.width = pw; hc2.height = ph;
+                        const hx2 = hc2.getContext('2d'); const hid2 = hx2.createImageData(pw, ph);
+                        for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(depth[i] * 255)));
+                            hid2.data[i*4] = v; hid2.data[i*4+1] = v; hid2.data[i*4+2] = v; hid2.data[i*4+3] = 255; }
+                        hx2.putImageData(hid2, 0, 0);
+                        const hTex2 = new THREE.DataTexture(hf2, pw, ph, THREE.RedFormat, THREE.FloatType);
+                        hTex2.needsUpdate = true; hTex2.flipY = false;
+                        hTex2.minFilter = THREE.LinearFilter; hTex2.magFilter = THREE.LinearFilter;
+                        hTex2.generateMipmaps = false;
+                        if ('colorSpace' in hTex2) hTex2.colorSpace = THREE.NoColorSpace;
+                        hTex2.image2d = hc2;
+                        L.textures.depth = hTex2;
+                        if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex2;
+                        console.log('[RUNG-PLUG] despeckle: ' + nAttach + ' attached, ' + nFlat +
+                            ' flattened (' + pxChanged + 'px total w/ collapse), ' + nKeep + ' kept (sharp/big)');
+                    }
+                }
                 if (bgPlugMode === 'directional') {
                     // Single directional plug computed straight from the depth: seal each
                     // disocclusion at the far side of its own edge, grown in by the edge's
@@ -7329,6 +7943,7 @@ function buildBackgroundLayer() {
                     let bandN = 0; for (let i = 0; i < PN; i++) bandN += band[i];
                     console.log('[RUNG-PLUG] inputs: directional plug ' + pw + 'x' + ph + ' (canvas ' + w + 'x' + h + ')' +
                         ' band ' + bandN + 'px (' + (100*bandN/PN).toFixed(1) + '%)');
+                _mark('directional-plug');
                 } else {
                     // legacy global fg/bg plug: band (PNG) + Otsu valid + harmonic
                     cx.clearRect(0, 0, pw, ph);
@@ -7359,6 +7974,107 @@ function buildBackgroundLayer() {
                         ' valid[' + validSrc + '] ' + validN + 'px (' + (100*validN/PN).toFixed(1) + '%)');
                     plugDepth = MoebiusPlug.buildPlugFromValid(depth, band, valid, pw, ph, 220);
                 }
+                // ---- THIN FEATURES: detect + depth-halo (review-fix v4) ----
+                // A 1-2px feature (staff, glider) is ALL edge triangles: under
+                // parallax it renders as a diluted smear, and tearing it deletes
+                // it. Fix its rigidity in the DISPLACEMENT domain: dilate the
+                // feature's depth ~2px into its background neighbours (colour
+                // untouched). The rubber boundary moves off the feature onto
+                // sky-coloured cells, which stretch invisibly over the plate;
+                // the feature's own pixels displace as a rigid body.
+                {
+                    const oT = bgOtsuThreshold(depth, band); // band-excluded: null-skip lands ABOVE the figure on ground-heavy histograms and unprotects the staff
+                    const nearM = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) nearM[i] = depth[i] >= oT ? 1 : 0;
+                    let E = nearM;
+                    for (let p = 0; p < 2; p++) { const ne = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (E[i] && E[i-1] && E[i+1] && E[i-pw] && E[i+pw]) ne[i] = 1; }
+                        E = ne; }
+                    // Thin = near-class pixel that the eroded core cannot reach
+                    // GEODESICALLY (through the near mask). A plain window test
+                    // marks the staff shaft "thick" just because the figure's
+                    // core is nearby — and the shaft got torn ("carved away").
+                    let R = E;
+                    for (let p = 0; p < 3; p++) { const nr = new Uint8Array(PN);
+                        for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                            if (!nearM[i]) continue;
+                            if (R[i] || R[i-1] || R[i+1] || R[i-pw] || R[i+pw]) nr[i] = 1; }
+                        R = nr; }
+                    thinM = new Uint8Array(PN);
+                    let nThin = 0;
+                    for (let i = 0; i < PN; i++) if (nearM[i] && !R[i]) { thinM[i] = 1; nThin++; }
+                    // (no rebuild guard: the input depth is base-restored above,
+                    // so re-applying derives the identical halo texture)
+                    if (nThin > 0) {
+                        const hd = depth.slice(); let changed = 0;
+                        if (!haloM) haloM = new Uint8Array(PN);
+                        // [PERF] the 5x5 max can only be nonzero within Chebyshev
+                        // distance 2 of a thin pixel: gate the window scan to an
+                        // 8-connected double dilation of thinM (exact same support)
+                        let tGate = thinM.slice();
+                        for (let p = 0; p < 2; p++) { const ng = tGate.slice();
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (tGate[i]) continue;
+                                if (tGate[i-1] || tGate[i+1] || tGate[i-pw] || tGate[i+pw] ||
+                                    tGate[i-pw-1] || tGate[i-pw+1] || tGate[i+pw-1] || tGate[i+pw+1]) ng[i] = 1; }
+                            tGate = ng; }
+                        // frame border: the interior-only dilation can miss it — scan it unconditionally (tiny)
+                        for (let x = 0; x < pw; x++) { tGate[x] = 1; tGate[pw+x] = 1; tGate[(ph-1)*pw+x] = 1; tGate[(ph-2)*pw+x] = 1; }
+                        for (let y = 0; y < ph; y++) { const r = y*pw; tGate[r] = 1; tGate[r+1] = 1; tGate[r+pw-1] = 1; tGate[r+pw-2] = 1; }
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                            if (thinM[i] || !tGate[i]) continue;
+                            let m = -1;
+                            for (let oy = -2; oy <= 2; oy++) for (let ox = -2; ox <= 2; ox++) {
+                                const yy = y + oy, xx = x + ox;
+                                if (yy < 0 || yy >= ph || xx < 0 || xx >= pw) continue;
+                                const j = yy * pw + xx;
+                                if (thinM[j] && depth[j] > m) m = depth[j];
+                            }
+                            if (m > hd[i] + 0.004) { hd[i] = m; haloM[i] = 1; changed++; }
+                        }
+                        dispDepth = hd;
+                        if (changed > 0) {
+                            const hf = new Float32Array(PN);
+                            for (let y = 0; y < ph; y++) { const s = y*pw, d = (ph-1-y)*pw;
+                                for (let x = 0; x < pw; x++) hf[d+x] = hd[s+x]; }
+                            const hc = document.createElement('canvas'); hc.width = pw; hc.height = ph;
+                            const hx = hc.getContext('2d'); const hid = hx.createImageData(pw, ph);
+                            for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(hd[i] * 255)));
+                                hid.data[i*4] = v; hid.data[i*4+1] = v; hid.data[i*4+2] = v; hid.data[i*4+3] = 255; }
+                            hx.putImageData(hid, 0, 0);
+                            const hTex = new THREE.DataTexture(hf, pw, ph, THREE.RedFormat, THREE.FloatType);
+                            hTex.needsUpdate = true; hTex.flipY = false;
+                            hTex.minFilter = THREE.LinearFilter; hTex.magFilter = THREE.LinearFilter;
+                            hTex.generateMipmaps = false;
+                            if ('colorSpace' in hTex) hTex.colorSpace = THREE.NoColorSpace;
+                            hTex.image2d = hc;
+                            hTex._isPlugHalo = true; // rebuild reads restore the pristine base instead of this
+                            L.textures.depth = hTex;
+                            if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTex;
+                            L._thinHaloApplied = true;
+                            console.log('[RUNG-PLUG] thin-feature depth halo: ' + nThin + 'px thin, ' + changed + 'px haloed');
+                _mark('thin-halo');
+                        }
+                    }
+                }
+                // rim colour source: step a few px past the rim, away from the
+                // occluder — the immediate far-side pixel at a contact edge is
+                // usually the cast shadow / ink line (it filled the reveal next
+                // to the boot with shadow-navy instead of sand).
+                const rimColorSrc = (bandI, rs) => {
+                    if (rs < 0) return rs;
+                    const bx = bandI % pw, by = (bandI / pw) | 0;
+                    const rx = rs % pw, ry = (rs / pw) | 0;
+                    const dx = Math.sign(rx - bx), dy = Math.sign(ry - by);
+                    for (let step = 4; step >= 2; step--) {
+                        const nx = rx + dx * step, ny = ry + dy * step;
+                        if (nx < 0 || nx >= pw || ny < 0 || ny >= ph) continue;
+                        const j = ny * pw + nx;
+                        if (!band[j]) return j;
+                    }
+                    return rs;
+                };
                 // ---- PLUG DEPTH COMPLETION: bury the plug's own cliff ----
                 // Outside the band the plug reverts to SOURCE depth, so the
                 // band's inner boundary is a figure-sized cliff in the PLUG's
@@ -7372,22 +8088,144 @@ function buildBackgroundLayer() {
                 // background/rim depth underneath. The visible plug becomes a
                 // cliff-free "world without the foreground" surface.
                 {
-                    const RIND = Math.max(48, 3 * (bgBandMaxGrowPx | 0));
-                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN), budg = new Int32Array(PN), q2 = [];
+                    // REVIEW FIX v2 (interior cliff, locally correct): the flood
+                    // keeps the author's PER-EDGE rim depths (criterion 1: legs
+                    // complete to the dune behind them, the torso to the sky) but
+                    // the RIND budget goes away — bounded completion merely
+                    // relocated the plug's cliff inward, and the BG rubber sheet
+                    // climbed it (the doppelganger).
+                    // STANDING-CONTENT MASK (generality v6): both earlier
+                    // containments failed a class of scene. The global Otsu floor
+                    // leaked on near-heavy histograms, and the raw above-local-floor
+                    // test (depth - windowed min > step) integrates SMOOTH SLOPE:
+                    // on an ordinary ground plane the depth ramp accumulates more
+                    // than fgTearStep across the window, so the whole ground was
+                    // swept into the rind and the plate's ground collapsed to
+                    // diffused far values (measured on the synthetic ground-truth
+                    // suite). A pixel is occluder BODY only if BOTH hold:
+                    //   (1) it stands above its local floor (min over the 4x-budget
+                    //       window — the maximum-parallax exposure radius), AND
+                    //   (2) it is geodesically reachable, within that same radius
+                    //       and without leaving class (1), from a CLIFF SEED: a
+                    //       pixel more than fgTearStep above the min of its +/-4px
+                    //       neighbourhood. A tear-scale discontinuity must exist
+                    //       within 4px — true at every silhouette that can tear
+                    //       (hard cliffs and the soft NMS ramps alike), never true
+                    //       on a smooth ramp, whose per-4px variation is bounded by
+                    //       the ramp-collapse binarization threshold.
+                    // The completion flood is gated to this mask, which restores
+                    // the leak containment the Otsu floor used to provide: a front
+                    // that reaches an occluder's feet cannot exit onto the open
+                    // ground, because the ground is not standing content.
+                    const standCap = (bgBandMaxGrowPx | 0) * 4;
+                    const standM = new Uint8Array(PN);
+                    let standFloor = null;   // shifted-window floor field (plate default under uncorrected rind)
+                    {
+                        let floorBig = bgSlide2D(depth, pw, ph, standCap, true);
+                        // SHIFTED-WINDOW FLOORS at the frame border: the van Herk
+                        // window clips at the image boundary, so near content
+                        // touching the frame sees only itself as its floor and is
+                        // never swept — its depth then stays in the plate and
+                        // diffuses sideways (measured: wolf-depth plate content
+                        // floating in the gap between the warrior's wolves at the
+                        // frame bottom, 204/255 protrusion). A border texel takes
+                        // the floor of the nearest FULLY-WINDOWED interior texel —
+                        // the window slides inside the frame instead of clipping.
+                        // Smooth ramps stay safe: border rows gain floor-domain
+                        // membership but sweeping still requires geodesic reach
+                        // from a cliff seed, which a ramp never produces.
+                        {
+                            const lox = Math.min(standCap, (pw - 1) >> 1), loy = Math.min(standCap, (ph - 1) >> 1);
+                            const fe = new Float32Array(PN);
+                            for (let y = 0; y < ph; y++) {
+                                const cy = y < loy ? loy : (y > ph - 1 - loy ? ph - 1 - loy : y);
+                                const rs = y * pw, cs = cy * pw;
+                                for (let x = 0; x < pw; x++) {
+                                    const cx2 = x < lox ? lox : (x > pw - 1 - lox ? pw - 1 - lox : x);
+                                    fe[rs + x] = floorBig[cs + cx2];
+                                }
+                            }
+                            floorBig = fe;
+                        }
+                        standFloor = floorBig;
+                        const floorNear = bgSlide2D(depth, pw, ph, 4, true);
+                        const sq = new Int32Array(PN), sd = new Uint16Array(PN);
+                        let qh = 0, qt = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (depth[i] - floorBig[i] > fgTearStep && depth[i] - floorNear[i] > fgTearStep) {
+                                standM[i] = 1; sq[qt++] = i;
+                            }
+                        }
+                        const nSeed = qt;
+                        while (qh < qt) {
+                            const i = sq[qh++], d = sd[i];
+                            if (d >= standCap) continue;
+                            const x = i % pw, y = (i / pw) | 0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) if (j >= 0 && !standM[j] && depth[j] - floorBig[j] > fgTearStep) {
+                                standM[j] = 1; sd[j] = d + 1; sq[qt++] = j;
+                            }
+                        }
+                        console.log('[RUNG-PLUG] standing-content mask: ' + qt + 'px (' + nSeed + ' cliff-seeded)');
+                    }
+                    // UNIFIED COMPLETION FLOOD, nearest-rim-first (review v5).
+                    // First-come BFS let FAR-rim fronts (torso->sky/plain) walk
+                    // down through low-contrast ground contacts and claim the
+                    // legs and nearby dune — the reveal then showed the DISTANT
+                    // blue sand through the pink sand. Fronts are processed in
+                    // DESCENDING rim depth (the local surface claims its own
+                    // occluder before any far front arrives), and the entry gate
+                    // is +0.02 so a leg only ~0.05 nearer than its dune still
+                    // admits the dune's rim.
+                    const fgm = new Uint8Array(PN), rimV = new Float32Array(PN);
+                    const rimC = new Int32Array(PN).fill(-1);
+                    const NB = 32, buckets = [];
+                    for (let k = 0; k < NB; k++) buckets.push([]);
+                    const bkt = (r) => Math.max(0, Math.min(NB - 1, ((1 - r) * NB) | 0)); // near rim -> low bucket
                     for (let i = 0; i < PN; i++) if (band[i]) {
                         const x = i % pw, y = (i / pw) | 0;
                         const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= plugDepth[i] + 0.06) {
-                            fgm[j] = 1; rimV[j] = plugDepth[i]; budg[j] = RIND; q2.push(j);
+                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && standM[j] && depth[j] >= plugDepth[i] + 0.02) {
+                            fgm[j] = 1; rimV[j] = plugDepth[i];
+                            rimC[j] = (rimSrc && rimSrc[i] >= 0) ? rimColorSrc(i, rimSrc[i]) : j;
+                            buckets[bkt(plugDepth[i])].push(j);
                         }
                     }
-                    for (let h = 0; h < q2.length; h++) { const i = q2[h]; if (budg[i] <= 0) continue;
-                        const x = i % pw, y = (i / pw) | 0;
-                        const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && depth[j] >= rimV[i] + 0.06) {
-                            fgm[j] = 1; rimV[j] = rimV[i]; budg[j] = budg[i] - 1; q2.push(j);
+                    for (let bi = 0; bi < NB; bi++) {
+                        const q2 = buckets[bi];
+                        for (let h = 0; h < q2.length; h++) { const i = q2[h];
+                            const x = i % pw, y = (i / pw) | 0;
+                            const nbs = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                            for (const j of nbs) if (j >= 0 && !band[j] && !fgm[j] && standM[j] && depth[j] >= rimV[i] + 0.02) {
+                                fgm[j] = 1; rimV[j] = rimV[i]; rimC[j] = rimC[i];
+                                const tb = bkt(rimV[i]);
+                                if (tb === bi) q2.push(j); else buckets[tb].push(j);
+                            }
                         }
                     }
+                    console.log('[RUNG-PLUG] completion flood: unified nearest-rim-first, gate 0.02, standing-mask contained');
+                    // FLOOR RIND (generality): the flood only enters through BAND
+                    // seeds — dark-on-dark soft silhouettes never seed a band, so
+                    // their near content stayed in the plate (measured: the
+                    // dancer's-thigh doppelganger blob on the cave asset). Sweep
+                    // the standing-content pixels the flood did not claim into the
+                    // rind; they take diffused + membrane depth and continuation
+                    // colours (no carried rim).
+                    floorField = bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
+                    {
+                        let nFloorAdd = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (fgm[i] || band[i]) continue;
+                            if (standM[i]) { fgm[i] = 1; nFloorAdd++; }
+                        }
+                        if (nFloorAdd) console.log('[RUNG-PLUG] floor rind: +' + nFloorAdd + 'px standing content unclaimed by the flood');
+                    }
+                    // Reject rims that are themselves under an occluder (internal
+                    // figure cliffs: arm-over-torso seeds carry FIGURE colours —
+                    // bright dashes in the fill). Those pixels fall back to the
+                    // diffusion wash.
+                    for (let i = 0; i < PN; i++) if (rimC[i] >= 0 && (fgm[rimC[i]] || band[rimC[i]])) rimC[i] = -1;
+                    underRimC = rimC;
                     let nFg = 0; for (let i = 0; i < PN; i++) nFg += fgm[i];
                     if (nFg > 0) {
                         // diffuse surrounding plug depth (background + pinned band rims)
@@ -7403,6 +8241,106 @@ function buildBackgroundLayer() {
                         for (let i = 0; i < PN; i++) if (fgm[i]) plugDepth[i] = dsm[i*3] / 255;
                         underMask = fgm;
                         console.log('[RUNG-PLUG] plug depth completed under occluders (' + nFg + 'px rind, diffused)');
+                _mark('completion-flood');
+                // ---- MEMBRANE CORRECTION (topology): the plug must CONTINUE the
+                // surfaces it fills across, not plateau at carried rim values. The
+                // nearest-rim-first flood prefers NEAR rims (right for ground
+                // contacts) but behind TALL objects it extends the ground upward
+                // above the horizon — the depth analog of the colour bug fixed in
+                // the doppelganger addendum. Correction: where a completed pixel's
+                // row (and/or column) is bounded on BOTH sides by non-completed
+                // surface pixels of the SAME class (within bgBandStep), its depth
+                // moves to the inverse-distance-weighted blend of those linear
+                // continuation lines. Sky rows bridge sky across the mountain; the
+                // horizon stripe continues itself; the under-leg corridor stays
+                // dune (its row line IS dune). One-sided reveals keep the flood
+                // value. Anchors are real visible surfaces, so the result is
+                // bounded by them — no protrusion channel.
+                const mCorr = new Uint8Array(PN);   // membrane established a corrected value here
+                {
+                    const setP = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) setP[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
+                    const sR = new Int32Array(PN), sL = new Int32Array(PN), sD = new Int32Array(PN), sU = new Int32Array(PN);
+                    for (let y = 0; y < ph; y++) {
+                        let nxt = -1;
+                        for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; sR[i] = nxt; if (!setP[i]) nxt = i; }
+                        nxt = -1;
+                        for (let x = 0; x < pw; x++) { const i = y*pw+x; sL[i] = nxt; if (!setP[i]) nxt = i; }
+                    }
+                    for (let x = 0; x < pw; x++) {
+                        let nxt = -1;
+                        for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; sD[i] = nxt; if (!setP[i]) nxt = i; }
+                        nxt = -1;
+                        for (let y = 0; y < ph; y++) { const i = y*pw+x; sU[i] = nxt; if (!setP[i]) nxt = i; }
+                    }
+                    let corrected = 0;
+                    const SAME = bgBandStep;   // same-surface gate, existing constant
+                    for (let i = 0; i < PN; i++) {
+                        if (!setP[i]) continue;
+                        let num = 0, den = 0;
+                        const aL = sL[i], aR = sR[i];
+                        if (aL >= 0 && aR >= 0) {
+                            const dl = depth[aL], dr = depth[aR];
+                            if (Math.abs(dl - dr) <= SAME) {
+                                const distL = i - aL, distR = aR - i;   // same row: index distance = x distance
+                                const v = dl + (dr - dl) * (distL / (distL + distR));
+                                const w = 1 / (distL + distR);
+                                num += v * w; den += w;
+                            }
+                        }
+                        const aU = sU[i], aD = sD[i];
+                        if (aU >= 0 && aD >= 0) {
+                            const du = depth[aU], dd2 = depth[aD];
+                            if (Math.abs(du - dd2) <= SAME) {
+                                const distU = (i - aU) / pw, distD = (aD - i) / pw;
+                                const v = du + (dd2 - du) * (distU / (distU + distD));
+                                const w = 1 / (distU + distD);
+                                num += v * w; den += w;
+                            }
+                        }
+                        if (den > 0) {
+                            const v = num / den;
+                            // ONE-SIDED: the flood value is the contract's lower bound
+                            // (the LOCAL far rim). The membrane may move the plug
+                            // FARTHER (ground wrongly carried above the horizon → sky)
+                            // but never meaningfully NEARER: in CONCAVE scenes (cave
+                            // corridors, gaps between bodies) both row anchors are
+                            // near walls and the bridge would cross the passage
+                            // between them — measured as plate protrusions on the
+                            // cave and warrior assets. Within one tear-step is
+                            // allowed (contact smoothing).
+                            if (v - plugDepth[i] <= fgTearStep && Math.abs(v - plugDepth[i]) > 0.002) { plugDepth[i] = v; mCorr[i] = 1; corrected++; }
+                            else if (Math.abs(v - plugDepth[i]) <= 0.002) mCorr[i] = 1; // already at the anchored continuation
+                        }
+                    }
+                    console.log('[RUNG-PLUG] membrane correction: ' + corrected + 'px re-anchored to surface continuation lines');
+                    _mark('membrane');
+                }
+                // PLATE CEILING (contract): the plate stands in for the world
+                // WITHOUT the removed content — it can never sit NEARER than the
+                // world's own surface at that pixel (anything nearer is the FG
+                // mesh's to carry). Two tiers:
+                //  - membrane-corrected pixels are bounded by their real surface
+                //    anchors already; only the source-depth cap applies (kills the
+                //    few-quantum nearer bias diffusion leaves on swept floors).
+                //  - UNCORRECTED rind pixels (the membrane's pair gate rejected
+                //    every line — mixed-class flanks, wide frame-edge occluders)
+                //    have NO anchored information; they default to the LOCAL
+                //    FLOOR. Measured on the warrior: the wolves' unswept cores
+                //    fed near depth into the diffusion between them, the gate
+                //    rightly rejected the 0.65|0.82 rows, and the old src-cap
+                //    then LOCKED IN wolf depth — the 204/255 protrusion. The
+                //    floor is the nearest legitimate backing surface.
+                if (underMask) {
+                    let nCeil = 0, nFloorCap = 0;
+                    for (let i = 0; i < PN; i++) {
+                        if (!underMask[i] || band[i]) continue;
+                        let cap = depth[i];
+                        if (standFloor && !mCorr[i] && standFloor[i] < cap) { cap = standFloor[i]; }
+                        if (plugDepth[i] > cap) { plugDepth[i] = cap; if (cap === depth[i]) nCeil++; else nFloorCap++; }
+                    }
+                    if (nCeil + nFloorCap) console.log('[RUNG-PLUG] plate ceiling: ' + nCeil + 'px at source, ' + nFloorCap + 'px defaulted to the local floor (no membrane anchor)');
+                }
                     }
                 }
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
@@ -7425,6 +8363,7 @@ function buildBackgroundLayer() {
                 if ('colorSpace' in plugDT) plugDT.colorSpace = THREE.NoColorSpace;
                 _plugTex = plugDT;
                 console.log('[RUNG-PLUG] live plug computed: ' + (Date.now()-t0) + 'ms');
+                _mark('plug-texture');
 
                 // --- BAND-GATED FG STRETCH CUT: bake the cut mask ---
                 // Dilate the band a few px so the far-side half of a stretched
@@ -7456,15 +8395,398 @@ function buildBackgroundLayer() {
                     if (fu && fu.u_bandMask) {
                         if (fu.u_bandMask.value && fu.u_bandMask.value.dispose) fu.u_bandMask.value.dispose();
                         fu.u_bandMask.value = cutDT;
-                        fu.u_useBandCut.value = !!bgCutFGOnPlug;
+                        // With the FG pre-torn there are no rubber triangles to
+                        // cut — the stretch heuristics stay disarmed (they misfire
+                        // at rest on slow-ramp cliffs; see review D1b).
+                        fu.u_useBandCut.value = !!bgCutFGOnPlug && !fgPreTear;
+                        // Same rationale for the per-fragment gap discards
+                        // (u_useDepthGrad was hard-on: `checked || true`). On the
+                        // walls the tear deliberately KEEPS (far-mismatch overlaps,
+                        // thin ribbons), fwidth straddles the threshold under
+                        // parallax, so the discards render them as dash-row streak
+                        // patterns — in the colour pass AND the depth pass, which
+                        // shares these uniforms. Geometry tears are the cut now;
+                        // kept walls render solid.
+                        if (fgPreTear) {
+                            for (const gk of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                                              'u_useCurvature','u_useCrease','u_useUVStretch','u_useGrazingAngle']) {
+                                if (fu[gk]) fu[gk].value = false;
+                            }
+                        }
                         fu.u_bandCutMismatch.value = bgBandCutMismatch;
                         if (fu.u_bandCutMaxGrad) fu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                         // expected UV rate: the mesh spans UV 0..1 over roughly the
                         // canvas width; a rubber triangle runs at a small fraction of it
                         const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
                         if (fu.u_bandCutUvRate) fu.u_bandCutUvRate.value = _uvRateThr;
+                        _mark('bandcut-bake');
                         console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
                     }
+                }
+
+                // ---- PRE-TORN FOREGROUND (review-fix v2): remove cliff-spanning
+                // triangles, but only where the hole is SAFE and the feature is
+                // not destroyed:
+                //   gate 1 (plug-backed): a triangle tears only if a vertex texel
+                //     lies in the dilated band (bandCutMask) — every hole opens
+                //     over opaque plug at the local rim depth. Sub-band cliffs
+                //     (mountains, tents) keep their v3.12 behaviour instead of
+                //     tearing onto nothing (that painted ink-black).
+                //   gate 2 (thin features): if the triangle's near side vanishes
+                //     under a 2px erosion of the near-class mask (staff, glider),
+                //     it is NOT torn — deleting it deletes the feature. Those
+                //     features keep their (small) rubber smear for now; the MPI
+                //     step is the real fix.
+                if (fgPreTear && bandCutMask && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
+                    try {
+                        // Thin-feature protection is the RIBBON itself (feature +
+                        // halo): only triangles touching it are vetoed. The old 3px
+                        // thinDil collar also protected every THICK structure's
+                        // cliff that happened to pass near a thin feature (the
+                        // arm/shoulder silhouette where the staff crosses it) —
+                        // those kept their rubber walls, and the depth pass's
+                        // glancing-angle discards chopped them into the residual
+                        // streak block. thinDil remains only as the fallback when
+                        // no halo mask exists this build (rebuild path).
+                        let thinDil = null;
+                        if (thinM && !haloM) {
+                            thinDil = thinM.slice();
+                            for (let p = 0; p < 3; p++) { const nb = thinDil.slice();
+                                for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                    if (thinDil[i]) continue;
+                                    if (thinDil[i-1] || thinDil[i+1] || thinDil[i-pw] || thinDil[i+pw]) nb[i] = 1; }
+                                thinDil = nb; }
+                        }
+                        const g = L.mesh.geometry, gp = g.parameters;
+                        const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
+                        if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                        // span tests on the COLLAPSED displayed depth: the ramp
+                        // collapse binarized every silhouette apron (including the
+                        // bake's 1-2px pepper skin, which lives inside those
+                        // aprons), so cliffs are 1-texel sharp and pepper cannot
+                        // shred. The old raw-depth indirection existed only for
+                        // pepper immunity — raw's soft ramps also made the
+                        // far-side test unreliable (mid-ramp minima).
+                        const tearD = depth;
+                        // SOFT-CLIFF CORE (review-fix v5): the bake spreads some
+                        // silhouettes into 3-10px ramps whose per-triangle span never
+                        // exceeds fgTearStep, so the mesh rubbers instead of tearing
+                        // (silverwarrior's fur-edge streak smears). Detect the ramp
+                        // with a ±2px window span and tear only its steepest 1-2px
+                        // core (gradient non-maximum suppression, Canny-style), so
+                        // the rest-state gap stays as thin as a sharp-cliff tear.
+                        const cliffCore = new Uint8Array(PN);
+                        const cliffFar = new Float32Array(PN);  // window min at each core px: the ramp's local far side
+                        {
+                            // [PERF] van Herk windowed min/max, exact
+                            const c2mn = bgSlide2D(tearD, pw, ph, 2, true), c2mx = bgSlide2D(tearD, pw, ph, 2, false);
+                            const gm = (j) => Math.max(Math.abs(tearD[j+1]-tearD[j-1]), Math.abs(tearD[j+pw]-tearD[j-pw]));
+                            for (let y = 2; y < ph-2; y++) for (let x = 2; x < pw-2; x++) {
+                                const i = y*pw+x;
+                                if (c2mx[i] - c2mn[i] <= fgTearStep) continue;
+                                const gx = Math.abs(tearD[i+1]-tearD[i-1]), gy2 = Math.abs(tearD[i+pw]-tearD[i-pw]);
+                                const g0 = Math.max(gx, gy2);
+                                const a = gx >= gy2 ? i-1 : i-pw, b = gx >= gy2 ? i+1 : i+pw;
+                                if (g0 > 0 && g0 >= gm(a) && g0 >= gm(b)) { cliffCore[i] = 1; cliffFar[i] = c2mn[i]; }
+                            }
+                        }
+                        // ---- MPI SLICE 2: UNDER-SHEET as a FLOOR FIELD ----
+                        // Behind any near clutter lies the LOCAL LOWER ENVELOPE of
+                        // the surface: the torso behind the arm, the body behind the
+                        // fur field. A per-cliff carried depth fragments into micro-
+                        // terraces on clutter (fur) — the streak problem one level
+                        // down. The floor (separable min of displayed depth over the
+                        // parallax-budget radius) is one coherent smooth sheet by
+                        // construction. Sheet exists where the front stands above
+                        // its floor AND the backdrop plate does not already carry
+                        // that floor. Colours: row-continuation at floor depth;
+                        // pixels with no continuation anywhere are pruned (a tiny
+                        // far sliver — the backdrop is the true next surface).
+                        if (bgMPIMode) {
+                            const RB = bgBandMaxGrowPx | 0;
+                            const fl = floorField || bgSlide2D(depth, pw, ph, RB, true);   // shared with the floor rind
+                            midBand = new Uint8Array(PN);
+                            midDepthV = fl;
+                            midRimC = new Int32Array(PN).fill(-1);
+                            let nSheet = 0;
+                            for (let i = 0; i < PN; i++) {
+                                if (depth[i] - fl[i] <= fgTearStep) continue;                 // front is ON its floor
+                                if (Math.abs(plugDepth[i] - fl[i]) <= fgTearStep) continue;   // backdrop already carries the floor
+                                midBand[i] = 1; nSheet++;
+                            }
+                            if (nSheet > 0) console.log('[MPI] under-sheet floor: ' + nSheet + 'px above-floor (radius ' + RB + 'px)');
+                            else { midBand = null; midDepthV = null; midRimC = null; }
+                            _mark('undersheet-floor');
+                        }
+                        const src = g.userData._fullIndex;
+                        const out = new src.constructor(src.length);
+                        const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
+                        const idMap = (vw === pw && vh === ph);   // [PERF] 1 vertex/texel: ti === vi
+                        const tiv = new Int32Array(3), dv = new Float32Array(3);
+                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0;
+                        // [PERF] flat masks instead of per-vertex closure calls / float math
+                        const ribMask = new Uint8Array(PN);
+                        if (thinM) for (let i = 0; i < PN; i++) if (thinM[i]) ribMask[i] = 1;
+                        if (haloM) for (let i = 0; i < PN; i++) if (haloM[i]) ribMask[i] = 1;
+                        const coreOKMask = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) if (cliffCore[i] &&
+                            (Math.abs(plugDepth[i] - cliffFar[i]) <= 2*fgTearStep ||
+                             (midBand && midBand[i] && Math.abs(midDepthV[i] - cliffFar[i]) <= 2*fgTearStep))) coreOKMask[i] = 1;
+                        for (let t = 0; t < src.length; t += 3) {
+                            let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false, midOK = false;
+                            let dmn = 2, dmx = -1, mnTi = -1;
+                            for (let k = 0; k < 3; k++) {
+                                const vi = src[t + k];
+                                const ti = idMap ? vi : (Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx));
+                                tiv[k] = ti;
+                                const d = tearD[ti]; dv[k] = d;
+                                if (d < mn) mn = d;
+                                if (d > mx) mx = d;
+                                const dd = dispDepth[ti];
+                                if (dd < dmn) { dmn = dd; mnTi = ti; }
+                                if (dd > dmx) dmx = dd;
+                                if (ribMask[ti]) nRib++;
+                                if (coreOKMask[ti]) coreOK = true;
+                                if (thinDil && thinDil[ti]) thinVeto = true;
+                            }
+                            // under-sheet backing: evaluated after dmn is final
+                            if (midBand) for (let k = 0; k < 3 && !midOK; k++) {
+                                const ti = tiv[k];
+                                if (midBand[ti] && Math.abs(midDepthV[ti] - dmn) <= fgTearStep) midOK = true;
+                            }
+                            // FAR-SIDE MATCH — the one gate all three rules share: a
+                            // cliff tears iff the plate behind it carries the cliff's
+                            // OWN far side (within fgTearStep). This is what makes a
+                            // tear safe by construction: the hole opens onto the same
+                            // surface the cliff falls to. It tears figure-over-DUNE
+                            // ground contacts (plate = dune there — the nearest-rim
+                            // flood guarantees it), which the old near/far-class proxy
+                            // never could, and still keeps arm-over-torso overlaps
+                            // (plate = sky behind the arm: mismatch) until MPI.
+                            // The far side is identified in the DISPLAYED (sharpened)
+                            // depth: raw silhouettes are soft ramps, so a triangle's
+                            // raw min is a mid-ramp value that never matches the true
+                            // far plate (probe: the whole figure ringed by kept walls).
+                            const farMatch = mnTi >= 0 && Math.abs(plugDepth[mnTi] - dmn) <= fgTearStep;
+                            let keep = true;
+                            // HALO-EDGE TEAR: the thin-feature ribbon (feature + halo)
+                            // stays rigid and intact; the triangles that SPAN its outer
+                            // boundary are the depth-channel rubber filaments (colour-
+                            // invisible sky-over-sky stretch). Their cliff exists only
+                            // in the DISPLAYED (haloed) depth — raw has no step there.
+                            // Backing: the backdrop plate (farMatch) OR the under-sheet
+                            // (midOK) — fur ribbons over a body tear against the body
+                            // floor, not the sky (their rubber was the residual smear).
+                            if (nRib > 0 && nRib < 3 && dmx - dmn > fgTearStep && (farMatch || midOK)) {
+                                droppedHalo++; keep = false;
+                            }
+                            else if (nRib > 0 || thinVeto) {
+                                // ribbon interior / fallback collar: never torn
+                                if (mx - mn > fgTearStep) keptThin++;
+                            }
+                            // SOFT-CLIFF CORE TEAR: sub-threshold ramps the band never
+                            // seeded (D3) — the full-frame plate is opaque everywhere,
+                            // so the thin gap always opens onto content.
+                            else if (coreOK) {
+                                droppedCore++; keep = false;
+                            }
+                            else if (mx - mn > fgTearStep) {
+                                if (farMatch) { dropped++; keep = false; }
+                                else if (midOK) { droppedMid++; keep = false; }  // internal overlap: the under-sheet carries the local far side
+                                else keptUnbacked++;   // no sheet holds this cliff's far side: rubber (rare once the under-sheet exists)
+                            }
+                            if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
+                        }
+                        g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
+                        _mark('tear-loop');
+                        console.log('[RUNG-PLUG] FG pre-torn (far-side match): ' + dropped +
+                            ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' + droppedMid + ' under-sheet, ' +
+                            keptThin + ' thin-feature kept, ' + keptUnbacked +
+                            ' far-mismatch kept, of ' + (src.length / 3));
+
+                        // ---- MPI SLICE 1: depth-layer partition of the torn FG ----
+                        // cleanup from a previous build — UNCONDITIONAL, so a
+                        // rebuild with the partition toggled off restores the
+                        // monolithic mesh instead of leaving it hidden behind
+                        // stale layer meshes
+                        if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
+                        L.mesh.visible = true;
+                        if (bgMPIMode) {
+                            const tM = Date.now();
+                            // connected components; adjacency broken across cliffs
+                            const compL = new Int32Array(PN);
+                            const qq3 = new Int32Array(PN);
+                            let nc = 0;
+                            for (let s = 0; s < PN; s++) {
+                                if (compL[s]) continue;
+                                nc++;
+                                let h3 = 0, t3 = 0; qq3[t3++] = s; compL[s] = nc;
+                                while (h3 < t3) {
+                                    const i = qq3[h3++]; const x = i%pw, y = (i/pw)|0;
+                                    const di = depth[i];
+                                    // [PERF] unrolled neighbours (no per-pixel array alloc)
+                                    let j;
+                                    if (x > 0)    { j = i-1;  if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (x < pw-1) { j = i+1;  if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (y > 0)    { j = i-pw; if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                    if (y < ph-1) { j = i+pw; if (!compL[j] && Math.abs(di - depth[j]) <= fgTearStep) { compL[j] = nc; qq3[t3++] = j; } }
+                                }
+                            }
+                            const szC = new Float64Array(nc+1), sdC = new Float64Array(nc+1);
+                            for (let i = 0; i < PN; i++) { szC[compL[i]]++; sdC[compL[i]] += depth[i]; }
+                            const orderC = Array.from({length: nc}, (_, k) => k+1).sort((a,b) => szC[b]-szC[a]);
+                            const K = Math.min(bgMPIMaxLayers, nc);
+                            const keptC = orderC.slice(0, K);
+                            const layerOf = new Int32Array(nc+1);
+                            keptC.forEach((c, idx) => layerOf[c] = idx+1);
+                            const meanD = keptC.map(c => sdC[c]/szC[c]);
+                            // small components join the nearest kept layer by mean depth
+                            // (assignment decides only which mesh carries them and which
+                            // completion scope they belong to — their per-texel depth is
+                            // already correct in the shared displacement texture)
+                            for (let c = 1; c <= nc; c++) {
+                                if (layerOf[c]) continue;
+                                const m = sdC[c]/szC[c];
+                                let best = 0, bd = 9;
+                                for (let k2 = 0; k2 < K; k2++) { const d2 = Math.abs(meanD[k2]-m); if (d2 < bd) { bd = d2; best = k2; } }
+                                layerOf[c] = best+1;
+                            }
+                            const texLayer = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) texLayer[i] = layerOf[compL[i]];
+                            // partition the torn index by majority texel layer (kept
+                            // triangles never span a cliff, so votes rarely split)
+                            // [PERF] two-pass counted fill into typed arrays (the JS-
+                            // array push version was 15M pushes) + identity fast path
+                            const fIdx = g.index.array;
+                            const idMap2 = (vw === pw && vh === ph);
+                            const triLayer = new Uint8Array(fIdx.length / 3);
+                            const cnt = new Int32Array(K);
+                            for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                const l0 = texLayer[idMap2 ? v0 : (Math.round(((v0 / vw) | 0) * sy) * pw + Math.round((v0 % vw) * sx))];
+                                const l1 = texLayer[idMap2 ? v1 : (Math.round(((v1 / vw) | 0) * sy) * pw + Math.round((v1 % vw) * sx))];
+                                const l2 = texLayer[idMap2 ? v2 : (Math.round(((v2 / vw) | 0) * sy) * pw + Math.round((v2 % vw) * sx))];
+                                const lw = (l1 === l2) ? l1 : l0;
+                                triLayer[tr] = lw;
+                                cnt[lw-1] += 3;
+                            }
+                            const bucketsL = Array.from({length: K}, (_, k2) => new fIdx.constructor(cnt[k2]));
+                            const fillPos = new Int32Array(K);
+                            for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                const k2 = triLayer[tr] - 1;
+                                const b = bucketsL[k2]; let fp = fillPos[k2];
+                                b[fp] = fIdx[t4]; b[fp+1] = fIdx[t4+1]; b[fp+2] = fIdx[t4+2];
+                                fillPos[k2] = fp + 3;
+                            }
+                            // ---- PER-LAYER DECIMATION (adaptive quad indexing) ----
+                            // 1 vertex/texel is the scaling bottleneck (5M tris on the
+                            // reference asset). Flat interior runs need no per-texel
+                            // triangles: a quadtree block whose cells all belong to the
+                            // layer with BOTH torn triangles present, and whose per-texel
+                            // displacement deviates from the two coarse-triangle planes
+                            // by <= EPS, is emitted as 2 large triangles over the SAME
+                            // vertex grid (attributes untouched — unreferenced vertices
+                            // simply drop out of the draw). Tears and layer borders keep
+                            // their original per-texel triangles exactly. T-junction
+                            // cracks at block boundaries are depth-bounded by the same
+                            // EPS, i.e. sub-pixel on screen at maximum parallax, and sit
+                            // in front of the opaque backdrop plate — no transparent
+                            // hole channel. EPS = 1.5 8-bit quanta: below the depth
+                            // map's own quantisation noise.
+                            const bucketsD = (bgMPIDecimate && idMap2) ? (() => {
+                                const cw = vw - 1, ch = vh - 1, CN = cw * ch;
+                                const cellCnt = new Uint8Array(CN), cellLay = new Uint8Array(CN);
+                                for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                    const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                    let x0 = v0 % vw, y0 = (v0 / vw) | 0;
+                                    const x1 = v1 % vw, y1 = (v1 / vw) | 0, x2 = v2 % vw, y2 = (v2 / vw) | 0;
+                                    if (x1 < x0) x0 = x1; if (x2 < x0) x0 = x2;
+                                    if (y1 < y0) y0 = y1; if (y2 < y0) y0 = y2;
+                                    const c = y0 * cw + x0, lw = triLayer[tr];
+                                    if (cellCnt[c] === 0) { cellLay[c] = lw; cellCnt[c] = 1; }
+                                    else if (cellLay[c] === lw) cellCnt[c]++;
+                                    else cellLay[c] = 255;
+                                }
+                                const dd = dispDepth, EPS = 1.5 / 255;
+                                const covered = new Uint8Array(CN);
+                                const out2 = Array.from({length: K}, () => []);
+                                for (let B = 16; B >= 2; B >>= 1) {
+                                    for (let by = 0; by + B <= ch; by += B) for (let bx = 0; bx + B <= cw; bx += B) {
+                                        const k = cellLay[by * cw + bx];
+                                        if (!k || k === 255) continue;
+                                        let clean = true;
+                                        for (let cy = by; clean && cy < by + B; cy++) { const row = cy * cw;
+                                            for (let cx2 = bx; cx2 < bx + B; cx2++) {
+                                                const c = row + cx2;
+                                                if (covered[c] || cellCnt[c] !== 2 || cellLay[c] !== k) { clean = false; break; }
+                                            } }
+                                        if (!clean) continue;
+                                        // plane test against the two coarse triangles
+                                        const a0 = by * vw + bx;
+                                        const zA = dd[a0], zP1 = dd[a0 + B * vw], zP2 = dd[a0 + B * vw + B], zP3 = dd[a0 + B];
+                                        let ok2 = true;
+                                        for (let y5 = 0; ok2 && y5 <= B; y5++) { const rowv = (by + y5) * vw + bx, v5 = y5 / B;
+                                            for (let x5 = 0; x5 <= B; x5++) {
+                                                const u5 = x5 / B;
+                                                const z = (u5 + v5 <= 1)
+                                                    ? zA + u5 * (zP3 - zA) + v5 * (zP1 - zA)
+                                                    : zP2 + (1 - u5) * (zP1 - zP2) + (1 - v5) * (zP3 - zP2);
+                                                if (Math.abs(dd[rowv + x5] - z) > EPS) { ok2 = false; break; }
+                                            } }
+                                        if (!ok2) continue;
+                                        const o = out2[k - 1];
+                                        o.push(a0, a0 + B * vw, a0 + B,  a0 + B * vw, a0 + B * vw + B, a0 + B);
+                                        for (let cy = by; cy < by + B; cy++) { const row = cy * cw;
+                                            for (let cx2 = bx; cx2 < bx + B; cx2++) covered[row + cx2] = 1; }
+                                    }
+                                }
+                                // uncovered cells keep their original torn triangles
+                                for (let t4 = 0, tr = 0; t4 < fIdx.length; t4 += 3, tr++) {
+                                    const v0 = fIdx[t4], v1 = fIdx[t4+1], v2 = fIdx[t4+2];
+                                    let x0 = v0 % vw, y0 = (v0 / vw) | 0;
+                                    const x1 = v1 % vw, y1 = (v1 / vw) | 0, x2 = v2 % vw, y2 = (v2 / vw) | 0;
+                                    if (x1 < x0) x0 = x1; if (x2 < x0) x0 = x2;
+                                    if (y1 < y0) y0 = y1; if (y2 < y0) y0 = y2;
+                                    if (covered[y0 * cw + x0]) continue;
+                                    out2[triLayer[tr] - 1].push(v0, v1, v2);
+                                }
+                                return out2.map(o => fIdx.constructor.from(o));
+                            })() : null;
+                            // back-to-front meshes over the SHARED attributes + material
+                            const rankOrder = Array.from({length: K}, (_, k) => k).sort((a,b) => meanD[a]-meanD[b]);
+                            mpiLayers = [];
+                            let texCount = new Float64Array(K+1);
+                            for (let i = 0; i < PN; i++) texCount[texLayer[i]]++;
+                            rankOrder.forEach((k2, rank) => {
+                                const lidx = (bucketsD && bucketsD[k2].length) ? bucketsD[k2] : bucketsL[k2];
+                                if (!lidx.length) return;
+                                const lg = new THREE.BufferGeometry();
+                                lg.setAttribute('position', g.attributes.position);
+                                lg.setAttribute('uv', g.attributes.uv);
+                                if (g.attributes.normal) lg.setAttribute('normal', g.attributes.normal);
+                                lg.setIndex(new THREE.BufferAttribute(lidx instanceof fIdx.constructor ? lidx : new fIdx.constructor(lidx), 1));
+                                const lm = new THREE.Mesh(lg, L.mesh.material); // shared material: uniforms stay in sync
+                                lm.position.copy(L.mesh.position);
+                                lm.rotation.copy(L.mesh.rotation);
+                                lm.scale.copy(L.mesh.scale);
+                                lm.renderOrder = (L.mesh.renderOrder || 0) + rank * 1e-3; // back-to-front hint; z-buffer decides
+                                scene.add(lm);
+                                mpiLayers.push({ mesh: lm, meanD: meanD[k2], tris: lidx.length/3, trisFull: bucketsL[k2].length/3, texels: texCount[k2+1] });
+                            });
+                            // the partition replaces the monolithic torn mesh
+                            L.mesh.visible = false;
+                            bgMPIExport = { pw, ph, layers: K, texLayer, meanD };
+                            window._mpiDebug = { pw, ph, K, texLayer, meanD, comp: compL, nc };
+                            _mark('mpi-partition');
+                        {
+                            let dT = 0, fT = 0;
+                            for (const Lr of mpiLayers) { dT += Lr.tris; fT += Lr.trisFull; }
+                            console.log('[MPI] ' + K + ' layers from ' + nc + ' components (' + (Date.now()-tM) + 'ms): ' +
+                                mpiLayers.map(Lr => Lr.tris + 't@' + Lr.meanD.toFixed(2)).join(', ') +
+                                (bucketsD ? ' | decimated ' + fT + ' -> ' + dT + ' tris (' + (100*dT/Math.max(1,fT)).toFixed(1) + '%)' : ''));
+                        }
+                        }
+                    } catch (e) { console.warn('[RUNG-PLUG] pre-tear failed:', e); }
                 }
 
                 // --- FILL COLOR (Law 4): DEPTH-GUIDED EXEMPLAR (onion-peel). Fill each
@@ -7486,11 +8808,176 @@ function buildBackgroundLayer() {
                     const fillSrc = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) { const lum=(cpx[i*4]+cpx[i*4+1]+cpx[i*4+2])/3;
                         fillSrc[i] = (!band[i] && !(underMask && underMask[i]) && lum>=45) ? 1 : 0; }
-                    if (rimSrc) { for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
-                        const nbs=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
-                        for (const j of nbs){ if(j>=0 && band[j] && depth[i] > depth[rimSrc[j]>=0?rimSrc[j]:i]+0.06){ fillSrc[i]=0; break; } } } }
+                    if (rimSrc) { // [PERF] unrolled — no per-pixel array allocation
+                        const rej = (i, j) => band[j] && depth[i] > depth[rimSrc[j] >= 0 ? rimSrc[j] : i] + 0.06;
+                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(!fillSrc[i])continue;
+                            if ((x>0 && rej(i, i-1)) || (x<pw-1 && rej(i, i+1)) || (y>0 && rej(i, i-pw)) || (y<ph-1 && rej(i, i+pw))) fillSrc[i]=0; } }
                     const tF = Date.now();
                     const smoothBase = bgPullPushFill(cpx, fillSrc, pw, ph); // fallback base
+                _mark('fillsrc+pullpush');
+                    // ---- MPI slice 3, LIVE: PER-LAYER PLATES (weight-free) ----
+                    // Every layer extends ITS OWN surface under adjacent
+                    // strictly-nearer layers: depth by the band's slope-continuing
+                    // extrapolation, colours carried from the layer's own visible
+                    // texels (coarse — the SD pass later upgrades texture, not
+                    // structure). Up to two overlapping continuations per texel
+                    // (sky AND armor behind a sword) live in two slot sheets; the
+                    // z-buffer picks per reveal. PURELY ADDITIVE: the plate is not
+                    // touched (its correctness is the floor-default ceiling's job;
+                    // the v1 plate clamp corrupted verified plug values and was
+                    // reverted). Seeds are excluded near thin features, whose
+                    // 2-4px bodies poisoned the v1 gradient measurements. Strips
+                    // the plate already carries (level within a tear step) or that
+                    // sit behind it (never visible) are pruned.
+                    if (bgMPIMode && bgMPIStrips && bgMPIExport && bgMPIExport.pw === pw && bgMPIExport.texLayer) {
+                        const t7 = Date.now();
+                        const texL = bgMPIExport.texLayer, K7 = bgMPIExport.layers;
+                        const SWEEP7 = (bgBandMaxGrowPx | 0) * 4, STEP7 = fgTearStep;
+                        // seed exclusion zone: 2px dilation of thin features + halo skirts
+                        let thinGate = null;
+                        if (thinM || haloM) {
+                            thinGate = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) thinGate[i] = ((thinM && thinM[i]) || (haloM && haloM[i])) ? 1 : 0;
+                            for (let p7 = 0; p7 < 2; p7++) { const ng7 = thinGate.slice();
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                    if (!thinGate[i] && (thinGate[i-1] || thinGate[i+1] || thinGate[i-pw] || thinGate[i+pw])) ng7[i] = 1; }
+                                thinGate = ng7; }
+                        }
+                        const slotD = [new Float32Array(PN), new Float32Array(PN)];
+                        const slotC = [new Uint8Array(PN * 3), new Uint8Array(PN * 3)];
+                        const slotO = [new Uint8Array(PN), new Uint8Array(PN)];
+                        const q7 = new Int32Array(PN), src7 = new Int32Array(PN), dst7 = new Uint16Array(PN);
+                        const own7 = new Uint8Array(PN), e7 = new Float32Array(PN);
+                        const endL = new Int32Array(PN), endR = new Int32Array(PN), endU = new Int32Array(PN), endD2 = new Int32Array(PN);
+                        const extrap7 = (a, i) => {
+                            const ax = a % pw, ay = (a / pw) | 0, ix = i % pw, iy = (i / pw) | 0;
+                            const dx = ix - ax, dy = iy - ay, dist = Math.sqrt(dx*dx + dy*dy);
+                            const baseD = depth[a];
+                            if (dist < 2) return baseD;
+                            const ux = dx / dist, uy = dy / dist;
+                            let prev = baseD, base = baseD, back = baseD, ok = true;
+                            for (let k5 = 1; k5 <= 8; k5++) {
+                                const sx5 = Math.round(ax - ux*k5), sy5 = Math.round(ay - uy*k5);
+                                if (sx5 < 0 || sx5 >= pw || sy5 < 0 || sy5 >= ph) { ok = false; break; }
+                                const dv = depth[sy5*pw + sx5];
+                                if (Math.abs(dv - prev) > STEP7) { ok = false; break; }
+                                prev = dv; if (k5 === 4) base = dv; if (k5 === 8) back = dv;
+                            }
+                            let e = ok ? base + ((base - back) / 4) * (dist + 4) : baseD;
+                            if (e > baseD) e = Math.min(e, Math.max(baseD, depth[i] - STEP7));
+                            return Math.max(0, Math.min(1, e));
+                        };
+                        let claimed7 = 0;
+                        for (let k = 1; k <= K7; k++) {
+                            own7.fill(0);
+                            let qh7 = 0, qt7 = 0;
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                                if (texL[i] !== k || (thinGate && thinGate[i])) continue;
+                                let hit = false;
+                                if (x > 0    && texL[i-1]  !== k && depth[i-1]  - depth[i] > STEP7) hit = true;
+                                else if (x < pw-1 && texL[i+1]  !== k && depth[i+1]  - depth[i] > STEP7) hit = true;
+                                else if (y > 0    && texL[i-pw] !== k && depth[i-pw] - depth[i] > STEP7) hit = true;
+                                else if (y < ph-1 && texL[i+pw] !== k && depth[i+pw] - depth[i] > STEP7) hit = true;
+                                if (hit) { own7[i] = 1; src7[i] = i; dst7[i] = 0; q7[qt7++] = i; }
+                            }
+                            while (qh7 < qt7) {
+                                const i = q7[qh7++], dc = dst7[i];
+                                if (dc >= SWEEP7) continue;
+                                const si = src7[i], x = i % pw, y = (i / pw) | 0;
+                                const nbs7 = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                                for (const j of nbs7) {
+                                    if (j < 0 || own7[j] || texL[j] === k) continue;
+                                    const e = extrap7(si, j);
+                                    if (depth[j] - e <= STEP7) continue;   // only under strictly nearer content
+                                    own7[j] = 1; src7[j] = si; dst7[j] = dc + 1; e7[j] = e; q7[qt7++] = j;
+                                }
+                            }
+                            if (!qt7) continue;
+                            // PAIR VALIDATION (the membrane's both-sided anchor rule,
+                            // applied to strips): a surface may extend under an
+                            // occluder only where it FLANKS it — the strip pixel's
+                            // row OR column must exit the claimed region into
+                            // layer-k (or depth-consistent) surface on BOTH ends.
+                            // Armor around a sword qualifies; a bird's flank under
+                            // its barely-nearer sibling does not (measured: 0.37
+                            // flecks hanging in the sky beside the birds). The
+                            // frame boundary counts as an anchor — the world
+                            // continues past it.
+                            for (let y = 0; y < ph; y++) { const row = y * pw;
+                                let last = -2; // -2: frame boundary
+                                for (let x = 0; x < pw; x++) { const i = row + x;
+                                    if (own7[i]) endL[i] = last; else last = i;
+                                }
+                                last = -2;
+                                for (let x = pw - 1; x >= 0; x--) { const i = row + x;
+                                    if (own7[i]) endR[i] = last; else last = i;
+                                }
+                            }
+                            for (let x = 0; x < pw; x++) {
+                                let last = -2;
+                                for (let y = 0; y < ph; y++) { const i = y * pw + x;
+                                    if (own7[i]) endU[i] = last; else last = i;
+                                }
+                                last = -2;
+                                for (let y = ph - 1; y >= 0; y--) { const i = y * pw + x;
+                                    if (own7[i]) endD2[i] = last; else last = i;
+                                }
+                            }
+                            const anchOK = (j, e) => j === -2 || (j >= 0 && (texL[j] === k || Math.abs(depth[j] - e) <= bgBandStep));
+                            for (let h7 = 0; h7 < qt7; h7++) { const i = q7[h7];
+                                if (dst7[i] === 0) continue;               // seeds are visible surface, not strip
+                                const e = e7[i], si = src7[i];
+                                const rowOK = anchOK(endL[i], e) && anchOK(endR[i], e);
+                                const colOK = anchOK(endU[i], e) && anchOK(endD2[i], e);
+                                if (!rowOK && !colOK) continue;
+                                let s7 = -1;
+                                if (!slotO[0][i]) s7 = 0;
+                                else if (!slotO[1][i]) s7 = 1;
+                                else { s7 = (slotD[0][i] < slotD[1][i]) ? 0 : 1; if (e <= slotD[s7][i]) s7 = -1; } // keep the two nearest
+                                if (s7 >= 0) {
+                                    slotO[s7][i] = k; slotD[s7][i] = e; claimed7++;
+                                    // colours from the VALIDATED same-row/column anchors
+                                    // (inverse-distance blend) — tonally continuous with
+                                    // the surface at this height, unlike the BFS seed,
+                                    // whose colour can come from 100px away and lands as
+                                    // a flat foreign slab in the reveal
+                                    let rC = 0, gC = 0, bC = 0, wS = 0;
+                                    const addA = (j) => { if (j < 0) return;
+                                        const dxa = (j % pw) - (i % pw), dya = ((j / pw) | 0) - ((i / pw) | 0);
+                                        const w = 1 / Math.max(1, Math.abs(dxa) + Math.abs(dya));
+                                        rC += cpx[j*4] * w; gC += cpx[j*4+1] * w; bC += cpx[j*4+2] * w; wS += w; };
+                                    if (rowOK) { addA(endL[i]); addA(endR[i]); }
+                                    if (colOK) { addA(endU[i]); addA(endD2[i]); }
+                                    if (wS > 0) { slotC[s7][i*3] = rC/wS; slotC[s7][i*3+1] = gC/wS; slotC[s7][i*3+2] = bC/wS; }
+                                    else { slotC[s7][i*3] = cpx[si*4]; slotC[s7][i*3+1] = cpx[si*4+1]; slotC[s7][i*3+2] = cpx[si*4+2]; }
+                                }
+                            }
+                        }
+                        // prune what the plate already carries or hides
+                        let kept7 = 0;
+                        for (let s7 = 0; s7 < 2; s7++) for (let i = 0; i < PN; i++) {
+                            if (!slotO[s7][i]) continue;
+                            if (Math.abs(slotD[s7][i] - plugDepth[i]) <= STEP7 || slotD[s7][i] < plugDepth[i] - STEP7) slotO[s7][i] = 0;
+                            else kept7++;
+                        }
+                        // soften carried-colour dashes (4 Jacobi passes inside each slot)
+                        for (let s7 = 0; s7 < 2; s7++) {
+                            const O = slotO[s7], C = slotC[s7];
+                            const idxL = [];
+                            for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                if (O[i] && O[i-1] === O[i] && O[i+1] === O[i] && O[i-pw] === O[i] && O[i+pw] === O[i]) idxL.push(i); }
+                            for (let p7 = 0; p7 < 4; p7++) {
+                                for (const i of idxL) for (let c7 = 0; c7 < 3; c7++)
+                                    C[i*3+c7] = (C[i*3+c7] + C[(i-1)*3+c7] + C[(i+1)*3+c7] + C[(i-pw)*3+c7] + C[(i+pw)*3+c7]) / 5;
+                            }
+                        }
+                        _stripD = slotD; _stripC = slotC; _stripO = slotO; _stripPW = pw; _stripPH = ph; _stripFrontD = depth;
+                        bgMPIStripExport = { pw, ph, slotO, slotD, slotC, depth };
+                        console.log('[MPI] per-layer plates (live, v2 additive): ' + claimed7 + 'px claimed, ' + kept7 + 'px kept after prune (' + (Date.now()-t7) + 'ms)');
+                _mark('layer-strips');
+                    }
+                    // debug capture (harness probes): which path coloured each pixel
+                    const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
                     const fillRGB = new Float32Array(PN * 3);
                     for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
                     // DIRECTIONAL BACKGROUND EXTENSION: for each hole, march to the nearest
@@ -7518,7 +9005,16 @@ function buildBackgroundLayer() {
                     // fill — solid and streak-free (the reflection above only sets bandReach,
                     // used by the optional fade). Keeps the interior clean, no striation.
                     if (bgFillMode === 'smooth') {
-                        for (let i = 0; i < PN; i++) if (band[i]) { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; }
+                        // v4: band pixels take their OWN edge's rim colour (local),
+                        // not the global diffusion wash — the wash painted sky-gray
+                        // into ground-level reveals (blue patches under the legs).
+                        // Rims under an occluder are rejected (figure colours).
+                        for (let i = 0; i < PN; i++) if (band[i]) {
+                            const rs0 = rimSrc ? rimSrc[i] : -1;
+                            const rs = rs0 >= 0 ? rimColorSrc(i, rs0) : -1;
+                            if (rs >= 0 && !band[rs] && !(underMask && underMask[rs])) { fillRGB[i*3]=cpx[rs*4]; fillRGB[i*3+1]=cpx[rs*4+1]; fillRGB[i*3+2]=cpx[rs*4+2]; if (dbgFB) dbgFB[i]=1; }
+                            else { fillRGB[i*3]=smoothBase[i*3]; fillRGB[i*3+1]=smoothBase[i*3+1]; fillRGB[i*3+2]=smoothBase[i*3+2]; if (dbgFB) dbgFB[i]=2; }
+                        }
                     }
                     // reach -> alpha: opaque for short reach, faded to transparent for long
                     // (streaks). smoothstep between the two configured thresholds.
@@ -7532,6 +9028,17 @@ function buildBackgroundLayer() {
                     };
                     const bandAlpha = new Uint8Array(PN);
                     for (let i = 0; i < PN; i++) bandAlpha[i] = band[i] ? _reachAlpha(bandReach[i]) : 0;
+                    // REVIEW FIX v3 — FULL-FRAME PLATE: the plug is opaque
+                    // everywhere, not only over band/ring/rind. Outside the
+                    // completed regions its RGB is simply the source image and its
+                    // depth the source depth (0.004 behind the FG), so it is
+                    // invisible at rest — but ANY reveal, of any width, opens onto
+                    // real content at the right depth. This is what fills the
+                    // parallax sweep behind THIN occluders (staff, glider): their
+                    // source-space band can never be wider than the feature
+                    // itself, so a patch-plug leaves most of their reveal naked
+                    // (the composite painted it ink-black).
+                    for (let i = 0; i < PN; i++) if (!band[i] && !bandAlpha[i]) bandAlpha[i] = 255;
                     // The FG stretch cut is allowed in the DILATED band (bandCutMask), so
                     // the plug must be opaque there too — a discard over transparent plug
                     // is a naked hole. RGB for the ring comes from the bleed below.
@@ -7539,10 +9046,237 @@ function buildBackgroundLayer() {
                     // The occluder rind (depth-completed, smooth) carries opaque
                     // background wash: never the figure's own colours, so nothing
                     // figure-tinted exists on the plug for bilinear edges to smear.
-                    if (underMask) for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
-                        bandAlpha[i] = 255;
-                        fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2];
+                    if (underMask) {
+                        // Fill each completed pixel with its OWN edge's rim colour
+                        // (carried by the flood) — legs fill dune, torso fills sky.
+                        // The global pull-push mixed sky down the under-figure
+                        // corridor (blue patches on the dune between the legs).
+                        for (let i = 0; i < PN; i++) if (underMask[i] && !band[i]) {
+                            bandAlpha[i] = 255;
+                            const rc = (underRimC && underRimC[i] >= 0) ? underRimC[i] : -1;
+                            if (rc >= 0) { fillRGB[i*3] = cpx[rc*4]; fillRGB[i*3+1] = cpx[rc*4+1]; fillRGB[i*3+2] = cpx[rc*4+2]; if (dbgFB) dbgFB[i]=3; }
+                            else { fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2]; if (dbgFB) dbgFB[i]=4; }
+                        }
+                        // DEPTH-CONSISTENT LOCAL CONTINUATION (v5): a completed
+                        // pixel's colour must come from background at ITS OWN
+                        // completed depth, found along its own row/column — not
+                        // from whichever rim's flood claimed it first. The flood
+                        // carries DEPTH correctly, but its colour rode along: a
+                        // dark LOW rim (the figure's horizon-contact ink) claimed
+                        // plate territory far above its own height and painted
+                        // the sky behind the torso near-black (the "black blob"
+                        // doppelgänger at look-up). Sampling background of the
+                        // pixel's own depth on the pixel's own scanline gives
+                        // sky rows sky, the horizon stripe its own continuation,
+                        // and the under-leg corridor dune — one rule, no knobs
+                        // (tolerance/bound reused from the existing fill logic).
+                        {
+                            const tolD = 0.06, REACH = 400;
+                            let fixedN = 0;
+                            // [PERF] skip tables: the march spent most of the build
+                            // stepping 1px at a time ACROSS the completed set. These
+                            // teleport to the next non-set pixel in each direction
+                            // (distance counted exactly as stepping would have) —
+                            // identical results, ~10x fewer iterations.
+                            const setM = new Uint8Array(PN);
+                            for (let i = 0; i < PN; i++) setM[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
+                            const skipR = new Int32Array(PN), skipL = new Int32Array(PN);
+                            const skipD = new Int32Array(PN), skipU = new Int32Array(PN);
+                            for (let y = 0; y < ph; y++) {
+                                let nxt = -1;
+                                for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; skipR[i] = nxt; if (!setM[i]) nxt = i; }
+                                nxt = -1;
+                                for (let x = 0; x < pw; x++) { const i = y*pw+x; skipL[i] = nxt; if (!setM[i]) nxt = i; }
+                            }
+                            for (let x = 0; x < pw; x++) {
+                                let nxt = -1;
+                                for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; skipD[i] = nxt; if (!setM[i]) nxt = i; }
+                                nxt = -1;
+                                for (let y = 0; y < ph; y++) { const i = y*pw+x; skipU[i] = nxt; if (!setM[i]) nxt = i; }
+                            }
+                            // march one direction: teleport while in-set, step while out
+                            const march = (i0, td, skip, delta, distDiv, rowLocal) => {
+                                let j = i0, st = 0;
+                                const row0 = (i0 / pw) | 0;
+                                while (st < REACH) {
+                                    if (j === i0 || setM[j]) {
+                                        const nj = skip[j];
+                                        if (nj < 0) return -1;
+                                        st += Math.abs(nj - j) / distDiv;
+                                        j = nj;
+                                    } else {
+                                        j += delta; st += 1;
+                                        if (j < 0 || j >= PN) return -1;
+                                        if (rowLocal && ((j / pw) | 0) !== row0) return -1;
+                                    }
+                                    if (st > REACH) return -1;   // original tested up to st === REACH inclusive
+                                    if (!setM[j] && fillSrc[j] && Math.abs(depth[j] - td) <= tolD) return j; // hit
+                                }
+                                return -1;
+                            };
+                            // (march returns the hit index; cost recovered from geometry)
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                                const i = y*pw+x;
+                                if (!setM[i]) continue;
+                                const td = plugDepth[i];
+                                let bestJ = -1, bestCost = 1e9;
+                                {
+                                    const hR = march(i, td, skipR, 1, 1, true);
+                                    if (hR >= 0) { const c = (hR - i); if (c < bestCost) { bestCost = c; bestJ = hR; } }
+                                    const hL = march(i, td, skipL, -1, 1, true);
+                                    if (hL >= 0) { const c = (i - hL); if (c < bestCost) { bestCost = c; bestJ = hL; } }
+                                    const hD = march(i, td, skipD, pw, pw, false);
+                                    if (hD >= 0) { const c = 2 * ((hD - i) / pw); if (c < bestCost) { bestCost = c; bestJ = hD; } }
+                                    const hU = march(i, td, skipU, -pw, pw, false);
+                                    if (hU >= 0) { const c = 2 * ((i - hU) / pw); if (c < bestCost) { bestCost = c; bestJ = hU; } }
+                                }
+                                if (bestJ >= 0) {
+                                    // step a few px deeper past the rim (same escape the
+                                    // rim-colour sampler uses) to clear contact shading
+                                    const bx = bestJ % pw, by = (bestJ / pw) | 0;
+                                    const sx2 = Math.sign(bx - x), sy2 = Math.sign(by - y);
+                                    for (let s = 4; s >= 0; s--) {
+                                        const ex = bx + sx2*s, ey = by + sy2*s;
+                                        if (ex < 0 || ex >= pw || ey < 0 || ey >= ph) continue;
+                                        const ej = ey*pw+ex;
+                                        if (fillSrc[ej] && Math.abs(depth[ej] - td) <= tolD) { bestJ = ej; break; }
+                                    }
+                                    fillRGB[i*3] = cpx[bestJ*4]; fillRGB[i*3+1] = cpx[bestJ*4+1]; fillRGB[i*3+2] = cpx[bestJ*4+2];
+                                    fixedN++;
+                                }
+                                // no depth-compatible background in reach: keep the
+                                // flood-carried rim colour (still never foreground)
+                            }
+                            console.log('[RUNG-PLUG] depth-consistent continuation: ' + fixedN + 'px recoloured');
+                _mark('continuation');
+                        }
+                        // ---- UNDER-SHEET COLOURS (MPI slice 2): same rule, target =
+                        // the sheet's carried far-side depth. The sheet behind the
+                        // arm is torso-coloured because torso pixels at torso depth
+                        // sit on the same rows; fallback = the carried rim pixel.
+                        if (midBand) {
+                            const tolD = 0.06, REACH = 400;
+                            midFillRGB = new Uint8Array(PN*3);
+                            let midCont = 0;
+                            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                                const i = y*pw+x;
+                                if (!midBand[i]) continue;
+                                const td = midDepthV[i];
+                                let bestJ = -1, bestCost = 1e9;
+                                for (let k = 0; k < 4; k++) {
+                                    const dx = (k===0)?1:(k===1)?-1:0, dy = (k===2)?1:(k===3)?-1:0;
+                                    const pen = (k >= 2) ? 2 : 1;
+                                    let cx2 = x, cy2 = y, st = 0;
+                                    while (st < REACH) {
+                                        cx2 += dx; cy2 += dy; st++;
+                                        if (cx2 < 0 || cx2 >= pw || cy2 < 0 || cy2 >= ph) break;
+                                        const j = cy2*pw+cx2;
+                                        if (midBand[j]) continue;
+                                        // ANY visible surface at the carried depth qualifies —
+                                        // including figure-class content: the far side of an
+                                        // internal cliff IS the figure (torso behind arm).
+                                        // The backdrop's background-only source rules do not
+                                        // apply to the under-sheet; excluding underMask here
+                                        // starved the sheet onto dark rim inks (slab bug).
+                                        if (Math.abs(depth[j] - td) <= tolD) {
+                                            if (st * pen < bestCost) { bestCost = st * pen; bestJ = j; }
+                                            break;
+                                        }
+                                    }
+                                }
+                                // No visible surface anywhere at the carried depth: there
+                                // is nothing plausible to extend (a tiny far sliver — the
+                                // glider's innards, a staff ornament). No sheet pixel:
+                                // the cliff opens onto the backdrop, which IS the next
+                                // real surface beyond the sliver. Painting the rim ink
+                                // instead manufactured dark slabs.
+                                if (bestJ < 0) { midBand[i] = 0; midRimC[i] = -1; continue; }
+                                midCont++;
+                                midFillRGB[i*3] = cpx[bestJ*4]; midFillRGB[i*3+1] = cpx[bestJ*4+1]; midFillRGB[i*3+2] = cpx[bestJ*4+2];
+                            }
+                            // soften flat patches (Jacobi, sheet only; 24 passes — the
+                            // same count the backdrop plate needed to kill the per-row
+                            // source-alternation comb, for the same reason)
+                            // [PERF] compact member list + precomputed in-band
+                            // neighbours (the full-frame scan with per-pixel array
+                            // allocation dominated this stage). Results identical.
+                            {
+                                let nM2 = 0;
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) if (midBand[y*pw+x]) nM2++;
+                                const ML = new Int32Array(nM2); nM2 = 0;
+                                for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x; if (midBand[i]) ML[nM2++] = i; }
+                                const NB4 = new Int32Array(nM2*4);
+                                for (let q3 = 0; q3 < nM2; q3++) { const i = ML[q3];
+                                    NB4[q3*4]   = midBand[i-1]  ? i-1  : -1;
+                                    NB4[q3*4+1] = midBand[i+1]  ? i+1  : -1;
+                                    NB4[q3*4+2] = midBand[i-pw] ? i-pw : -1;
+                                    NB4[q3*4+3] = midBand[i+pw] ? i+pw : -1;
+                                }
+                                let A3 = new Float32Array(PN*3);
+                                for (let i = 0; i < PN; i++) if (midBand[i]) { A3[i*3]=midFillRGB[i*3]; A3[i*3+1]=midFillRGB[i*3+1]; A3[i*3+2]=midFillRGB[i*3+2]; }
+                                let B3 = A3.slice();
+                                for (let p = 0; p < 24; p++) {
+                                    for (let q3 = 0; q3 < nM2; q3++) { const i = ML[q3], i3 = i*3;
+                                        let s0 = A3[i3], s1 = A3[i3+1], s2 = A3[i3+2], c0 = 1;
+                                        for (let k3 = 0; k3 < 4; k3++) { const j = NB4[q3*4+k3];
+                                            if (j >= 0) { const j3 = j*3; s0 += A3[j3]; s1 += A3[j3+1]; s2 += A3[j3+2]; c0++; } }
+                                        B3[i3] = s0/c0; B3[i3+1] = s1/c0; B3[i3+2] = s2/c0;
+                                    }
+                                    const tt = A3; A3 = B3; B3 = tt;
+                                }
+                                for (let i = 0; i < PN; i++) if (midBand[i]) {
+                                    midFillRGB[i*3]=Math.max(0,Math.min(255,A3[i*3]|0));
+                                    midFillRGB[i*3+1]=Math.max(0,Math.min(255,A3[i*3+1]|0));
+                                    midFillRGB[i*3+2]=Math.max(0,Math.min(255,A3[i*3+2]|0));
+                                }
+                            }
+                            console.log('[MPI] under-sheet colours: ' + midCont + 'px row-continued, rest pruned (no continuation exists)');
+                _mark('midsheet-colours');
+                            // hoist for the mesh build at function end (outside this block's scope)
+                            _midBand = midBand; _midDepthV = midDepthV; _midRimC = midRimC; _midFillRGB = midFillRGB; _midPW = pw; _midPH = ph; _midFrontD = depth;
+                        }
+                        if (dbgFB) window._dbgFill = { pw, ph, fb: dbgFB, pre: fillRGB.slice(), smoothBase, band, underMask, plug: plugDepth, srcDepth: depth,
+                            thinM, haloM, dispD: dispDepth, rawD: (L._rawDepth && L._rawDepthW === pw) ? L._rawDepth : depth, bandCutMask,
+                            stripO: _stripO, stripD: _stripD };
+                        // soften the flat rim-colour patches (Jacobi, completed set
+                        // only). 24 passes: along busy silhouettes (vehicle line at
+                        // the dune edge) adjacent rims alternate dark/light and 8
+                        // passes left a visible vertical comb; ~5px diffusion
+                        // radius kills the period.
+                        // [PERF] compact index list + ping-pong over BOTH buffers
+                        // (results identical to the full-frame scan: untouched
+                        // pixels are equal in both buffers by initialisation).
+                        {
+                            let nJ = 0;
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (underMask[i] || band[i]) nJ++; }
+                            const JL = new Int32Array(nJ);
+                            nJ = 0;
+                            for (let y = 1; y < ph - 1; y++) for (let x = 1; x < pw - 1; x++) { const i = y*pw+x;
+                                if (underMask[i] || band[i]) JL[nJ++] = i; }
+                            // planar channels: 3 independent streams, better cache
+                            // behaviour than interleaved (results identical)
+                            const P0a = new Float32Array(PN), P1a = new Float32Array(PN), P2a = new Float32Array(PN);
+                            for (let i = 0; i < PN; i++) { P0a[i] = fillRGB[i*3]; P1a[i] = fillRGB[i*3+1]; P2a[i] = fillRGB[i*3+2]; }
+                            let A0 = P0a, A1 = P1a, A2p = P2a;
+                            let B0 = P0a.slice(), B1 = P1a.slice(), B2p = P2a.slice();
+                            for (let p = 0; p < 24; p++) {
+                                for (let q2 = 0; q2 < nJ; q2++) { const i = JL[q2];
+                                    const l = i-1, r = i+1, u = i-pw, d = i+pw;
+                                    // float grouping kept EXACTLY as the original (0.2*self + 0.2*sum4)
+                                    B0[i] = 0.2 * A0[i] + 0.2 * (A0[l] + A0[r] + A0[u] + A0[d]);
+                                    B1[i] = 0.2 * A1[i] + 0.2 * (A1[l] + A1[r] + A1[u] + A1[d]);
+                                    B2p[i] = 0.2 * A2p[i] + 0.2 * (A2p[l] + A2p[r] + A2p[u] + A2p[d]);
+                                }
+                                let t2 = A0; A0 = B0; B0 = t2;
+                                t2 = A1; A1 = B1; B1 = t2;
+                                t2 = A2p; A2p = B2p; B2p = t2;
+                            }
+                            for (let q2 = 0; q2 < nJ; q2++) { const i = JL[q2];
+                                fillRGB[i*3] = A0[i]; fillRGB[i*3+1] = A1[i]; fillRGB[i*3+2] = A2p[i]; }
+                        }
                     }
+                _mark('jacobi-main');
                     const order = { length: 0 }; // (retained name for the log below)
                     for (let i = 0; i < PN; i++) if (band[i]) order.length++;
                     // Stash directional gap data for the SD-export bundle (native res, top-row-first)
@@ -7554,12 +9288,39 @@ function buildBackgroundLayer() {
                     // Bleed the band's fill colour a few px OUT into the surrounding
                     // non-band so the fill texture's bilinear edge blends fill->fill,
                     // not fill->black. Alpha stays sharp (= band); only RGB is bled.
-                    { let filled = new Uint8Array(PN); for (let i=0;i<PN;i++) filled[i]=band[i]?1:0;
+                    { // [PERF] frontier generations instead of BLEED full-frame passes
+                      // with buffer copies. Exact: candidates are discovered from the
+                      // previous generation, then coloured by checking their own
+                      // neighbours in the ORIGINAL l,r,u,d priority against the
+                      // previous-generation state — identical pixels, identical colours.
+                      const filled = new Uint8Array(PN);
+                      for (let i = 0; i < PN; i++) filled[i] = band[i] ? 1 : 0;
                       const BLEED = Math.max(3, (bgBandCutDilatePx|0) + 1); // must cover the cut ring
-                      for (let p=0;p<BLEED;p++){ const prev=filled.slice();
-                        for (let y=0;y<ph;y++) for (let x=0;x<pw;x++){ const i=y*pw+x; if(prev[i])continue;
-                          const nb=[x>0?i-1:-1,x<pw-1?i+1:-1,y>0?i-pw:-1,y<ph-1?i+pw:-1];
-                          for (const j of nb){ if(j>=0&&prev[j]){ fillRGB[i*3]=fillRGB[j*3];fillRGB[i*3+1]=fillRGB[j*3+1];fillRGB[i*3+2]=fillRGB[j*3+2]; filled[i]=1; break; } } } } }
+                      let frontier = [];
+                      for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                          if (!filled[i]) continue;
+                          if ((x>0&&!filled[i-1])||(x<pw-1&&!filled[i+1])||(y>0&&!filled[i-pw])||(y<ph-1&&!filled[i+pw])) frontier.push(i); }
+                      const stamp = new Int32Array(PN);
+                      for (let p = 1; p <= BLEED; p++) {
+                          const cand = [];
+                          for (let f = 0; f < frontier.length; f++) {
+                              const i = frontier[f]; const x = i%pw, y = (i/pw)|0;
+                              let j;
+                              if (x > 0)    { j = i-1;  if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (x < pw-1) { j = i+1;  if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (y > 0)    { j = i-pw; if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                              if (y < ph-1) { j = i+pw; if (!filled[j] && stamp[j] !== p) { stamp[j] = p; cand.push(j); } }
+                          }
+                          for (let c = 0; c < cand.length; c++) {
+                              const i = cand[c]; const x = i%pw, y = (i/pw)|0;
+                              // original neighbour priority: left, right, up, down (prev state)
+                              const j = (x>0&&filled[i-1]) ? i-1 : (x<pw-1&&filled[i+1]) ? i+1 : (y>0&&filled[i-pw]) ? i-pw : (y<ph-1&&filled[i+pw]) ? i+pw : -1;
+                              if (j >= 0) { fillRGB[i*3]=fillRGB[j*3]; fillRGB[i*3+1]=fillRGB[j*3+1]; fillRGB[i*3+2]=fillRGB[j*3+2]; }
+                          }
+                          for (let c = 0; c < cand.length; c++) filled[cand[c]] = 1;
+                          frontier = cand;
+                      }
+                    }
                     const fill = new Uint8Array(PN * 4);
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                         const i = y*pw+x, o = ((ph-1-y)*pw+x)*4;
@@ -7569,7 +9330,8 @@ function buildBackgroundLayer() {
                         fill[o]=fillRGB[i*3]; fill[o+1]=fillRGB[i*3+1]; fill[o+2]=fillRGB[i*3+2];
                         fill[o+3] = bandAlpha[i];
                     }
-                    const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    _mark('bleed+filltex');
+                        const fillDT = new THREE.DataTexture(fill, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
                     fillDT.needsUpdate = true; fillDT.flipY = false;
                     fillDT.minFilter = THREE.LinearFilter; fillDT.magFilter = THREE.LinearFilter;
                     if ('encoding' in fillDT) fillDT.encoding = THREE.sRGBEncoding;         // r128
@@ -7620,14 +9382,22 @@ function buildBackgroundLayer() {
                             const extValid = new Uint8Array(EPN);
                             const extCpx = new Uint8Array(EPN*4);   // RGBA, colour source
                             const extDpx = new Uint8Array(EPN*4);   // RGBA, depth encoded as gray
+                            // Margin seeds = SOURCE image colour + FRONT-surface depth, not the
+                            // plate fill. A beyond-frame reveal shows the front world continuing
+                            // past the frame (the near dune keeps going below the bottom edge),
+                            // and a near-depth skirt parallax-slides with the FG silhouette to
+                            // cover the gap. Seeding from the plate put the occluded-world wash
+                            // (inpaint blues, starved blacks, fill striations) at FAR depth in
+                            // the margin: it stayed put under parallax and rendered as the
+                            // striped off-colour band along the frame edge at look-up poses.
                             for (let Y = 0; Y < ph; Y++) for (let X = 0; X < pw; X++) {
                                 const si = Y*pw+X, di = (Y+my)*EPW+(X+mx);
                                 extValid[di] = 1;
-                                extCpx[di*4]   = Math.max(0, Math.min(255, fillRGB[si*3]|0));
-                                extCpx[di*4+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
-                                extCpx[di*4+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
+                                extCpx[di*4]   = cpx[si*4];
+                                extCpx[di*4+1] = cpx[si*4+1];
+                                extCpx[di*4+2] = cpx[si*4+2];
                                 extCpx[di*4+3] = 255;
-                                const dz = Math.max(0, Math.min(255, (plugDepth[si]*255)|0));
+                                const dz = Math.max(0, Math.min(255, (depth[si]*255)|0));
                                 extDpx[di*4] = dz; extDpx[di*4+1] = dz; extDpx[di*4+2] = dz; extDpx[di*4+3] = 255;
                             }
                             const extColorSmooth = bgPullPushFill(extCpx, extValid, EPW, EPH);
@@ -7642,12 +9412,34 @@ function buildBackgroundLayer() {
                                     extFill[di*3+1] = Math.max(0, Math.min(255, fillRGB[si*3+1]|0));
                                     extFill[di*3+2] = Math.max(0, Math.min(255, fillRGB[si*3+2]|0));
                                 } else {
-                                    extDepth[di] = extDepthSmooth[di*3] / 255;
+                                    // one-quantum setback: the margin depth passed through an
+                                    // 8-bit channel; quantization UP can exceed the plate's
+                                    // z-bias under bilinear sampling and win the z-test over
+                                    // the FG at the frame weld (measured protrusion seam).
+                                    extDepth[di] = Math.max(0, extDepthSmooth[di*3] - 1) / 255;
                                     extFill[di*3]   = extColorSmooth[di*3];
                                     extFill[di*3+1] = extColorSmooth[di*3+1];
                                     extFill[di*3+2] = extColorSmooth[di*3+2];
                                 }
                                 extMask[di] = inCenter ? 0 : 1;
+                            }
+                            // WELD RING: the outermost few CENTER texels take front-surface
+                            // depth + source colour, matching the margin skirt. Without it,
+                            // the plate(far)->skirt(near) depth cliff sits exactly on the
+                            // frame boundary and its one-texel transition quad renders as a
+                            // fold wall textured with the plate<->skirt colour blend — the
+                            // thin dark seam line hugging the FG silhouette at look-up. The
+                            // ring is never legitimately visible as plate (the FG edge rows
+                            // cover it at rest; the skirt covers it in reveals), so moving
+                            // the cliff a few texels inboard hides the fold behind the skirt.
+                            const WELD = 3;
+                            for (let Y = 0; Y < ph; Y++) for (let X = 0; X < pw; X++) {
+                                if (Math.min(X, Y, pw-1-X, ph-1-Y) >= WELD) continue;
+                                const si = Y*pw+X, di = (Y+my)*EPW+(X+mx);
+                                extDepth[di] = depth[si];
+                                extFill[di*3]   = cpx[si*4];
+                                extFill[di*3+1] = cpx[si*4+1];
+                                extFill[di*3+2] = cpx[si*4+2];
                             }
                             // extended plug-depth texture (RedFloat, rows flipped for GL like the native one)
                             const eplug = new Float32Array(EPN);
@@ -7697,7 +9489,8 @@ function buildBackgroundLayer() {
                             bgExtGeom = new THREE.PlaneGeometry(gW, gH, segW, segH);
                             // stash for the SD outpaint bundle (top-row-first, extended res)
                             bgExtendExport = { mx, my, pw, ph, EPW, EPH, depth: extDepth, fill: extFill, mask: extMask };
-                            console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
+                            _mark('scene-extension');
+                        console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
                                 EPW + 'x' + EPH + ' (' + (Date.now()-tX) + 'ms)');
                         }
                     }
@@ -7726,6 +9519,158 @@ function buildBackgroundLayer() {
         bgLayerMesh.visible = show ? show.checked : true;
         scene.add(bgLayerMesh);
 
+        // ---- UNDER-SHEET MESH (MPI slice 2): between plate and FG ----
+        if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
+        if (_midBand && _midFillRGB && L.mesh.geometry && L.mesh.geometry.parameters) {
+            const midBand = _midBand, midDepthV = _midDepthV, midFillRGB = _midFillRGB, depth = _midFrontD;
+            try {
+                const gU = L.mesh.geometry, gpU = gU.parameters;
+                const pww = _midPW, phh = _midPH;
+                // depth texture: front surface outside the band (welds seamlessly),
+                // carried far depth inside
+                const mD = new Float32Array(midBand.length);
+                const mF = new Uint8Array(midBand.length * 4);
+                for (let y = 0; y < phh; y++) { const s = y*pww, d = (phh-1-y)*pww;
+                    for (let x = 0; x < pww; x++) {
+                        const i = s+x, o = (d+x)*4;
+                        // outside the band: FRONT surface with a small setback (the
+                        // plate's own bias constant), so half-texel bilinear blends at
+                        // the sheet boundary can never beat the FG's z (measured
+                        // protrusion flecks at ribbon/sheet boundaries)
+                        mD[d+x] = midBand[i] ? midDepthV[i] : Math.max(0, depth[i] - 0.004);
+                        if (midBand[i]) { mF[o]=midFillRGB[i*3]; mF[o+1]=midFillRGB[i*3+1]; mF[o+2]=midFillRGB[i*3+2]; mF[o+3]=255; }
+                        else { mF[o+3]=0; }
+                    }
+                }
+                const mDT = new THREE.DataTexture(mD, pww, phh, THREE.RedFormat, THREE.FloatType);
+                mDT.needsUpdate = true; mDT.flipY = false;
+                mDT.minFilter = THREE.LinearFilter; mDT.magFilter = THREE.LinearFilter;
+                if ('colorSpace' in mDT) mDT.colorSpace = THREE.NoColorSpace;
+                const mFT = new THREE.DataTexture(mF, pww, phh, THREE.RGBAFormat, THREE.UnsignedByteType);
+                mFT.needsUpdate = true; mFT.flipY = false;
+                mFT.minFilter = THREE.LinearFilter; mFT.magFilter = THREE.LinearFilter;
+                if ('encoding' in mFT) mFT.encoding = THREE.sRGBEncoding;
+                if ('colorSpace' in mFT) mFT.colorSpace = THREE.SRGBColorSpace;
+                // triangles touching the band only
+                const full = gU.userData._fullIndex || gU.index.array;
+                const vw2 = ((gpU.widthSegments || 1) | 0) + 1, vh2 = ((gpU.heightSegments || 1) | 0) + 1;
+                const sx2 = (pww - 1) / Math.max(1, vw2 - 1), sy2 = (phh - 1) / Math.max(1, vh2 - 1);
+                // INTERIOR triangles only: a boundary triangle spans floor depth
+                // (near) inside the band to front depth (sky) outside — a one-
+                // texel wall stretched across the full parallax, rendered as the
+                // semi-transparent smear along silhouettes. All 3 vertices in.
+                const midIdx = [];
+                for (let t = 0; t < full.length; t += 3) {
+                    let all3 = true;
+                    for (let k = 0; k < 3 && all3; k++) {
+                        const vi = full[t+k];
+                        const tx = Math.round((vi % vw2) * sx2), ty = Math.round(((vi / vw2) | 0) * sy2);
+                        if (!midBand[ty*pww+tx]) all3 = false;
+                    }
+                    if (all3) midIdx.push(full[t], full[t+1], full[t+2]);
+                }
+                if (midIdx.length) {
+                    const mg = new THREE.BufferGeometry();
+                    mg.setAttribute('position', gU.attributes.position);
+                    mg.setAttribute('uv', gU.attributes.uv);
+                    if (gU.attributes.normal) mg.setAttribute('normal', gU.attributes.normal);
+                    mg.setIndex(new THREE.BufferAttribute(new full.constructor(midIdx), 1));
+                    const mm = L.mesh.material.clone();
+                    mm.uniforms.displacementMap.value = mDT;
+                    mm.uniforms.map.value = mFT;
+                    mm.uniforms.u_isBackgroundLayer.value = true;
+                    mm.uniforms.u_useEdgeMask.value = false;
+                    if (mm.uniforms.u_useBandCut) { mm.uniforms.u_useBandCut.value = false; mm.uniforms.u_bandMask.value = null; }
+                    mm.uniforms.displacementBias.value = (mm.uniforms.displacementBias.value || 0) - 0.002; // between FG (0) and plate (-0.004)
+                    mpiMidMesh = new THREE.Mesh(mg, mm);
+                    mpiMidMesh.position.copy(L.mesh.position);
+                    mpiMidMesh.rotation.copy(L.mesh.rotation);
+                    mpiMidMesh.scale.copy(L.mesh.scale);
+                    mpiMidMesh.renderOrder = (L.mesh.renderOrder || 0) - 0.5;
+                    scene.add(mpiMidMesh);
+                    console.log('[MPI] under-sheet mesh: ' + (midIdx.length/3) + ' tris between plate and FG');
+                }
+            } catch (e) { console.warn('[MPI] under-sheet mesh failed:', e); }
+        }
+        // ---- per-layer plate sheets (MPI slice 3, live): one mesh per overlap
+        // slot, same recipe as the under-sheet (interior-only triangles that do
+        // not span depth jumps, own depth + colour textures). Bias -0.0025 sits
+        // between the under-sheet (-0.002) and the plate (-0.004): coincident
+        // surfaces resolve by design — the under-sheet wins where both carry the
+        // same floor, strips sit in front of the plate they refine.
+        if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
+        if (_stripO && L.mesh.geometry && L.mesh.geometry.parameters) {
+            try {
+                const gU2 = L.mesh.geometry, gp2 = gU2.parameters;
+                const PW = _stripPW, PH = _stripPH;
+                const full2 = gU2.userData._fullIndex || gU2.index.array;
+                const vw3 = ((gp2.widthSegments || 1) | 0) + 1, vh3 = ((gp2.heightSegments || 1) | 0) + 1;
+                const sx3 = (PW - 1) / Math.max(1, vw3 - 1), sy3 = (PH - 1) / Math.max(1, vh3 - 1);
+                mpiStripMeshes = [];
+                for (let s7 = 0; s7 < 2; s7++) {
+                    const O = _stripO[s7], Dd = _stripD[s7], Cc = _stripC[s7];
+                    let nAny = 0; for (let i = 0; i < O.length; i++) if (O[i]) { nAny = 1; break; }
+                    if (!nAny) continue;
+                    const mD2 = new Float32Array(O.length);
+                    const mF2 = new Uint8Array(O.length * 4);
+                    const frontD = _stripFrontD;
+                    for (let y = 0; y < PH; y++) { const s = y*PW, d = (PH-1-y)*PW;
+                        for (let x = 0; x < PW; x++) {
+                            const i = s+x, o = (d+x)*4;
+                            mD2[d+x] = O[i] ? Dd[i] : (frontD ? Math.max(0, frontD[i] - 0.004) : 0);
+                            if (O[i]) { mF2[o]=Cc[i*3]; mF2[o+1]=Cc[i*3+1]; mF2[o+2]=Cc[i*3+2]; mF2[o+3]=255; }
+                            else mF2[o+3]=0;
+                        }
+                    }
+                    const dT2 = new THREE.DataTexture(mD2, PW, PH, THREE.RedFormat, THREE.FloatType);
+                    dT2.needsUpdate = true; dT2.flipY = false;
+                    dT2.minFilter = THREE.LinearFilter; dT2.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in dT2) dT2.colorSpace = THREE.NoColorSpace;
+                    const fT2 = new THREE.DataTexture(mF2, PW, PH, THREE.RGBAFormat, THREE.UnsignedByteType);
+                    fT2.needsUpdate = true; fT2.flipY = false;
+                    fT2.minFilter = THREE.LinearFilter; fT2.magFilter = THREE.LinearFilter;
+                    if ('encoding' in fT2) fT2.encoding = THREE.sRGBEncoding;
+                    if ('colorSpace' in fT2) fT2.colorSpace = THREE.SRGBColorSpace;
+                    const sIdx = [];
+                    for (let t = 0; t < full2.length; t += 3) {
+                        let all3 = true, dmin = 2, dmax = -1;
+                        for (let k = 0; k < 3 && all3; k++) {
+                            const vi = full2[t+k];
+                            const tx = Math.round((vi % vw3) * sx3), ty = Math.round(((vi / vw3) | 0) * sy3);
+                            const ti = ty*PW+tx;
+                            if (!O[ti]) { all3 = false; break; }
+                            const dv = Dd[ti]; if (dv < dmin) dmin = dv; if (dv > dmax) dmax = dv;
+                        }
+                        if (all3 && dmax - dmin <= fgTearStep) sIdx.push(full2[t], full2[t+1], full2[t+2]);
+                    }
+                    if (!sIdx.length) continue;
+                    const sg = new THREE.BufferGeometry();
+                    sg.setAttribute('position', gU2.attributes.position);
+                    sg.setAttribute('uv', gU2.attributes.uv);
+                    if (gU2.attributes.normal) sg.setAttribute('normal', gU2.attributes.normal);
+                    sg.setIndex(new THREE.BufferAttribute(new full2.constructor(sIdx), 1));
+                    const sm2 = L.mesh.material.clone();
+                    sm2.uniforms.displacementMap.value = dT2;
+                    sm2.uniforms.map.value = fT2;
+                    sm2.uniforms.u_isBackgroundLayer.value = true;
+                    sm2.uniforms.u_useEdgeMask.value = false;
+                    if (sm2.uniforms.u_useBandCut) { sm2.uniforms.u_useBandCut.value = false; sm2.uniforms.u_bandMask.value = null; }
+                    sm2.uniforms.displacementBias.value = (sm2.uniforms.displacementBias.value || 0) - 0.0025;
+                    const smesh = new THREE.Mesh(sg, sm2);
+                    smesh.userData.slot = s7;   // per-layer SD reimport targets slot textures by this id
+                    smesh.position.copy(L.mesh.position);
+                    smesh.rotation.copy(L.mesh.rotation);
+                    smesh.scale.copy(L.mesh.scale);
+                    smesh.renderOrder = (L.mesh.renderOrder || 0) - 0.4;
+                    scene.add(smesh);
+                    mpiStripMeshes.push(smesh);
+                    console.log('[MPI] layer-strip sheet ' + s7 + ': ' + (sIdx.length/3) + ' tris');
+                }
+            } catch (e) { console.warn('[MPI] layer-strip sheets failed:', e); }
+        }
+
+        _mark('meshes');
+        console.log('[PERF] build ' + (Date.now() - _pt0) + 'ms | ' + _perf.join(' | '));
         console.log('[BG-LAYER] built: band + plug depth + baked color, mesh added behind layer 0');
         return true;
     } catch (e) {
@@ -9662,6 +11607,72 @@ async function snapshotAndFill() {
 /**
  * Imports SD inpainted images back into the scene as a patch mesh
  */
+// PER-LAYER SD REIMPORT (MPI slice 3b, return path): accept any subset of
+// SD-inpainted layer{k}_color.png files (filenames as the bundle exported
+// them) and write each one's pixels into the strip slot textures wherever
+// that layer owns the slot. Colours only — the strip DEPTH was the SD
+// conditioning input and stays as the live pipeline established it, so
+// structure (and every verified contract property) is untouched.
+async function importMPILayerPatches() {
+    if (!bgMPIStripExport || !mpiStripMeshes || !mpiStripMeshes.length) {
+        alert('Build the BG layer first (with MPI strips on) — there are no layer sheets to update.');
+        return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/*'; input.multiple = true;
+    const fileList = await new Promise((resolve) => {
+        input.onchange = (e) => resolve(Array.from(e.target.files || []));
+        input.click();
+    });
+    if (!fileList.length) return;
+    const sE = bgMPIStripExport, pw = sE.pw, ph = sE.ph, PN = pw * ph;
+    const loadImg = (file) => new Promise((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = (e) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = e.target.result; };
+        rd.onerror = reject; rd.readAsDataURL(file);
+    });
+    let applied = 0, skipped = [];
+    for (const f of fileList) {
+        const m = /layer(\d+)_color/i.exec(f.name);
+        if (!m) { skipped.push(f.name + ' (name must contain layer{k}_color)'); continue; }
+        const k = parseInt(m[1], 10);
+        let img;
+        try { img = await loadImg(f); } catch (e) { skipped.push(f.name + ' (unreadable)'); continue; }
+        const nPx = applyMPILayerImage(k, img);
+        console.log('[MPI-IMPORT] layer ' + k + ': ' + nPx + 'px updated from ' + f.name);
+        if (nPx) applied++; else skipped.push(f.name + ' (layer ' + k + ' owns no strip texels)');
+    }
+    alert('Layer import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+// Write one layer's SD colours into the strip slot textures (colours only;
+// depth stays as conditioned). Accepts any drawable (img or canvas).
+function applyMPILayerImage(k, img) {
+    if (!bgMPIStripExport || !mpiStripMeshes) return 0;
+    const sE = bgMPIStripExport, pw = sE.pw, ph = sE.ph;
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
+    const cc = cv.getContext('2d', { willReadFrequently: true });
+    cc.drawImage(img, 0, 0, pw, ph);
+    const px = cc.getImageData(0, 0, pw, ph).data;
+    let nPx = 0;
+    for (let s = 0; s < 2; s++) {
+        const mesh = mpiStripMeshes.find(mm => mm.userData.slot === s);
+        if (!mesh) continue;
+        const tex = mesh.material.uniforms.map.value;
+        const td = tex.image.data;   // RGBA, rows flipped vs source
+        for (let y = 0; y < ph; y++) { const src = y * pw, dst = (ph - 1 - y) * pw;
+            for (let x = 0; x < pw; x++) { const i = src + x;
+                if (sE.slotO[s][i] !== k) continue;
+                const si = i * 4, di = (dst + x) * 4;
+                if (px[si + 3] < 8) continue;             // SD output transparent here: keep coarse
+                td[di] = px[si]; td[di+1] = px[si+1]; td[di+2] = px[si+2];
+                sE.slotC[s][i*3] = px[si]; sE.slotC[s][i*3+1] = px[si+1]; sE.slotC[s][i*3+2] = px[si+2];
+                nPx++;
+            }
+        }
+        tex.needsUpdate = true;
+    }
+    return nPx;
+}
 async function importSDInpaintedPatch() {
     console.log("--- Importing SD Inpainted Patch ---");
     
@@ -12366,6 +14377,7 @@ function setupStaticControlListeners() {
         exportAtlasesBtn.addEventListener('click', exportSDPipelineData);
     }
     
+    document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);
