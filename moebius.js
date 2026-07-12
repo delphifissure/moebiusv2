@@ -38,6 +38,11 @@ let isClearing = false;
 let isAccumulatingGaps = false;  // True when "live sweep" is active
 let useStaticInfillAtlas = false; // True when baked atlas is active
 let isSweeping = false;           // Master lock for automated sweeps
+// Manual view offset (right-drag or shift-drag on the canvas): a delta added
+// to the head-tracked camera position, so poses can be tested without moving
+// your head. Double-click resets. Harness: window.setViewOffset(dx, dy).
+let manualCamDX = 0, manualCamDY = 0;
+let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 let infillAtlasMesh = null;       // The static mesh for the baked atlas
 
 // Targets (will be initialized in initializeSceneAndRenderer)
@@ -7629,6 +7634,7 @@ function buildBackgroundLayer() {
                 let thinM = null;       // thin near-class features (staff, glider): protected + depth-haloed
                 let haloM = null;       // pixels raised by the thin-feature depth halo (rigid ribbon skirt)
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
+                let dispBase = depth;   // display-side base: closing-cleaned copy when stroke dips are found (plug pipeline keeps `depth`)
                 let floorField = null;  // local lower envelope (shared: floor rind + under-sheet)
                 let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
                 let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
@@ -7912,14 +7918,43 @@ function buildBackgroundLayer() {
                         }
                         if (snapped > 0) { pxChanged += snapped; console.log('[RUNG-PLUG] ramp collapse: ' + snapped + 'px binarized'); }
                     }
+                    // ---- SHALLOW CLOSING, DISPLAY SIDE ONLY (look-down streaks):
+                    // the bake imprints ink strokes / footprint texture as
+                    // narrow, sub-tear-step depth DIPS across smooth near
+                    // surfaces. Under look-DOWN parallax each dip's triangles
+                    // stretch (they compress and vanish at look-up poses — which
+                    // is why every earlier pose battery missed the class): the
+                    // strokes smear into diagonal hatch streaks across the dune.
+                    // Morphological closing (radius 5), clamped to shallow
+                    // amplitude, fills dips that are BOTH narrow and shallower
+                    // than two tear-steps — on a display-side COPY. The plug /
+                    // band / flood pipeline keeps the unmodified depth, so plate
+                    // geometry and every verified contract measurement are
+                    // byte-identical; only the FG mesh's displacement (and the
+                    // tear reference, which must match what is displayed) sees
+                    // the cleaned surface. Genuine narrow gaps (between legs,
+                    // staff against sky) are deeper than the clamp and stay.
+                    {
+                        const dil = bgSlide2D(depth, pw, ph, 5, false);
+                        const clo = bgSlide2D(dil, pw, ph, 5, true);
+                        let nClose = 0;
+                        for (let i = 0; i < PN; i++) {
+                            const up = clo[i] - depth[i];
+                            if (up > 0.008 && up <= fgTearStep * 2) {
+                                if (dispBase === depth) dispBase = depth.slice();
+                                dispBase[i] = clo[i]; nClose++;
+                            }
+                        }
+                        if (nClose > 0) { dispDepth = dispBase; console.log('[RUNG-PLUG] shallow closing (display): ' + nClose + 'px stroke-dip fill'); }
+                    }
                 _mark('despeckle+collapse');
-                    if (pxChanged > 0) {
+                    if (pxChanged > 0 || dispBase !== depth) {
                         const hf2 = new Float32Array(PN);
                         for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
-                            for (let x = 0; x < pw; x++) hf2[d2+x] = depth[s2+x]; }
+                            for (let x = 0; x < pw; x++) hf2[d2+x] = dispBase[s2+x]; }
                         const hc2 = document.createElement('canvas'); hc2.width = pw; hc2.height = ph;
                         const hx2 = hc2.getContext('2d'); const hid2 = hx2.createImageData(pw, ph);
-                        for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(depth[i] * 255)));
+                        for (let i = 0; i < PN; i++) { const v = Math.max(0, Math.min(255, Math.round(dispBase[i] * 255)));
                             hid2.data[i*4] = v; hid2.data[i*4+1] = v; hid2.data[i*4+2] = v; hid2.data[i*4+3] = 255; }
                         hx2.putImageData(hid2, 0, 0);
                         const hTex2 = new THREE.DataTexture(hf2, pw, ph, THREE.RedFormat, THREE.FloatType);
@@ -8007,7 +8042,7 @@ function buildBackgroundLayer() {
                     // (no rebuild guard: the input depth is base-restored above,
                     // so re-applying derives the identical halo texture)
                     if (nThin > 0) {
-                        const hd = depth.slice(); let changed = 0;
+                        const hd = dispBase.slice(); let changed = 0; // display-side base: keeps the closing when the halo texture swaps in
                         if (!haloM) haloM = new Uint8Array(PN);
                         // [PERF] the 5x5 max can only be nonzero within Chebyshev
                         // distance 2 of a thin pixel: gate the window scan to an
@@ -10257,8 +10292,8 @@ function updateCameraAndProjection() {
             gyroCamY = stableRollDegEquivalent * gyroSensitivityY;
         }
 
-        camera.position.x = faceTrackCamX + gyroCamX;
-        camera.position.y = faceTrackCamY + gyroCamY;
+        camera.position.x = faceTrackCamX + gyroCamX + manualCamDX;
+        camera.position.y = faceTrackCamY + gyroCamY + manualCamDY;
     }
 
     camera.updateProjectionMatrix();
@@ -14302,11 +14337,43 @@ function setupStaticControlListeners() {
     }
 
     // --- Canvas Mouse Listeners (Unchanged) ---
-    if (canvasElement) { 
-        canvasElement.addEventListener('click', handleCanvasClick); 
+    if (canvasElement) {
+        canvasElement.addEventListener('click', handleCanvasClick);
         canvasElement.addEventListener('mousedown', handleCanvasMouseDown);
         canvasElement.addEventListener('mousemove', handleCanvasMouseMove);
         window.addEventListener('mouseup', handleCanvasMouseUp);
+        // MANUAL VIEW DRAG: right-drag (or shift+drag) adds a delta to the
+        // head position — test any pose without moving your head. Grab
+        // metaphor: drag the scene right = camera moves left. Double-click
+        // resets to the tracked pose. Left-drag without shift keeps its
+        // existing behaviours (depth peek etc).
+        canvasElement.addEventListener('contextmenu', (e) => e.preventDefault());
+        canvasElement.addEventListener('pointerdown', (e) => {
+            if (e.button !== 2 && !(e.button === 0 && e.shiftKey)) return;
+            _viewDragActive = true; _viewDragLX = e.clientX; _viewDragLY = e.clientY;
+            canvasElement.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        });
+        canvasElement.addEventListener('pointermove', (e) => {
+            if (!_viewDragActive) return;
+            const r = canvasElement.getBoundingClientRect();
+            const sx = terrariumWidth / Math.max(1, r.width);   // full canvas drag ~ one frame width of travel
+            manualCamDX -= (e.clientX - _viewDragLX) * sx * 2;
+            manualCamDY += (e.clientY - _viewDragLY) * sx * 2;  // screen y down = camera up (grab)
+            _viewDragLX = e.clientX; _viewDragLY = e.clientY;
+        });
+        const _viewDragEnd = (e) => {
+            if (!_viewDragActive) return;
+            _viewDragActive = false;
+            console.log('[VIEW] manual offset:', manualCamDX.toFixed(3), manualCamDY.toFixed(3));
+        };
+        canvasElement.addEventListener('pointerup', _viewDragEnd);
+        canvasElement.addEventListener('pointercancel', _viewDragEnd);
+        canvasElement.addEventListener('dblclick', () => {
+            manualCamDX = 0; manualCamDY = 0;
+            console.log('[VIEW] manual offset reset');
+        });
+        window.setViewOffset = (dx, dy) => { manualCamDX = dx || 0; manualCamDY = dy || 0; };
     }
     
     // --- NEW: Gap Accumulation Listeners ---
