@@ -159,11 +159,12 @@ function hideBuildOverlay() {
     setTimeout(() => { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }, 240);
 }
 function buildBackgroundLayerWithOverlay(done) {
-    const v2 = (typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes);
-    const durKey = v2 ? 'bgBuildMs_v2' : 'bgBuildMs_v1';
-    let expect = v2 ? 9000 : 15000;
+    const quick = (typeof bgQuickBake !== 'undefined' && bgQuickBake);
+    const v2 = !quick && (typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes);
+    const durKey = quick ? 'bgBuildMs_quick' : (v2 ? 'bgBuildMs_v2' : 'bgBuildMs_v1');
+    let expect = quick ? 1200 : (v2 ? 9000 : 15000);
     try { const s = parseInt(localStorage.getItem(durKey), 10); if (s > 0) expect = s; } catch (e) {}
-    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…', expect);
+    showBuildOverlay(quick ? 'Quick-baking…' : (v2 ? 'Building depth layers…' : 'Baking background…'), expect);
     requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
         const tB = Date.now();
         try { buildBackgroundLayer(); } catch (e) { console.error('[BG-BUILD]', e); }
@@ -1293,6 +1294,9 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_useDepthGrad: { value: document.getElementById('useDepthGradCheck')?.checked || true },
         u_depthGradThreshold: { value: parseFloat(document.getElementById('depthGradThresholdSlider')?.value) || 0.02 },
         u_cutSharp: { value: false }, // RUNG cut: set by the certified-source gate
+        u_sdHighlight: { value: false },   // A36: SD-region preview
+        u_sdMask: { value: null },
+        u_sdMaskTexel: { value: new THREE.Vector2(1/1024, 1/1024) },
         
         u_useSobel: { value: document.getElementById('useSobelCheck')?.checked || false },
         u_sobelThreshold: { value: parseFloat(document.getElementById('sobelThresholdSlider')?.value) || 0.1 },
@@ -1352,6 +1356,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // --- GAP STRATEGY UNIFORMS ---
         uniform bool u_useDepthGrad;   uniform float u_depthGradThreshold;
         uniform bool u_cutSharp; // RUNG cut: certified-asset threshold override (0.008)
+        uniform bool u_sdHighlight; uniform sampler2D u_sdMask; uniform vec2 u_sdMaskTexel;
         uniform bool u_useSobel;       uniform float u_sobelThreshold;
         uniform bool u_useLuma;        uniform float u_lumaThreshold;
         uniform bool u_useChroma;      uniform float u_chromaThreshold;
@@ -1603,6 +1608,33 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         }
     `;
 
+    // SD-REGION HIGHLIGHT (A36): preview of exactly where diffusion will
+    // inpaint. On the plate, texels inside the all-viewpoint disocclusion
+    // mask are tinted on a depth ramp (far = cyan, near = amber) with a
+    // bright rim at the region boundary; foreground layers dim so the
+    // regions glow through at rest.
+    const sdHighlightLogicGLSL = `
+        if (u_sdHighlight) {
+            if (u_isBackgroundLayer) {
+                float sdm = texture2D(u_sdMask, vUv).r;
+                if (sdm > 0.5) {
+                    vec3 tint = mix(vec3(0.15, 0.75, 1.0), vec3(1.0, 0.65, 0.15),
+                                    clamp(vNormalizedDepth * 1.4, 0.0, 1.0));
+                    float edge = 0.0;
+                    for (int k = 0; k < 4; k++) {
+                        vec2 o = (k == 0) ? vec2( 2.0, 0.0) : (k == 1) ? vec2(-2.0, 0.0)
+                               : (k == 2) ? vec2(0.0,  2.0) : vec2(0.0, -2.0);
+                        if (texture2D(u_sdMask, vUv + o * u_sdMaskTexel).r < 0.5) edge = 1.0;
+                    }
+                    originalColor.rgb = mix(originalColor.rgb, tint, 0.55);
+                    if (edge > 0.5) originalColor.rgb = mix(originalColor.rgb, vec3(1.0), 0.75);
+                }
+            } else {
+                originalColor.rgb *= 0.35;   // dim FG so the regions read through
+            }
+        }
+    `;
+
     // Mode-specific shaders (Updated to use the unified gap logic)
     if (mode === "image") {
         specificUniforms = { map: { value: mainTexture }, displacementMap: { value: depthTextureForMode } };
@@ -1619,6 +1651,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 if (originalColor.a < 0.01) discard;
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
+                ${sdHighlightLogicGLSL}
                 gl_FragColor = originalColor;
             }`;
 
@@ -1646,6 +1679,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 if (originalColor.a < 0.01) discard;
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
+                ${sdHighlightLogicGLSL}
                 gl_FragColor = originalColor;
             }`;
 
@@ -1664,6 +1698,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 if (originalColor.a < 0.01) discard; 
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
+                ${sdHighlightLogicGLSL}
                 gl_FragColor = originalColor;
             }`;
     }
@@ -6775,6 +6810,11 @@ let bgCutFGOnPlug = true;      // master toggle for the band-gated FG cut
 // stroke repair their interiors are depth-coherent, so only their 1px
 // boundary ring spans a cliff.
 let bgTearAllRubber = true;
+// A36: quick bake — the realtime pull-push look, baked once in source
+// space (all-viewpoint disocclusion map + far-envelope plate + one-shot
+// wash). Sub-second, flicker-free, and the SD-region highlight preview
+// rides on its mask.
+let bgQuickBake = false;
 // |sampled - interpolated| depth that counts as mid-stretch. The mismatch
 // peaks at ~cliff/2 mid-stretch and tapers toward the triangle's vertices.
 // Rest-state cliffs are excluded by the gradient gate below, so this can sit
@@ -8112,6 +8152,158 @@ function buildBackgroundLayer() {
                 `,
                 depthWrite: false, depthTest: false
             });
+        }
+
+        // ---- A36 QUICK BAKE: the realtime look, baked once ----
+        // The realtime pull-push wash is view-independent once computed in
+        // SOURCE space, and the union of disocclusions over EVERY head pose
+        // in the budget has a closed form: a texel is revealed iff content
+        // nearer by more than r/RB exists within r px, for some r <= RB
+        // (the cone test) — a few separable sliding maxima, O(N). Plate
+        // depth = the far envelope under standing content; plate colour =
+        // the same pull-push wash the realtime path shows, seeded ONCE.
+        // Identical look, zero flicker, zero per-frame cost, sub-second.
+        window._bgQuickBaked = false;   // set true only by the quick branch below
+        if (typeof bgQuickBake !== 'undefined' && bgQuickBake) {
+            const tQ0 = Date.now();
+            const dImgQ = L.textures.depth.image2d || L.textures.depth.image || (L.elements && L.elements.depth);
+            const pw = dImgQ.naturalWidth || dImgQ.width, ph = dImgQ.naturalHeight || dImgQ.height;
+            const cvQ = document.createElement('canvas'); cvQ.width = pw; cvQ.height = ph;
+            const cxQ = cvQ.getContext('2d', { willReadFrequently: true });
+            cxQ.drawImage(dImgQ, 0, 0, pw, ph);
+            const dpxQ = cxQ.getImageData(0, 0, pw, ph).data;
+            const PNq = pw * ph;
+            const dQ = new Float32Array(PNq);
+            for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+            const RB = Math.max(8, bgBandMaxGrowPx | 0);
+            const floorQ = bgSlide2D(dQ, pw, ph, RB, true);
+            const disocc = new Uint8Array(PNq);
+            let nD = 0;
+            for (const r of [Math.max(2, RB >> 2), RB >> 1, RB]) {
+                const nearMax = bgSlide2D(dQ, pw, ph, r, false);
+                const thrQ = Math.max(0.03, (r / RB) * 0.5);
+                for (let i = 0; i < PNq; i++) {
+                    if (!disocc[i] && nearMax[i] - dQ[i] > thrQ) { disocc[i] = 1; nD++; }
+                }
+            }
+            // Floor only under GENUINE standing content: a tight 0.02 gate
+            // floors the plate under any texture relief (organic depth
+            // exceeds it over a 28px window nearly everywhere), which
+            // invalidates ~all colour seeds and degenerates the wash to
+            // NaN-white. True occluder cliffs stand well above the local
+            // floor; smooth relief stays plate=source and seeds stay live.
+            const THq = Math.max(0.08, fgTearStep * 2);
+            const plateQ = new Float32Array(PNq);
+            for (let i = 0; i < PNq; i++) plateQ[i] = (dQ[i] - floorQ[i] > THq) ? floorQ[i] : dQ[i];
+            const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
+            for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
+            const plateDT = new THREE.DataTexture(plateF, pw, ph, THREE.RedFormat, THREE.FloatType);
+            plateDT.needsUpdate = true; plateDT.flipY = false;
+            plateDT.minFilter = THREE.LinearFilter; plateDT.magFilter = THREE.LinearFilter;
+            if ('colorSpace' in plateDT) plateDT.colorSpace = THREE.NoColorSpace;
+            const maskDT = new THREE.DataTexture(maskF, pw, ph, THREE.RedFormat, THREE.FloatType);
+            maskDT.needsUpdate = true; maskDT.flipY = false;
+            maskDT.minFilter = THREE.NearestFilter; maskDT.magFilter = THREE.NearestFilter;
+            if ('colorSpace' in maskDT) maskDT.colorSpace = THREE.NoColorSpace;
+            // colour wash: the existing one-shot pull-push against the plate depth
+            if (pullPyramidTargets.length >= 2 && pullMaterial && pushMaterial) {
+                postProcessQuad.material = bgColorSeedMaterial;
+                bgColorSeedMaterial.uniforms.tColor.value = L.textures.color;
+                bgColorSeedMaterial.uniforms.tSrcDepth.value = L.textures.depth;
+                bgColorSeedMaterial.uniforms.tBgDepth.value = plateDT;
+                bgColorSeedMaterial.uniforms.u_texel.value.copy(texel);
+                renderer.setRenderTarget(pullPyramidTargets[0]);
+                renderer.setViewport(0, 0, pullPyramidTargets[0].width, pullPyramidTargets[0].height);
+                renderer.clear();
+                renderer.render(postProcessScene, postProcessCamera);
+                const nQ = pullPyramidTargets.length;
+                postProcessQuad.material = pullMaterial;
+                for (let i = 1; i < nQ; i++) {
+                    pullMaterial.uniforms.tFinerLevel.value = pullPyramidTargets[i - 1].texture;
+                    pullMaterial.uniforms.u_texelSize.value.set(1.0 / pullPyramidTargets[i - 1].width, 1.0 / pullPyramidTargets[i - 1].height);
+                    renderer.setRenderTarget(pullPyramidTargets[i]);
+                    renderer.setViewport(0, 0, pullPyramidTargets[i].width, pullPyramidTargets[i].height);
+                    renderer.clear();
+                    renderer.render(postProcessScene, postProcessCamera);
+                }
+                postProcessQuad.material = copyMaterial;
+                copyMaterial.uniforms.tDiffuse.value = pullPyramidTargets[nQ - 1].texture;
+                renderer.setRenderTarget(pushPyramidTargets[nQ - 1]);
+                renderer.setViewport(0, 0, pushPyramidTargets[nQ - 1].width, pushPyramidTargets[nQ - 1].height);
+                renderer.render(postProcessScene, postProcessCamera);
+                postProcessQuad.material = pushMaterial;
+                for (let i = nQ - 2; i >= 0; i--) {
+                    pushMaterial.uniforms.tCurrentLevel.value = pullPyramidTargets[i].texture;
+                    pushMaterial.uniforms.tCoarserLevel.value = pushPyramidTargets[i + 1].texture;
+                    renderer.setRenderTarget(pushPyramidTargets[i]);
+                    renderer.setViewport(0, 0, pushPyramidTargets[i].width, pushPyramidTargets[i].height);
+                    renderer.clear();
+                    renderer.render(postProcessScene, postProcessCamera);
+                }
+                postProcessQuad.material = copyMaterial;
+                copyMaterial.uniforms.tDiffuse.value = pushPyramidTargets[0].texture;
+                renderer.setRenderTarget(bgColorTarget);
+                renderer.setViewport(0, 0, w, h);
+                renderer.clear();
+                renderer.render(postProcessScene, postProcessCamera);
+            }
+            renderer.setRenderTarget(null);
+            // quick mode replaces any prior stack
+            if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
+                if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
+                bgLayerMesh = null; }
+            if (mpiFullMeshes) { for (const m of mpiFullMeshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } mpiFullMeshes = null;
+                for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = true; }
+            if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; L.mesh.visible = true; }
+            if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
+            if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
+            // restore the full (untorn) FG index if a prior full bake tore it
+            if (L.mesh.geometry.userData && L.mesh.geometry.userData._fullIndex)
+                L.mesh.geometry.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex, 1));
+            const matQ = L.mesh.material.clone();
+            matQ.uniforms.displacementMap.value = plateDT;
+            matQ.uniforms.map.value = bgColorTarget.texture;
+            matQ.uniforms.u_isBackgroundLayer.value = true;
+            matQ.uniforms.u_useEdgeMask.value = false;
+            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) - 0.004;
+            if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
+            const armNet = (mu) => { if (!mu.u_useBandCut) return;
+                mu.u_useBandCut.value = true;
+                if (mu.u_bandCutAll) mu.u_bandCutAll.value = true;
+                mu.u_bandMask.value = null;
+                mu.u_bandCutMismatch.value = bgBandCutMismatch;
+                if (mu.u_bandCutMaxGrad) mu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
+                if (mu.u_bandCutUvRate) mu.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); };
+            // FG cuts its rubber and reveals the wash; the PLATE renders
+            // SOLID — it is the only fill in quick mode, and discarding the
+            // backstop opens naked holes (double-discard speckle). Its own
+            // far-far smears are exactly what the realtime look shows too.
+            // That means EVERY discard path off: the band net AND the gap
+            // generators the clone inherits from the FG (u_useDepthGrad +
+            // the certified 0.008 cut classify the plate's floor-transition
+            // boundaries as gaps and punch white holes in the backstop).
+            if (matQ.uniforms.u_useBandCut) { matQ.uniforms.u_useBandCut.value = false; matQ.uniforms.u_bandMask.value = null; }
+            if (matQ.uniforms.u_bandCutAll) matQ.uniforms.u_bandCutAll.value = false;
+            for (const gk of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                              'u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle']) {
+                if (matQ.uniforms[gk]) matQ.uniforms[gk].value = false;
+            }
+            if (matQ.uniforms.u_cutSharp) matQ.uniforms.u_cutSharp.value = false;
+            armNet(L.mesh.material.uniforms);
+            bgLayerMesh = new THREE.Mesh(L.mesh.geometry, matQ);
+            bgLayerMesh.position.copy(L.mesh.position);
+            bgLayerMesh.rotation.copy(L.mesh.rotation);
+            bgLayerMesh.scale.copy(L.mesh.scale);
+            bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
+            const showQ = document.getElementById('bgLayerToggle');
+            bgLayerMesh.visible = showQ ? showQ.checked : true;
+            scene.add(bgLayerMesh);
+            window._sdMaskTex = maskDT;
+            window._bgQuickBaked = true;
+            bgBuildStamp = new Date().toISOString().slice(11, 19);
+            console.log('[QUICK-BAKE] all-viewpoint disocclusion: ' + nD + 'px (' + (nD / PNq * 100).toFixed(1) + '%), plate + wash in ' + (Date.now() - tQ0) + 'ms');
+            return true;
         }
 
         const reach = parseFloat(document.getElementById('fgReachSlider')?.value || '120');
@@ -10649,6 +10841,19 @@ function _wireDebugSheetControls() {
     document.getElementById('sdBundleBtn')?.addEventListener('click', exportSDBundle);
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
     const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
+    document.getElementById('bgQuickBakeChk')?.addEventListener('change', (e) => { bgQuickBake = !!e.target.checked; });
+    const _qbChk = document.getElementById('bgQuickBakeChk'); if (_qbChk) _qbChk.checked = bgQuickBake;
+    // A36: SD-region highlight — preview of exactly where diffusion will
+    // inpaint (depth-tinted band + bright rim on the plate, dimmed FG).
+    document.getElementById('sdRegionsChk')?.addEventListener('change', (e) => {
+        const on = !!e.target.checked;
+        const setH = (mm) => { if (mm && mm.uniforms && mm.uniforms.u_sdHighlight) mm.uniforms.u_sdHighlight.value = on; };
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) setH(bgLayerMesh.material);
+        for (const Lx of mediaLayers) if (Lx.mesh) setH(Lx.mesh.material);
+        if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr.mesh) setH(Lr.mesh.material);
+        if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setH(m.material);
+        if (on && (!window._sdMaskTex)) console.warn('[SD-REGIONS] no disocclusion mask yet — run a Quick bake first');
+    });
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => buildBackgroundLayerWithOverlay());
     // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
     // pullpush path) — the plane/bake builds are synchronous and would
@@ -12929,7 +13134,10 @@ function render() {
     // the composed final. Idempotent per frame; remembers prior
     // visibility so Show BG state survives.
     {
-        const suppress = (debugView !== 'final') || !useInpainting;
+        // A36: quick-baked scenes are single-pass — the plate IS the fill,
+        // so inpainting-off must not suppress it (the raw diagnostic stays
+        // available through the pipeline debug views).
+        const suppress = (debugView !== 'final') || (!useInpainting && !window._bgQuickBaked);
         const setSup = (m) => {
             if (!m || !m.userData) return;
             if (suppress) {
@@ -13308,8 +13516,12 @@ function render() {
 
     renderer.setViewport(0, 0, renderer.domElement.width, renderer.domElement.height);
 
-    // --- CASE 1: Inpainting Disabled (and not accumulating) ---
-    if (!useInpainting && debugView === 'final' && !(isAccumulatingGaps && !isSweeping)) {
+    // --- CASE 1: Inpainting Disabled OR quick-baked (single-pass) ---
+    // A36: after a quick bake the plate pre-fills every gap, so the
+    // per-frame multipass is pure waste — the scene renders in one pass
+    // regardless of the inpainting checkbox. That is the performance
+    // contract of the quick bake: realtime look, zero per-frame cost.
+    if ((!useInpainting || window._bgQuickBaked) && debugView === 'final' && !(isAccumulatingGaps && !isSweeping)) {
         
         setAllLayerUniforms('u_useDepthGrad', document.getElementById('useDepthGradCheck')?.checked || false);
         setAllLayerUniforms('u_useSobel', document.getElementById('useSobelCheck')?.checked || false);
