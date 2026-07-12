@@ -111,26 +111,63 @@ function updateViewFade() {
 // (double-rAF guarantees a frame reaches the screen) and the build starts
 // only after it is visible.
 let _bgBuildOverlayEl = null;
-function showBuildOverlay(msg) {
+function showBuildOverlay(msg, expectMs) {
     if (!_bgBuildOverlayEl) {
         _bgBuildOverlayEl = document.createElement('div');
         _bgBuildOverlayEl.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:200;display:flex;align-items:center;justify-content:center;';
-        _bgBuildOverlayEl.innerHTML = '<div style="background:#1b1f27;color:#e8ecf2;border:1px solid #39404d;border-radius:10px;padding:18px 26px;font:14px system-ui,sans-serif;display:flex;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,0.5);">' +
-            '<div style="width:18px;height:18px;border:3px solid #39404d;border-top-color:#7ab4ff;border-radius:50%;animation:bgspin 0.8s linear infinite;"></div>' +
-            '<span id="bgBuildOverlayMsg"></span></div>' +
+        _bgBuildOverlayEl.innerHTML = '<div style="background:#1b1f27;color:#e8ecf2;border:1px solid #39404d;border-radius:10px;padding:18px 26px;font:14px system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,0.5);">' +
+            '<div style="display:flex;align-items:center;gap:12px;">' +
+            '<div style="width:18px;height:18px;border:3px solid #39404d;border-top-color:#7ab4ff;border-radius:50%;animation:bgspin 0.8s linear infinite;flex:0 0 auto;"></div>' +
+            '<span id="bgBuildOverlayMsg"></span>' +
+            '<span id="bgBuildPct" style="margin-left:auto;color:#9db8dd;min-width:42px;text-align:right;">0%</span></div>' +
+            '<div style="margin-top:12px;height:6px;width:300px;background:#2a3040;border-radius:3px;overflow:hidden;">' +
+            '<div id="bgBuildBar" style="height:100%;width:100%;background:linear-gradient(90deg,#5a95e6,#7ab4ff);transform-origin:0 50%;transform:scaleX(0);"></div></div></div>' +
             '<style>@keyframes bgspin{to{transform:rotate(360deg)}}</style>';
         document.body.appendChild(_bgBuildOverlayEl);
     }
     const m = _bgBuildOverlayEl.querySelector('#bgBuildOverlayMsg');
     if (m) m.textContent = msg;
     _bgBuildOverlayEl.style.display = 'flex';
+    // PROGRESS: the build is one synchronous block, so a JS-updated number
+    // cannot repaint mid-build. The BAR is a compositor-thread transform
+    // animation calibrated to the LAST MEASURED build duration — it keeps
+    // moving through the freeze. The % text ticks whenever the main thread
+    // yields and snaps to 100 at completion.
+    const bar = _bgBuildOverlayEl.querySelector('#bgBuildBar');
+    const T = Math.max(800, expectMs || 12000);
+    if (bar) {
+        bar.style.transition = 'none';
+        bar.style.transform = 'scaleX(0)';
+        void bar.offsetWidth;   // flush so the transition below starts from 0
+        bar.style.transition = 'transform ' + T + 'ms cubic-bezier(0.25,0.55,0.35,0.95)';
+        bar.style.transform = 'scaleX(0.92)';
+    }
+    const t0 = performance.now();
+    if (window._bgPctIv) clearInterval(window._bgPctIv);
+    window._bgPctIv = setInterval(() => {
+        const el = document.getElementById('bgBuildPct');
+        if (el) el.textContent = Math.min(92, Math.round((performance.now() - t0) / T * 100)) + '%';
+    }, 120);
 }
-function hideBuildOverlay() { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }
+function hideBuildOverlay() {
+    if (window._bgPctIv) { clearInterval(window._bgPctIv); window._bgPctIv = null; }
+    if (!_bgBuildOverlayEl) return;
+    const bar = _bgBuildOverlayEl.querySelector('#bgBuildBar');
+    const pct = _bgBuildOverlayEl.querySelector('#bgBuildPct');
+    if (bar) { bar.style.transition = 'transform 180ms ease-out'; bar.style.transform = 'scaleX(1)'; }
+    if (pct) pct.textContent = '100%';
+    setTimeout(() => { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }, 240);
+}
 function buildBackgroundLayerWithOverlay(done) {
     const v2 = (typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes);
-    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…');
+    const durKey = v2 ? 'bgBuildMs_v2' : 'bgBuildMs_v1';
+    let expect = v2 ? 9000 : 15000;
+    try { const s = parseInt(localStorage.getItem(durKey), 10); if (s > 0) expect = s; } catch (e) {}
+    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…', expect);
     requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+        const tB = Date.now();
         try { buildBackgroundLayer(); } catch (e) { console.error('[BG-BUILD]', e); }
+        try { localStorage.setItem(durKey, String(Math.max(500, Date.now() - tB))); } catch (e) {}
         window._bgUserBuiltOnce = true;
         window._bgLastBuiltDepthKey = (typeof mediaLayers !== 'undefined' && mediaLayers[0]?.textures?.depth?.uuid) || null;
         hideBuildOverlay();
@@ -5735,6 +5772,25 @@ function exportDebugContactSheet() {
         const postProcessQuad = postProcessScene.children[0];
         if (!postProcessQuad) { alert('Post-process quad not ready'); return; }
 
+        // If a pipeline debug view (or inpainting-off) has SUPPRESSED the
+        // baked/plane meshes, restore the composed state before the sheet
+        // refreshes its buffers — otherwise the depth/gap passes see no
+        // geometry and every panel reads degenerate (all-hole/all-invalid).
+        // The per-frame suppression re-applies on the next render() if the
+        // UI still warrants it.
+        {
+            const un = (m) => { if (m && m.userData && m.userData._preDbgVis !== undefined) { m.visible = m.userData._preDbgVis; delete m.userData._preDbgVis; } };
+            if (typeof bgLayerMesh !== 'undefined') un(bgLayerMesh);
+            if (typeof mpiMidMesh !== 'undefined') un(mpiMidMesh);
+            if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) un(m);
+            if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) un(m);
+            if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr) un(Lr.mesh);
+            for (const Lx of mediaLayers) if (Lx.mesh && Lx.mesh.userData._preDbgVisSrc !== undefined) {
+                Lx.mesh.visible = Lx.mesh.userData._preDbgVisSrc;
+                delete Lx.mesh.userData._preDbgVisSrc;
+            }
+        }
+
         // --- Refresh the buffers for the CURRENT pose ---
         renderNormalizedDepthPass();
         const thr = parseFloat(document.getElementById('fgSubThresholdSlider')?.value || '0.05');
@@ -7131,6 +7187,81 @@ function applyLiveBake(L) {
             }
             if (clamped || nans || snapped) console.log('[RUNG-A] bake regularized: ' + clamped + 'px plateau-restored, ' + snapped + 'px skin-binarized, ' + nans + 'px NaN');
         }
+        // STROKE DEPTH REPAIR (A34): thin dark line art (occluder outlines,
+        // staffs, small silhouettes) routinely lands at BACKGROUND depth in
+        // estimated maps — under parallax the strokes detach from their
+        // occluder and stick to the background, and no bake-side colour fix
+        // can help because every mesh (v1 partition, v2 bins) renders them
+        // at the depth they carry. Repair at the root: a STROKE texel — a
+        // strong local luma minimum with brighter content on BOTH sides
+        // across its width (the two-sided gate keeps dark-region rims out)
+        // — that touches decisively NEARER non-stroke content adopts that
+        // depth, and the adoption propagates along the connected stroke
+        // (staff -> hand, outline -> figure). Strokes with no near evidence
+        // anywhere along their run are left untouched.
+        {
+            const N = w * h;
+            const lum = new Float32Array(N);
+            for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
+            const stroke = new Uint8Array(N);
+            let nStroke = 0;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                const i = y*w+x, lc = lum[i];
+                if (lc > 0.30) continue;   // true ink, not painterly darks
+                let bxL = 0, bxR = 0, byU = 0, byD = 0;
+                for (let o = 2; o <= 4; o++) {
+                    if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
+                    if (x+o < w)  { const v = lum[i+o];   if (v > bxR) bxR = v; }
+                    if (y-o >= 0) { const v = lum[i-o*w]; if (v > byU) byU = v; }
+                    if (y+o < h)  { const v = lum[i+o*w]; if (v > byD) byD = v; }
+                }
+                // ASYMMETRIC gate: some contrast on BOTH sides (keeps
+                // dark-region rims out — their interior side is flat) and
+                // strong contrast on AT LEAST one (the stroke is real).
+                const thinX = (Math.min(bxL, bxR) - lc > 0.08) && (Math.max(bxL, bxR) - lc > 0.25);
+                const thinY = (Math.min(byU, byD) - lc > 0.08) && (Math.max(byU, byD) - lc > 0.25);
+                if (thinX || thinY) { stroke[i] = 1; nStroke++; }
+            }
+            if (nStroke) {
+                const GAP = 0.05;
+                const D = out.sharpened;
+                const adopt = new Float32Array(N);
+                const queue = [];
+                // Seed within r<=3: the depth silhouette rarely touches the
+                // stroke exactly — estimators put the cliff a couple px off.
+                // Propagate within r<=2 so 1-2px classification breaks
+                // (stroke junctions, AA'd corners) don't sever the run.
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = y*w+x; if (!stroke[i]) continue;
+                    let best = 0;
+                    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+                        if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx;
+                        if (!stroke[j] && D[j] > D[i] + GAP && D[j] > best) best = D[j];
+                    }
+                    if (best > 0) { adopt[i] = best; queue.push(i); }
+                }
+                let head = 0;
+                while (head < queue.length) {
+                    const i = queue[head++]; const x = i%w, y = (i/w)|0; const a = adopt[i];
+                    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                        if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx;
+                        if (stroke[j] && a > adopt[j] + 1e-4 && a > D[j] + GAP) { adopt[j] = a; queue.push(j); }
+                    }
+                }
+                if (window._srCapture) window._srDbg = { w, h, stroke: stroke.slice(), adopt: adopt.slice(), D0: D.slice(), lum: lum.slice() };
+                let repaired = 0;
+                for (let i = 0; i < N; i++) if (adopt[i] > 0 && adopt[i] > D[i] + GAP) {
+                    D[i] = adopt[i];
+                    if (L._rawDepth && adopt[i] > L._rawDepth[i]) L._rawDepth[i] = adopt[i];
+                    repaired++;
+                }
+                if (repaired) console.log('[STROKE-REPAIR] ' + repaired + 'px of dark line art re-anchored to occluder depth (' + nStroke + 'px stroke-classified)');
+            }
+        }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
         // (UNPACK colorspace), so a canvas displacementMap arrives ~v^2.2 in
@@ -7877,6 +8008,27 @@ function buildBackgroundLayer() {
                             float s2 = texture2D(tSrcDepth, uv2).r;
                             float b2 = texture2D(tBgDepth, uv2).r;
                             if (s2 - b2 > 0.02) { invalid = true; }
+                        }
+                        // DARK-STROKE REJECTION: thin line art (occluder
+                        // outlines, the staff, small silhouettes) routinely
+                        // lands at BACKGROUND depth in estimated depth maps,
+                        // so no plug-adjacency test can exclude it — the
+                        // stroke itself is "background" as far as depth is
+                        // concerned, and it wallpapers into the wash. A
+                        // stroke is a strong local luma minimum; the wash
+                        // refills from its lighter surroundings.
+                        if (!invalid) {
+                            vec3 cc = texture2D(tColor, vUv).rgb;
+                            float lc = dot(cc, vec3(0.299, 0.587, 0.114));
+                            float lmax = 0.0;
+                            for (int k = 1; k <= 2; k++) {
+                                float o = float(k) * 2.5;
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2( o, 0.0) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(-o, 0.0) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(0.0,  o) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(0.0, -o) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                            }
+                            if (lmax - lc > 0.25) invalid = true;
                         }
                         if (invalid) { gl_FragColor = vec4(0.0); }
                         else { gl_FragColor = vec4(texture2D(tColor, vUv).rgb, 1.0); }
