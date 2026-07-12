@@ -49,6 +49,30 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
 // design statement instead of an artifact.
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+// PER-DEVICE FRONT-CAMERA FOV LUT. On top of the virtual-angle cone above,
+// the fade tracks the head's angular position INSIDE the device camera's
+// frame: the last 10 degrees before the head exits the camera FOV fade to
+// black (hfov/2−10 .. hfov/2 horizontally, vfov/2−10 .. vfov/2
+// vertically). A MacBook's narrow FaceTime camera can never produce a
+// 35-degree virtual offset, but its frame edge is very reachable — the
+// fade must key off the physical envelope, not just the virtual one.
+// Browsers do not expose the camera model, so detection is coarse
+// (platform class); override with window.bgDeviceFovOverride = {hfov,vfov}
+// or localStorage 'bgDeviceFov' = '{"hfov":54,"vfov":32}'.
+let _bgFovProfile = null;
+function bgDeviceFovProfile() {
+    if (window.bgDeviceFovOverride) return window.bgDeviceFovOverride;
+    if (_bgFovProfile) return _bgFovProfile;
+    try { const s = localStorage.getItem('bgDeviceFov'); if (s) { _bgFovProfile = JSON.parse(s); return _bgFovProfile; } } catch (e) {}
+    const ua = navigator.userAgent || '';
+    const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    if (isIPad)                    _bgFovProfile = { key: 'ipad',    hfov: 105, vfov: 80 }; // Center Stage ultrawide (~122 deg diagonal)
+    else if (/iPhone/.test(ua))    _bgFovProfile = { key: 'iphone',  hfov: 65,  vfov: 50 }; // TrueDepth front module
+    else if (/Macintosh/.test(ua)) _bgFovProfile = { key: 'mac',     hfov: 54,  vfov: 32 }; // FaceTime HD (MacBook/iMac)
+    else                           _bgFovProfile = { key: 'generic', hfov: 60,  vfov: 40 };
+    console.log('[VIEW-FADE] device FOV profile:', JSON.stringify(_bgFovProfile));
+    return _bgFovProfile;
+}
 let _viewFadeEl = null;
 function updateViewFade() {
     if (!canvasElement || !camera) return;
@@ -65,8 +89,53 @@ function updateViewFade() {
     const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
     const off = Math.hypot(camera.position.x, camera.position.y);
     const ang = Math.atan2(off, dist) * 180 / Math.PI;
-    const f = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) / Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    let f = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) / Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    // FACE-FRAME FADE (per-device LUT): the normalized nose position in
+    // the video frame IS the head's angular position inside the camera
+    // FOV (through the tan mapping). Only used while tracking is fresh —
+    // a lost face keeps the last opacity instead of snapping.
+    if (window._lastFaceSeenT && (performance.now() - window._lastFaceSeenT) < 1500 &&
+        typeof latestDetectedFaceX === 'number') {
+        const p = bgDeviceFovProfile();
+        const D2R = Math.PI / 180;
+        const aH = Math.atan(Math.abs(latestDetectedFaceX - 0.5) * 2 * Math.tan(p.hfov * 0.5 * D2R)) / D2R;
+        const aV = Math.atan(Math.abs(latestDetectedFaceY - 0.5) * 2 * Math.tan(p.vfov * 0.5 * D2R)) / D2R;
+        const fH = (aH - (p.hfov * 0.5 - 10)) / 10;
+        const fV = (aV - (p.vfov * 0.5 - 10)) / 10;
+        f = Math.max(f, Math.min(1, Math.max(0, fH)), Math.min(1, Math.max(0, fV)));
+    }
     _viewFadeEl.style.opacity = f > 0.003 ? f.toFixed(3) : '0';
+}
+// LOADING OVERLAY for the synchronous builds (v1 bake / v2 planes). Both
+// block the main thread for seconds, so the overlay is painted FIRST
+// (double-rAF guarantees a frame reaches the screen) and the build starts
+// only after it is visible.
+let _bgBuildOverlayEl = null;
+function showBuildOverlay(msg) {
+    if (!_bgBuildOverlayEl) {
+        _bgBuildOverlayEl = document.createElement('div');
+        _bgBuildOverlayEl.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:200;display:flex;align-items:center;justify-content:center;';
+        _bgBuildOverlayEl.innerHTML = '<div style="background:#1b1f27;color:#e8ecf2;border:1px solid #39404d;border-radius:10px;padding:18px 26px;font:14px system-ui,sans-serif;display:flex;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,0.5);">' +
+            '<div style="width:18px;height:18px;border:3px solid #39404d;border-top-color:#7ab4ff;border-radius:50%;animation:bgspin 0.8s linear infinite;"></div>' +
+            '<span id="bgBuildOverlayMsg"></span></div>' +
+            '<style>@keyframes bgspin{to{transform:rotate(360deg)}}</style>';
+        document.body.appendChild(_bgBuildOverlayEl);
+    }
+    const m = _bgBuildOverlayEl.querySelector('#bgBuildOverlayMsg');
+    if (m) m.textContent = msg;
+    _bgBuildOverlayEl.style.display = 'flex';
+}
+function hideBuildOverlay() { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }
+function buildBackgroundLayerWithOverlay(done) {
+    const v2 = (typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes);
+    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…');
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+        try { buildBackgroundLayer(); } catch (e) { console.error('[BG-BUILD]', e); }
+        window._bgUserBuiltOnce = true;
+        window._bgLastBuiltDepthKey = (typeof mediaLayers !== 'undefined' && mediaLayers[0]?.textures?.depth?.uuid) || null;
+        hideBuildOverlay();
+        if (typeof done === 'function') done();
+    }, 30)));
 }
 let infillAtlasMesh = null;       // The static mesh for the baked atlas
 
@@ -1082,6 +1151,7 @@ async function runFaceMeshCycle() {
         smoothedFaceY_global = faceSmoothingFactor * normalizedY + (1 - faceSmoothingFactor) * smoothedFaceY_global;
         latestDetectedFaceX = smoothedFaceX_global;
         latestDetectedFaceY = smoothedFaceY_global;
+        window._lastFaceSeenT = performance.now();   // freshness gate for the face-frame view fade
         if (transformDiv) transformDiv.textContent = `Face Mesh Detected: ${keypoints.length} landmarks`;
         if (initialBaselinePending && canvasElement) {
           setFaceTrackerBaselineOffset(canvasElement);
@@ -7793,13 +7863,16 @@ function buildBackgroundLayer() {
                         // depth passed through, the layer is simply the source.
                         // v3.9.1 ONE-SIDED SOURCES: a pixel may feed the color
                         // pyramid only if the depth plug replaced NOTHING within
-                        // 2px of it. Dilating the replaced set covers band +
+                        // 4px of it. Dilating the replaced set covers band +
                         // closure + filled lakes identically to whatever the
                         // depth combine consumed; the dilation IS the
                         // silhouette-fringe erosion, from the source side.
+                        // (2px proved too narrow: depth estimators halo, so the
+                        // color silhouette regularly overhangs the depth
+                        // silhouette by 2-3px and FG paint leaked into the wash.)
                         bool invalid = false;
-                        for (int dy = -2; dy <= 2; dy++)
-                        for (int dx = -2; dx <= 2; dx++) {
+                        for (int dy = -4; dy <= 4; dy++)
+                        for (int dx = -4; dx <= 4; dx++) {
                             vec2 uv2 = vUv + vec2(float(dx), float(dy)) * u_texel;
                             float s2 = texture2D(tSrcDepth, uv2).r;
                             float b2 = texture2D(tBgDepth, uv2).r;
@@ -10319,32 +10392,26 @@ function _wireDebugSheetControls() {
     document.getElementById('sdBundleBtn')?.addEventListener('click', exportSDBundle);
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
     const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
-    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', buildBackgroundLayer);
-    // AUTO-BUILD: the layer stack builds itself when media is ready and
-    // whenever the primary layer's depth SOURCE changes (new upload). The
-    // build itself swaps display textures, so the guard records the
-    // post-build identity — no rebuild loop. Button text doubles as the
-    // status indicator (the build is synchronous; the text paints first
-    // because the build is deferred one tick).
-    window.bgAutoBuild = true;
+    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => buildBackgroundLayerWithOverlay());
+    // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
+    // pullpush path) — the plane/bake builds are synchronous and would
+    // freeze the first seconds of every session. Building is explicit:
+    // the button starts it behind a loading overlay. Once the user HAS
+    // built, a new upload auto-REBUILDS (still behind the overlay) so the
+    // stack never goes stale against a swapped image.
+    window.bgAutoBuild = true;          // governs rebuild-on-new-upload only
+    window._bgUserBuiltOnce = false;    // set by the overlay wrapper
     {
-        let lastDepthKey = null, building = false;
-        const btn = document.getElementById('bgLayerBuildBtn');
+        let building = false;
         setInterval(() => {
-            if (!window.bgAutoBuild || building || (typeof isSweeping !== 'undefined' && isSweeping)) return;
+            if (!window.bgAutoBuild || !window._bgUserBuiltOnce || building) return;
+            if (typeof isSweeping !== 'undefined' && isSweeping) return;
             const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
             if (!L0 || !L0.mesh || !L0.textures || !L0.textures.depth) return;
             const key = L0.textures.depth.uuid;
-            if (key === lastDepthKey) return;
+            if (key === window._bgLastBuiltDepthKey) return;
             building = true;
-            const label = btn ? btn.textContent : '';
-            if (btn) btn.textContent = '⏳ building layers…';
-            setTimeout(() => {
-                try { buildBackgroundLayer(); } catch (e) { console.error('[AUTO-BUILD]', e); }
-                lastDepthKey = mediaLayers[0]?.textures?.depth?.uuid || key;
-                if (btn) btn.textContent = label;
-                building = false;
-            }, 60);
+            buildBackgroundLayerWithOverlay(() => { building = false; });
         }, 800);
     }
     document.getElementById('bgColorImport')?.addEventListener('change', (e) => {
@@ -12595,7 +12662,51 @@ function render() {
     
     const postProcessQuad = postProcessScene?.children[0];
     const debugView = document.getElementById('debugViewSelect')?.value || 'final';
-    
+
+    // PIPELINE DEBUG VIEWS INSPECT THE REALTIME PATH. Once a bake/plane
+    // stack exists it blankets every gap, so 'gaps', 'inpaint_only',
+    // 'layer_mask', ... all read empty and the views LOOK broken. While a
+    // non-final view is active — or inpainting is explicitly disabled on
+    // the final view (the "raw parallax" diagnostic) — the baked meshes
+    // are suppressed for the frame and restored when the view returns to
+    // the composed final. Idempotent per frame; remembers prior
+    // visibility so Show BG state survives.
+    {
+        const suppress = (debugView !== 'final') || !useInpainting;
+        const setSup = (m) => {
+            if (!m || !m.userData) return;
+            if (suppress) {
+                if (m.userData._preDbgVis === undefined) m.userData._preDbgVis = m.visible;
+                m.visible = false;
+            } else if (m.userData._preDbgVis !== undefined) {
+                m.visible = m.userData._preDbgVis;
+                delete m.userData._preDbgVis;
+            }
+        };
+        if (typeof bgLayerMesh !== 'undefined') setSup(bgLayerMesh);
+        if (typeof mpiMidMesh !== 'undefined') setSup(mpiMidMesh);
+        if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setSup(m);
+        if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setSup(m);
+        if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr) setSup(Lr.mesh);
+        // v2 planes AND the v1-MPI partition both hide the flat sources
+        // while their meshes render; a pipeline view needs the sources
+        // back (the realtime path reads them).
+        const srcHiddenByStack =
+            (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes && mpiFullMeshes.length) ||
+            (typeof mpiLayers !== 'undefined' && mpiLayers && mpiLayers.length);
+        if (suppress && srcHiddenByStack) {
+            for (const Lx of mediaLayers) if (Lx.mesh && !Lx.mesh.visible) {
+                if (Lx.mesh.userData._preDbgVisSrc === undefined) Lx.mesh.userData._preDbgVisSrc = false;
+                Lx.mesh.visible = true;
+            }
+        } else if (!suppress) {
+            for (const Lx of mediaLayers) if (Lx.mesh && Lx.mesh.userData._preDbgVisSrc !== undefined) {
+                Lx.mesh.visible = Lx.mesh.userData._preDbgVisSrc;
+                delete Lx.mesh.userData._preDbgVisSrc;
+            }
+        }
+    }
+
     // 1. Update Camera and Render Order
     updateCameraAndProjection();
     
