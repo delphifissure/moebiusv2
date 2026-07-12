@@ -7424,7 +7424,7 @@ function applyLiveBake(L) {
                 // adopted stroke — the outline becomes contiguous with its
                 // occluder: one silhouette, one cliff, at the stroke's
                 // OUTER edge.
-                if (repaired) {
+                if (repaired && !window._srNoGC) {
                     let closed = 0;
                     for (let pass = 0; pass < 2; pass++) {
                         const lifts = [];
@@ -7451,6 +7451,132 @@ function applyLiveBake(L) {
                         if (!lifts.length) break;
                     }
                     console.log('[STROKE-REPAIR] ' + repaired + 'px re-anchored, ' + closed + 'px gap-closed onto occluders (' + nStroke + 'px stroke-classified)');
+                }
+                // PHASE 2 (A40): THICK INK. The two-sided gate correctly
+                // refuses wide dark regions, but genuinely thick ink
+                // details (staff ornaments, hooks, knots) fail it too and
+                // stay at background depth — a partial outline copy stuck
+                // to the BG. Same discriminator as A37, one level up: lift
+                // a SMALL dark component iff its contact fraction with
+                // near/adopted content clears 25%. Ornaments touch their
+                // lifted strokes along their join (high contact); far-side
+                // figures by a ridge touch at a point (low); large dark
+                // masses (shadows, rock faces) are excluded by the area
+                // cap before contact is even asked.
+                if (repaired && !window._srNoP2) {
+                    const darkM = new Uint8Array(N);
+                    const p2M = new Uint8Array(N);   // phase-2 lifted texels (continuation seeds ONLY from these)
+                    for (let i = 0; i < N; i++) if (lum[i] < 0.30 && !adoptedM[i]) darkM[i] = 1;
+                    const comp2 = new Uint8Array(N);
+                    const bfs2 = new Int32Array(N);
+                    let lifted2 = 0;
+                    const p2Cand = window._srCapture ? [] : null;
+                    for (let s = 0; s < N; s++) {
+                        if (!darkM[s] || comp2[s]) continue;
+                        let bh = 0, bt = 0; bfs2[bt++] = s; comp2[s] = 1;
+                        const members = [];
+                        let adoptD2 = 0, tooBig = false, dMx2 = 0;
+                        let bx0 = w, bx1 = 0, by0 = h, by1 = 0;
+                        let cx0 = w, cx1 = -1, cy0 = h, cy1 = -1;   // bbox of ink-contact members (adopted OR stroke-classified)
+                        let blobLum = 0, ringLum = 0, ringCnt = 0;
+                        while (bh < bt) {
+                            const i = bfs2[bh++]; members.push(i);
+                            if (members.length > 4000) tooBig = true;
+                            const x = i%w, y = (i/w)|0;
+                            if (x < bx0) bx0 = x; if (x > bx1) bx1 = x;
+                            if (y < by0) by0 = y; if (y > by1) by1 = y;
+                            blobLum += lum[i];
+                            if (D[i] > dMx2) dMx2 = D[i];
+                            if (x > 0    && !darkM[i-1]  && !stroke[i-1])  { ringLum += lum[i-1];  ringCnt++; }
+                            if (x < w-1  && !darkM[i+1]  && !stroke[i+1])  { ringLum += lum[i+1];  ringCnt++; }
+                            if (y > 0    && !darkM[i-w]  && !stroke[i-w])  { ringLum += lum[i-w];  ringCnt++; }
+                            if (y < h-1  && !darkM[i+w]  && !stroke[i+w])  { ringLum += lum[i+w];  ringCnt++; }
+                            let touchesInk = false;
+                            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                                if (!dx && !dy) continue;
+                                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                                const j = yy*w+xx;
+                                if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && darkM[j] && !comp2[j]) { comp2[j] = 1; bfs2[bt++] = j; }
+                                if (adoptedM[j]) { touchesInk = true; if (D[j] > adoptD2) adoptD2 = D[j]; }
+                                else if (stroke[j]) touchesInk = true;   // span evidence: classified ink counts (a blob orphans its own continuation)
+                            }
+                            if (touchesInk) {
+                                if (x < cx0) cx0 = x; if (x > cx1) cx1 = x;
+                                if (y < cy0) cy0 = y; if (y > cy1) cy1 = y;
+                            }
+                        }
+                        if (p2Cand && !tooBig && members.length > 8) {
+                            p2Cand.push({
+                                bbox: [bx0, by0, bx1, by1], n: members.length, adoptD2: +adoptD2.toFixed(3),
+                                contact: [cx0, cy0, cx1, cy1], dMax: +dMx2.toFixed(3),
+                                ring: ringCnt ? +(ringLum / ringCnt - blobLum / members.length).toFixed(3) : -1,
+                            });
+                        }
+                        if (tooBig || !adoptD2 || cx1 < 0) continue;
+                        // WHOLE-BLOB-FAR: stuck ink sits ENTIRELY at background
+                        // depth (that is the defect being repaired). A blob
+                        // whose members already reach the adopt depth straddles
+                        // a silhouette — its far part is BG texture beside the
+                        // ink, and lifting it manufactures a near-depth island
+                        // that protrudes (frazetta, blob at the figure's edge).
+                        if (adoptD2 - dMx2 <= GAP) continue;
+                        // INK sits on a BRIGHTER surround by nature; dark
+                        // patches inside dark painterly regions are texture,
+                        // not ink, and lifting them protrudes (frazetta).
+                        if (!ringCnt || (ringLum / ringCnt - blobLum / members.length) < 0.15) continue;
+                        // THROUGH-TEST: the ink must run through the blob
+                        // (staff through ornament), not merely brush one edge
+                        // (outline beside a footprint) — the contact bbox must
+                        // reach BOTH extremes of the blob on some axis.
+                        const spanOK = (cy0 <= by0 + 2 && cy1 >= by1 - 2) ||
+                                       (cx0 <= bx0 + 2 && cx1 >= bx1 - 2);
+                        if (!spanOK) continue;
+                        for (const i of members) {
+                            if (adoptD2 > D[i] + GAP) {
+                                D[i] = adoptD2;
+                                if (L._rawDepth && adoptD2 > L._rawDepth[i]) L._rawDepth[i] = adoptD2;
+                                adoptedM[i] = 1; p2M[i] = 1;
+                                lifted2++;
+                            }
+                        }
+                    }
+                    if (p2Cand) window._p2Dbg = { w, h, cand: p2Cand };
+                    if (lifted2) console.log('[STROKE-REPAIR] phase 2: ' + lifted2 + 'px of thick ink lifted onto its occluder (through-test)');
+                    // CONTINUATION (A40): a lifted blob re-anchors the ink it
+                    // orphaned (the staff above its ornament). Seeding from
+                    // ADOPTED texels is extending an already-vetted lift
+                    // along connected ink, so the component contact gate
+                    // does not apply here.
+                    if (lifted2 && !window._srNoCont) {
+                        const q3 = [];
+                        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                            const i = y*w+x; if (!stroke[i] || adoptedM[i]) continue;
+                            let best3 = 0;
+                            for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+                                if (!dx && !dy) continue;
+                                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                                const j = yy*w+xx;
+                                if (p2M[j] && D[j] > D[i] + GAP && D[j] > best3) best3 = D[j];
+                            }
+                            if (best3 > 0) { adopt[i] = best3; q3.push(i); }
+                        }
+                        let h3 = 0, cont = 0;
+                        while (h3 < q3.length) {
+                            const i = q3[h3++]; const x = i%w, y = (i/w)|0; const a3 = adopt[i];
+                            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                                if (!dx && !dy) continue;
+                                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                                const j = yy*w+xx;
+                                if (stroke[j] && !adoptedM[j] && a3 > adopt[j] + 1e-4 && a3 > D[j] + GAP) { adopt[j] = a3; q3.push(j); }
+                            }
+                        }
+                        for (const i of q3) if (adopt[i] > D[i] + GAP) {
+                            D[i] = adopt[i];
+                            if (L._rawDepth && adopt[i] > L._rawDepth[i]) L._rawDepth[i] = adopt[i];
+                            adoptedM[i] = 1; cont++;
+                        }
+                        if (cont) console.log('[STROKE-REPAIR] continuation: ' + cont + 'px of orphaned ink re-anchored through lifted blobs');
+                    }
                 }
             }
         }
