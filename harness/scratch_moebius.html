@@ -259,6 +259,8 @@
           <label for="debugViewSelect">Debug View:</label>
           <button type="button" id="debugSheetBtn" style="margin-left:8px; padding:2px 8px;" title="Download one PNG with all pipeline buffers + settings stamp — drag it into the chat">📸 Debug Sheet</button>
           <button type="button" id="sdBundleBtn" style="margin-left:4px; padding:2px 8px;" title="Download a zip for the diffusion pipeline: color, completed depth (plug), inpaint/outpaint/FG masks, metadata">💾 SD Bundle</button>
+          <label><input type="checkbox" id="bgQuickBakeChk"> quick</label>
+          <label><input type="checkbox" id="sdRegionsChk"> sd regions</label>
           <button type="button" id="bgLayerBuildBtn" style="margin-left:4px; padding:2px 8px;" title="Build the source-space background layer: band + plug depth + baked color, rendered behind the image so gaps are pre-filled from any angle">🧱 Build BG Layer</button>
           <label style="margin-left:4px;"><input type="checkbox" id="bgLayerToggle" checked> show BG</label>
           <label style="margin-left:4px;" title="Hide the foreground mesh to inspect the plug surface directly"><input type="checkbox" id="bgSoloToggle"> BG solo</label>
