@@ -7356,43 +7356,47 @@ function applyLiveBake(L) {
                     }
                     if (best > 0) seedD[i] = best;
                 }
-                // CONTACT-FRACTION GATE (A37): a stroke touching nearer
-                // content is AMBIGUOUS — an occluder's outline (lift it) and
-                // a small far figure standing behind a ridge (leave it!) are
-                // locally identical; lifting the latter paints background
-                // content on top of the foreground. The discriminator is the
-                // CONNECTED COMPONENT's contact fraction: an outline HUGS
-                // its occluder (most texels have near content within 3px),
-                // and appendages like a staff are connected to that outline
-                // component, so they ride along; a far figure only touches
-                // the ridge at its feet (contact ~5%) and stays put.
-                const comp = new Int32Array(N);
-                const cSize = [0], cContact = [0];
-                const bfs = new Int32Array(N);
-                let nComp = 0;
-                for (let s = 0; s < N; s++) {
-                    if (!stroke[s] || comp[s]) continue;
-                    nComp++; cSize.push(0); cContact.push(0);
-                    let bh = 0, bt = 0; bfs[bt++] = s; comp[s] = nComp;
-                    while (bh < bt) {
-                        const i = bfs[bh++]; const x = i%w, y = (i/w)|0;
-                        cSize[nComp]++; if (seedD[i] > 0) cContact[nComp]++;
-                        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-                            if (!dx && !dy) continue;
-                            const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
-                            const j = yy*w+xx;
-                            if (stroke[j] && !comp[j]) { comp[j] = nComp; bfs[bt++] = j; }
-                        }
+                // ADJACENCY-CONSTRAINED FLOOD (A41, replaces the A37
+                // component gate): on real drawings ALL ink is one connected
+                // web — outline + interior linework + ground contours — so a
+                // component-global contact fraction is ~3% and the repair
+                // goes blind (2.6k of 78k classified stroke px lifted on the
+                // reference asset; the outline shipped at BG depth and
+                // reappeared as a ghost on the plate). The honest
+                // discriminator is LOCAL: an occluder's outline HUGS its
+                // occluder for its whole run, while a far-side figure
+                // touches a ridge only at one end. Adoption spreads only
+                // while it keeps meeting near content at the adopted depth,
+                // with a 2-hop grace budget past the last hug — EXCEPT along
+                // thin RIBBONS (a staff: bright on BOTH sides at +-2px),
+                // which carry adoption end-to-end like a wire. A wide dark
+                // blob (caravan figure, 5px+) has no ribbon texels and drains
+                // the budget within ~6px of its ridge contact.
+                const M2 = new Float32Array(N);   // max non-stroke depth within r<=2 (the hug field)
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = y*w+x; if (!stroke[i]) continue;
+                    let m = 0;
+                    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                        if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx;
+                        if (!stroke[j] && D[j] > m) m = D[j];
                     }
+                    M2[i] = m;
                 }
-                const compOK = new Uint8Array(nComp + 1);
-                let liftComps = 0;
-                for (let c = 1; c <= nComp; c++) {
-                    if (cSize[c] > 0 && cContact[c] / cSize[c] >= 0.25) { compOK[c] = 1; liftComps++; }
+                const ribbon = new Uint8Array(N);
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = y*w+x; if (!stroke[i]) continue;
+                    const lc = lum[i];
+                    const rx = x-2 >= 0 && x+2 < w && Math.min(lum[i-2], lum[i+2]) - lc > 0.08 && Math.max(lum[i-2], lum[i+2]) - lc > 0.25;
+                    const ry = y-2 >= 0 && y+2 < h && Math.min(lum[i-2*w], lum[i+2*w]) - lc > 0.08 && Math.max(lum[i-2*w], lum[i+2*w]) - lc > 0.25;
+                    if (rx || ry) ribbon[i] = 1;
                 }
+                const HOPS = 2;
+                const budget = new Uint8Array(N);
                 const queue = [];
                 for (let i = 0; i < N; i++) {
-                    if (seedD[i] > 0 && compOK[comp[i]]) { adopt[i] = seedD[i]; queue.push(i); }
+                    if (seedD[i] > 0) { adopt[i] = seedD[i]; budget[i] = HOPS; queue.push(i); }
                 }
                 let head = 0;
                 while (head < queue.length) {
@@ -7401,10 +7405,19 @@ function applyLiveBake(L) {
                         if (!dx && !dy) continue;
                         const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                         const j = yy*w+xx;
-                        if (stroke[j] && a > adopt[j] + 1e-4 && a > D[j] + GAP) { adopt[j] = a; queue.push(j); }
+                        if (!stroke[j] || a <= D[j] + GAP) continue;
+                        const hug = M2[j] >= a - 0.08;
+                        const nb = hug ? HOPS : (ribbon[j] ? budget[i] : budget[i] - 1);
+                        if (nb <= 0) continue;
+                        if (a > adopt[j] + 1e-4 || (a > adopt[j] - 1e-4 && nb > budget[j])) {
+                            adopt[j] = a; budget[j] = nb; queue.push(j);
+                        }
                     }
                 }
                 if (window._srCapture) window._srDbg = { w, h, stroke: stroke.slice(), adopt: adopt.slice(), D0: D.slice(), lum: lum.slice() };
+                // the plate build consumes this: ink near removed content is
+                // scrubbed from the world-without-FG (colour AND depth)
+                L._strokeMask = stroke; L._strokeMaskW = w; L._strokeMaskH = h;
                 let repaired = 0;
                 const adoptedM = new Uint8Array(N);
                 for (let i = 0; i < N; i++) if (adopt[i] > 0 && adopt[i] > D[i] + GAP) {
@@ -9698,6 +9711,54 @@ function buildBackgroundLayer() {
                         if (plugDepth[i] > cap) { plugDepth[i] = cap; if (cap === depth[i]) nCeil++; else nFloorCap++; }
                     }
                     if (nCeil + nFloorCap) console.log('[RUNG-PLUG] plate ceiling: ' + nCeil + 'px at source, ' + nFloorCap + 'px defaulted to the local floor (no membrane anchor)');
+                    // A41 CONE CLAMP (third tier, underMask only — the band's
+                    // verified rim values stay untouched): the src-depth cap
+                    // still admits any value up to the OCCLUDER's own depth,
+                    // so diffusion/membrane residue keeps a shape-following
+                    // near-depth ghost under wide occluders ("depth stretching
+                    // into the foreground" in occluded areas). Contract fix:
+                    // the plate under removed content may never stand above
+                    // the CONE ENVELOPE of the surrounding real world —
+                    // min over non-removed texels of (depth + s*dist), exact
+                    // two-pass chamfer. Reveals happen within the parallax
+                    // budget of a silhouette, where the cone is tight
+                    // (rim + s*dist); deep interiors flatten toward the far
+                    // surround instead of echoing the occluder's shape.
+                    {
+                        // slope tuned at 851px width (quick-bake contract);
+                        // scale by resolution so the envelope is the same
+                        // physical shape on any asset
+                        const sCone = 0.0025 * 851 / pw, sd = sCone, sdg = sCone * 1.41421356;
+                        const INF = 1e9;
+                        const env = new Float32Array(PN);
+                        for (let i = 0; i < PN; i++) env[i] = (band[i] || underMask[i]) ? INF : depth[i];
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                            const i = y*pw+x; let v = env[i];
+                            if (x > 0 && env[i-1] + sd < v) v = env[i-1] + sd;
+                            if (y > 0) {
+                                if (env[i-pw] + sd < v) v = env[i-pw] + sd;
+                                if (x > 0 && env[i-pw-1] + sdg < v) v = env[i-pw-1] + sdg;
+                                if (x < pw-1 && env[i-pw+1] + sdg < v) v = env[i-pw+1] + sdg;
+                            }
+                            env[i] = v;
+                        }
+                        for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                            const i = y*pw+x; let v = env[i];
+                            if (x < pw-1 && env[i+1] + sd < v) v = env[i+1] + sd;
+                            if (y < ph-1) {
+                                if (env[i+pw] + sd < v) v = env[i+pw] + sd;
+                                if (x < pw-1 && env[i+pw+1] + sdg < v) v = env[i+pw+1] + sdg;
+                                if (x > 0 && env[i+pw-1] + sdg < v) v = env[i+pw-1] + sdg;
+                            }
+                            env[i] = v;
+                        }
+                        let nCone = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (!underMask[i] || band[i]) continue;
+                            if (env[i] < INF && plugDepth[i] > env[i] + 0.02) { plugDepth[i] = env[i]; nCone++; }
+                        }
+                        if (nCone) console.log('[RUNG-PLUG] cone clamp: ' + nCone + 'px of under-occluder ghost flattened to the reveal envelope');
+                    }
                 }
                     }
                 }
@@ -10354,6 +10415,44 @@ function buildBackgroundLayer() {
                     const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
                     const fillRGB = new Float32Array(PN * 3);
                     for (let i = 0; i < PN; i++) { fillRGB[i*3]=cpx[i*4]; fillRGB[i*3+1]=cpx[i*4+1]; fillRGB[i*3+2]=cpx[i*4+2]; }
+                    // A41 INK SCRUB: stroke ink that belongs to REMOVED content —
+                    // the occluder's outline, classified by the stroke repair and
+                    // sitting within a few px of the removed set — must not
+                    // survive in the plate. The world-without-FG has no outline
+                    // where the figure was; a surviving copy reappears ON the
+                    // background the moment the FG parallaxes away (the "double
+                    // outline"). Colour-only: recolour from the ink-free
+                    // pull-push base; the FG mesh keeps drawing the real ink.
+                    // BG-interior ink far from any occluder is genuine plate
+                    // content and stays.
+                    if (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
+                        const sm = L._strokeMask;
+                        let rem = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) rem[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
+                        for (let p = 0; p < 4; p++) {
+                            const nr = rem.slice();
+                            for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                if (!rem[i] && (rem[i-1] || rem[i+1] || rem[i-pw] || rem[i+pw])) nr[i] = 1; }
+                            rem = nr;
+                        }
+                        let ink = new Uint8Array(PN);
+                        for (let i = 0; i < PN; i++) if (sm[i]) ink[i] = 1;
+                        { // dark anti-aliased fringe rides along (1px, still dark)
+                            const nf = ink.slice();
+                            for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                                if (!ink[i] && (ink[i-1] || ink[i+1] || ink[i-pw] || ink[i+pw]) &&
+                                    (cpx[i*4] + cpx[i*4+1] + cpx[i*4+2]) < 345) nf[i] = 1; }
+                            ink = nf;
+                        }
+                        let inkScrubbed = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (!ink[i] || !rem[i]) continue;
+                            if (band[i] || (underMask && underMask[i])) continue;  // the fill machinery recolours these
+                            fillRGB[i*3] = smoothBase[i*3]; fillRGB[i*3+1] = smoothBase[i*3+1]; fillRGB[i*3+2] = smoothBase[i*3+2];
+                            inkScrubbed++;
+                        }
+                        if (inkScrubbed) console.log('[RUNG-PLUG] ink scrub: ' + inkScrubbed + 'px outline ink recoloured out of the plate');
+                    }
                     // DIRECTIONAL BACKGROUND EXTENSION: for each hole, march to the nearest
                     // far-side background rim, then REFLECT the real background across the rim
                     // into the hole — copies actual sky/desert texture (stars, stroke), never
