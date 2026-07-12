@@ -43,6 +43,31 @@ let isSweeping = false;           // Master lock for automated sweeps
 // your head. Double-click resets. Harness: window.setViewOffset(dx, dy).
 let manualCamDX = 0, manualCamDY = 0;
 let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
+// SUPPORTED VIEW CONE: the layer stack is complete out to a bounded view
+// angle; past it, content genuinely runs out (a flat capture cannot fill
+// all 180 degrees). Rule: full support inside bgViewFadeStartDeg, linear
+// fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
+// design statement instead of an artifact.
+let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+let _viewFadeEl = null;
+function updateViewFade() {
+    if (!canvasElement || !camera) return;
+    if (!_viewFadeEl) {
+        _viewFadeEl = document.createElement('div');
+        _viewFadeEl.style.cssText = 'position:fixed;background:#000;pointer-events:none;opacity:0;z-index:40;transition:none;';
+        document.body.appendChild(_viewFadeEl);
+    }
+    const r = canvasElement.getBoundingClientRect();
+    _viewFadeEl.style.left = r.left + 'px';
+    _viewFadeEl.style.top = r.top + 'px';
+    _viewFadeEl.style.width = r.width + 'px';
+    _viewFadeEl.style.height = r.height + 'px';
+    const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
+    const off = Math.hypot(camera.position.x, camera.position.y);
+    const ang = Math.atan2(off, dist) * 180 / Math.PI;
+    const f = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) / Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    _viewFadeEl.style.opacity = f > 0.003 ? f.toFixed(3) : '0';
+}
 let infillAtlasMesh = null;       // The static mesh for the baked atlas
 
 // Targets (will be initialized in initializeSceneAndRenderer)
@@ -6504,6 +6529,7 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // streaks and the margins keep the JFA glow.
 let bgMPIMode = true;
 let bgMPIFullPlanes = false; // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on
+let bgMPIV2Bins = 10;        // v2 quantile bins (separate from the v1 partition's top-K)
 let mpiFullMeshes = null;    // v2 layer plane meshes
 let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
 let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
@@ -7082,7 +7108,7 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     let NAv = 0;
     for (let i = 0; i < PN; i++) { if (alphaV && !alphaV[i]) continue; histV[Math.max(0, Math.min(255, (dV[i]*255)|0))]++; NAv++; }
     if (!NAv) return null;
-    const KV = Math.max(2, Math.min(bgMPIMaxLayers, 255));
+    const KV = Math.max(2, Math.min(bgMPIV2Bins, 255));
     const cutV = new Float32Array(KV+1); cutV[KV] = 1.0001;
     {
         let acc = 0, kNext = 1;
@@ -7201,6 +7227,20 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 if (yAdd < ph) { accF += rowF[yAdd*pw+x]; accM += rowM[yAdd*pw+x]; }
                 if (ySub >= 0) { accF -= rowF[ySub*pw+x]; accM -= rowM[ySub*pw+x]; }
             }
+        }
+        // EDGE-AWARE clamp: smoothing kills noise, but it must not drag a
+        // texel across an intra-bin depth edge — the figure's legs share a
+        // quantile slice with the dune around them, and unclamped blur
+        // welded them into one sheet that SHEARED the leg into the
+        // background under parallax (user-reported). Half a tear-step of
+        // movement is smoothing; more is a different surface: keep the
+        // texel's own depth there, so the silhouette survives and the
+        // cell-cut separates the surfaces.
+        for (let i = 0; i < PN; i++) {
+            if (!reg[i]) continue;
+            const dEdge = Sf[i] - Ff[i];
+            if (dEdge > fgTearStep*0.5) Sf[i] = Ff[i] + fgTearStep*0.5;
+            else if (dEdge < -fgTearStep*0.5) Sf[i] = Ff[i] - fgTearStep*0.5;
         }
         // quarter-res pull-push completion colours
         const qw = Math.ceil(pw/4), qh = Math.ceil(ph/4), qN = qw*qh;
@@ -10700,6 +10740,7 @@ function updateCameraAndProjection() {
         camera.position.x = faceTrackCamX + gyroCamX + manualCamDX;
         camera.position.y = faceTrackCamY + gyroCamY + manualCamDY;
     }
+    updateViewFade();
 
     camera.updateProjectionMatrix();
     const pbl = new THREE.Vector3(-terrariumWidth/2,-terrariumHeight/2,portalPlaneWorldZ);
