@@ -111,26 +111,63 @@ function updateViewFade() {
 // (double-rAF guarantees a frame reaches the screen) and the build starts
 // only after it is visible.
 let _bgBuildOverlayEl = null;
-function showBuildOverlay(msg) {
+function showBuildOverlay(msg, expectMs) {
     if (!_bgBuildOverlayEl) {
         _bgBuildOverlayEl = document.createElement('div');
         _bgBuildOverlayEl.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:200;display:flex;align-items:center;justify-content:center;';
-        _bgBuildOverlayEl.innerHTML = '<div style="background:#1b1f27;color:#e8ecf2;border:1px solid #39404d;border-radius:10px;padding:18px 26px;font:14px system-ui,sans-serif;display:flex;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,0.5);">' +
-            '<div style="width:18px;height:18px;border:3px solid #39404d;border-top-color:#7ab4ff;border-radius:50%;animation:bgspin 0.8s linear infinite;"></div>' +
-            '<span id="bgBuildOverlayMsg"></span></div>' +
+        _bgBuildOverlayEl.innerHTML = '<div style="background:#1b1f27;color:#e8ecf2;border:1px solid #39404d;border-radius:10px;padding:18px 26px;font:14px system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,0.5);">' +
+            '<div style="display:flex;align-items:center;gap:12px;">' +
+            '<div style="width:18px;height:18px;border:3px solid #39404d;border-top-color:#7ab4ff;border-radius:50%;animation:bgspin 0.8s linear infinite;flex:0 0 auto;"></div>' +
+            '<span id="bgBuildOverlayMsg"></span>' +
+            '<span id="bgBuildPct" style="margin-left:auto;color:#9db8dd;min-width:42px;text-align:right;">0%</span></div>' +
+            '<div style="margin-top:12px;height:6px;width:300px;background:#2a3040;border-radius:3px;overflow:hidden;">' +
+            '<div id="bgBuildBar" style="height:100%;width:100%;background:linear-gradient(90deg,#5a95e6,#7ab4ff);transform-origin:0 50%;transform:scaleX(0);"></div></div></div>' +
             '<style>@keyframes bgspin{to{transform:rotate(360deg)}}</style>';
         document.body.appendChild(_bgBuildOverlayEl);
     }
     const m = _bgBuildOverlayEl.querySelector('#bgBuildOverlayMsg');
     if (m) m.textContent = msg;
     _bgBuildOverlayEl.style.display = 'flex';
+    // PROGRESS: the build is one synchronous block, so a JS-updated number
+    // cannot repaint mid-build. The BAR is a compositor-thread transform
+    // animation calibrated to the LAST MEASURED build duration — it keeps
+    // moving through the freeze. The % text ticks whenever the main thread
+    // yields and snaps to 100 at completion.
+    const bar = _bgBuildOverlayEl.querySelector('#bgBuildBar');
+    const T = Math.max(800, expectMs || 12000);
+    if (bar) {
+        bar.style.transition = 'none';
+        bar.style.transform = 'scaleX(0)';
+        void bar.offsetWidth;   // flush so the transition below starts from 0
+        bar.style.transition = 'transform ' + T + 'ms cubic-bezier(0.25,0.55,0.35,0.95)';
+        bar.style.transform = 'scaleX(0.92)';
+    }
+    const t0 = performance.now();
+    if (window._bgPctIv) clearInterval(window._bgPctIv);
+    window._bgPctIv = setInterval(() => {
+        const el = document.getElementById('bgBuildPct');
+        if (el) el.textContent = Math.min(92, Math.round((performance.now() - t0) / T * 100)) + '%';
+    }, 120);
 }
-function hideBuildOverlay() { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }
+function hideBuildOverlay() {
+    if (window._bgPctIv) { clearInterval(window._bgPctIv); window._bgPctIv = null; }
+    if (!_bgBuildOverlayEl) return;
+    const bar = _bgBuildOverlayEl.querySelector('#bgBuildBar');
+    const pct = _bgBuildOverlayEl.querySelector('#bgBuildPct');
+    if (bar) { bar.style.transition = 'transform 180ms ease-out'; bar.style.transform = 'scaleX(1)'; }
+    if (pct) pct.textContent = '100%';
+    setTimeout(() => { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }, 240);
+}
 function buildBackgroundLayerWithOverlay(done) {
     const v2 = (typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes);
-    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…');
+    const durKey = v2 ? 'bgBuildMs_v2' : 'bgBuildMs_v1';
+    let expect = v2 ? 9000 : 15000;
+    try { const s = parseInt(localStorage.getItem(durKey), 10); if (s > 0) expect = s; } catch (e) {}
+    showBuildOverlay(v2 ? 'Building depth layers…' : 'Baking background…', expect);
     requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+        const tB = Date.now();
         try { buildBackgroundLayer(); } catch (e) { console.error('[BG-BUILD]', e); }
+        try { localStorage.setItem(durKey, String(Math.max(500, Date.now() - tB))); } catch (e) {}
         window._bgUserBuiltOnce = true;
         window._bgLastBuiltDepthKey = (typeof mediaLayers !== 'undefined' && mediaLayers[0]?.textures?.depth?.uuid) || null;
         hideBuildOverlay();
@@ -1283,6 +1320,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // ONLY region where the FG may discard; the trigger is the
         // sampled-vs-interpolated depth mismatch (see unifiedGapLogicGLSL).
         u_useBandCut: { value: false },
+        u_bandCutAll: { value: false },  // A35: stretch net ungated by the band (pre-torn bake: reveals are always backed)
         u_bandMask: { value: null },
         u_bandCutMismatch: { value: 0.01 },
         u_bandCutMaxGrad: { value: 0.04 },
@@ -1322,6 +1360,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform bool u_useUVStretch;   uniform float u_uvStretchThreshold;
         uniform bool u_useGrazingAngle; uniform float u_grazingAngleThreshold;
         uniform bool u_useBandCut;     uniform sampler2D u_bandMask;
+        uniform bool u_bandCutAll;
         uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
         uniform float u_bandCutUvRate;
 
@@ -1355,8 +1394,13 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // only the stretched case, only inside the plug band (where the BG
         // layer is guaranteed opaque) — thin features stay intact at rest,
         // and no naked holes can ever open.
-        if (u_useBandCut && !u_isBackgroundLayer && !isGap) {
-            if (texture2D(u_bandMask, vUv).r > 0.5) {
+        // A35: with u_bandCutAll the net applies to the BACKGROUND plate
+        // too — the plate is a monolithic grid whose own internal cliffs
+        // (far-surface vs far-surface) rubber-band exactly like FG cliffs;
+        // a discarded fragment shows black, which is the honest answer for
+        // content no capture carries (same statement as the view fade).
+        if (u_useBandCut && (!u_isBackgroundLayer || u_bandCutAll) && !isGap) {
+            if (u_bandCutAll || texture2D(u_bandMask, vUv).r > 0.5) {
                 // (a) STRETCH: UV advances far slower per screen px than an
                 // unstretched cell would (the derivative is constant across a
                 // triangle, so this catches the WHOLE rubber band — including
@@ -5735,6 +5779,25 @@ function exportDebugContactSheet() {
         const postProcessQuad = postProcessScene.children[0];
         if (!postProcessQuad) { alert('Post-process quad not ready'); return; }
 
+        // If a pipeline debug view (or inpainting-off) has SUPPRESSED the
+        // baked/plane meshes, restore the composed state before the sheet
+        // refreshes its buffers — otherwise the depth/gap passes see no
+        // geometry and every panel reads degenerate (all-hole/all-invalid).
+        // The per-frame suppression re-applies on the next render() if the
+        // UI still warrants it.
+        {
+            const un = (m) => { if (m && m.userData && m.userData._preDbgVis !== undefined) { m.visible = m.userData._preDbgVis; delete m.userData._preDbgVis; } };
+            if (typeof bgLayerMesh !== 'undefined') un(bgLayerMesh);
+            if (typeof mpiMidMesh !== 'undefined') un(mpiMidMesh);
+            if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) un(m);
+            if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) un(m);
+            if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr) un(Lr.mesh);
+            for (const Lx of mediaLayers) if (Lx.mesh && Lx.mesh.userData._preDbgVisSrc !== undefined) {
+                Lx.mesh.visible = Lx.mesh.userData._preDbgVisSrc;
+                delete Lx.mesh.userData._preDbgVisSrc;
+            }
+        }
+
         // --- Refresh the buffers for the CURRENT pose ---
         renderNormalizedDepthPass();
         const thr = parseFloat(document.getElementById('fgSubThresholdSlider')?.value || '0.05');
@@ -6704,6 +6767,14 @@ let bgBandStep = 0.10;
 //     they only diverge on a rubber-band triangle spanning a cliff. Zero false
 //     positives on ramps/folds; at rest nothing is stretched, so nothing cuts.
 let bgCutFGOnPlug = true;      // master toggle for the band-gated FG cut
+// A35: a cliff-spanning triangle renders content that exists from NO
+// viewpoint — with a full-frame opaque plate behind the FG, cutting it and
+// revealing whatever is there is strictly better than a smear. When true,
+// the tear drops the previously-kept rubber classes too (thin-feature
+// collars, far-mismatch walls). Thin features themselves survive: after
+// stroke repair their interiors are depth-coherent, so only their 1px
+// boundary ring spans a cliff.
+let bgTearAllRubber = true;
 // |sampled - interpolated| depth that counts as mid-stretch. The mismatch
 // peaks at ~cliff/2 mid-stretch and tapers toward the triangle's vertices.
 // Rest-state cliffs are excluded by the gradient gate below, so this can sit
@@ -7114,6 +7185,32 @@ function applyLiveBake(L) {
             for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = 2;
                 for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v < m) m = v; }
                 bmin[y*w+x] = m; } }
+            // COLOUR-GUIDED SIDE CHOICE (A35): a mid-ramp texel carries the
+            // COLOUR of the surface it belongs to. Snapping by depth
+            // proximity alone strands near-coloured texels on the far
+            // plateau — a band of occluder-coloured debris standing on the
+            // background that parallaxes with it (the wide-band analog of
+            // the A34 stroke problem, and the residual red slivers in the
+            // synU reveal). Choose the plateau whose local exemplar colour
+            // the texel matches; fall back to depth proximity when a side
+            // has no exemplars in the window.
+            const snapToNear = (S, i, bmaxI, bminI, dN, dF) => {
+                const x = i % w, y = (i / w) | 0;
+                let nr = 0, ng = 0, nb = 0, nc = 0, fr = 0, fg = 0, fb = 0, fc = 0;
+                for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                    const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                    const j = yy * w + xx, sj = S[j];
+                    if (Math.abs(sj - bmaxI) <= 0.03)      { nr += cpx[j*4]; ng += cpx[j*4+1]; nb += cpx[j*4+2]; nc++; }
+                    else if (Math.abs(sj - bminI) <= 0.03) { fr += cpx[j*4]; fg += cpx[j*4+1]; fb += cpx[j*4+2]; fc++; }
+                }
+                if (nc && fc) {
+                    const cr = cpx[i*4], cg = cpx[i*4+1], cb = cpx[i*4+2];
+                    const dNear = (cr - nr/nc)**2 + (cg - ng/nc)**2 + (cb - nb/nc)**2;
+                    const dFar  = (cr - fr/fc)**2 + (cg - fg/fc)**2 + (cb - fb/fc)**2;
+                    return dNear <= dFar;
+                }
+                return dN < dF;
+            };
             let clamped = 0, nans = 0, snapped = 0;
             for (let i = 0; i < N; i++) {
                 const s = out.sharpened[i];
@@ -7126,10 +7223,120 @@ function applyLiveBake(L) {
                 // depths (mid-gray slabs floating in the reveals) and the tear.
                 if (bmax[i] - bmin[i] > 0.06) {
                     const dN = Math.abs(s - bmax[i]), dF = Math.abs(s - bmin[i]);
-                    if (dN > 0.05 && dF > 0.05) { out.sharpened[i] = (dN < dF) ? bmax[i] : bmin[i]; snapped++; }
+                    if (dN > 0.05 && dF > 0.05) { out.sharpened[i] = snapToNear(out.sharpened, i, bmax[i], bmin[i], dN, dF) ? bmax[i] : bmin[i]; snapped++; }
                 }
             }
             if (clamped || nans || snapped) console.log('[RUNG-A] bake regularized: ' + clamped + 'px plateau-restored, ' + snapped + 'px skin-binarized, ' + nans + 'px NaN');
+            // ITERATIVE RAMP COLLAPSE (A35): one binarization pass over a
+            // ±2px window only fixes ramps ≤ ~5px wide — a mid-ramp texel of
+            // a wider silhouette ramp sees neither plateau and survives as a
+            // TERRACE: a staircase of sub-threshold steps that no
+            // per-triangle cliff test can tear (each triangle spans a third
+            // of the ramp) and that renders as the tunneling streak fields
+            // under parallax. Iterating the same snap lets the plateaus eat
+            // the ramp from both sides — each pass converts the texels
+            // adjacent to a plateau, so the front marches ~2px per pass.
+            for (let pass = 0; pass < 4; pass++) {
+                const S = out.sharpened;
+                for (let y = 0; y < h; y++) { const row = y * w;
+                    for (let x = 0; x < w; x++) { let m = -1;
+                        for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = S[row+xx]; if (v > m) m = v; }
+                        tmpM[row+x] = m; } }
+                for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = -1;
+                    for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v > m) m = v; }
+                    bmax[y*w+x] = m; } }
+                for (let y = 0; y < h; y++) { const row = y * w;
+                    for (let x = 0; x < w; x++) { let m = 2;
+                        for (let k = -r2; k <= r2; k++) { const xx = Math.min(w-1, Math.max(0, x+k)); const v = S[row+xx]; if (v < m) m = v; }
+                        tmpM[row+x] = m; } }
+                for (let x = 0; x < w; x++) { for (let y = 0; y < h; y++) { let m = 2;
+                    for (let k = -r2; k <= r2; k++) { const yy = Math.min(h-1, Math.max(0, y+k)); const v = tmpM[yy*w+x]; if (v < m) m = v; }
+                    bmin[y*w+x] = m; } }
+                let snaps = 0;
+                for (let i = 0; i < N; i++) {
+                    if (bmax[i] - bmin[i] <= 0.06) continue;
+                    const s = S[i];
+                    const dN2 = Math.abs(s - bmax[i]), dF2 = Math.abs(s - bmin[i]);
+                    if (dN2 > 0.05 && dF2 > 0.05) { S[i] = snapToNear(S, i, bmax[i], bmin[i], dN2, dF2) ? bmax[i] : bmin[i]; snaps++; }
+                }
+                if (snaps) console.log('[RUNG-A] ramp collapse pass ' + (pass+1) + ': ' + snaps + 'px terraced ramp snapped to plateau');
+                if (!snaps) break;
+            }
+        }
+        // STROKE DEPTH REPAIR (A34): thin dark line art (occluder outlines,
+        // staffs, small silhouettes) routinely lands at BACKGROUND depth in
+        // estimated maps — under parallax the strokes detach from their
+        // occluder and stick to the background, and no bake-side colour fix
+        // can help because every mesh (v1 partition, v2 bins) renders them
+        // at the depth they carry. Repair at the root: a STROKE texel — a
+        // strong local luma minimum with brighter content on BOTH sides
+        // across its width (the two-sided gate keeps dark-region rims out)
+        // — that touches decisively NEARER non-stroke content adopts that
+        // depth, and the adoption propagates along the connected stroke
+        // (staff -> hand, outline -> figure). Strokes with no near evidence
+        // anywhere along their run are left untouched.
+        {
+            const N = w * h;
+            const lum = new Float32Array(N);
+            for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
+            const stroke = new Uint8Array(N);
+            let nStroke = 0;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                const i = y*w+x, lc = lum[i];
+                if (lc > 0.30) continue;   // true ink, not painterly darks
+                let bxL = 0, bxR = 0, byU = 0, byD = 0;
+                for (let o = 2; o <= 4; o++) {
+                    if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
+                    if (x+o < w)  { const v = lum[i+o];   if (v > bxR) bxR = v; }
+                    if (y-o >= 0) { const v = lum[i-o*w]; if (v > byU) byU = v; }
+                    if (y+o < h)  { const v = lum[i+o*w]; if (v > byD) byD = v; }
+                }
+                // ASYMMETRIC gate: some contrast on BOTH sides (keeps
+                // dark-region rims out — their interior side is flat) and
+                // strong contrast on AT LEAST one (the stroke is real).
+                const thinX = (Math.min(bxL, bxR) - lc > 0.08) && (Math.max(bxL, bxR) - lc > 0.25);
+                const thinY = (Math.min(byU, byD) - lc > 0.08) && (Math.max(byU, byD) - lc > 0.25);
+                if (thinX || thinY) { stroke[i] = 1; nStroke++; }
+            }
+            if (nStroke) {
+                const GAP = 0.05;
+                const D = out.sharpened;
+                const adopt = new Float32Array(N);
+                const queue = [];
+                // Seed within r<=3: the depth silhouette rarely touches the
+                // stroke exactly — estimators put the cliff a couple px off.
+                // Propagate within r<=2 so 1-2px classification breaks
+                // (stroke junctions, AA'd corners) don't sever the run.
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = y*w+x; if (!stroke[i]) continue;
+                    let best = 0;
+                    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+                        if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx;
+                        if (!stroke[j] && D[j] > D[i] + GAP && D[j] > best) best = D[j];
+                    }
+                    if (best > 0) { adopt[i] = best; queue.push(i); }
+                }
+                let head = 0;
+                while (head < queue.length) {
+                    const i = queue[head++]; const x = i%w, y = (i/w)|0; const a = adopt[i];
+                    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                        if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx;
+                        if (stroke[j] && a > adopt[j] + 1e-4 && a > D[j] + GAP) { adopt[j] = a; queue.push(j); }
+                    }
+                }
+                if (window._srCapture) window._srDbg = { w, h, stroke: stroke.slice(), adopt: adopt.slice(), D0: D.slice(), lum: lum.slice() };
+                let repaired = 0;
+                for (let i = 0; i < N; i++) if (adopt[i] > 0 && adopt[i] > D[i] + GAP) {
+                    D[i] = adopt[i];
+                    if (L._rawDepth && adopt[i] > L._rawDepth[i]) L._rawDepth[i] = adopt[i];
+                    repaired++;
+                }
+                if (repaired) console.log('[STROKE-REPAIR] ' + repaired + 'px of dark line art re-anchored to occluder depth (' + nStroke + 'px stroke-classified)');
+            }
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
@@ -7877,6 +8084,27 @@ function buildBackgroundLayer() {
                             float s2 = texture2D(tSrcDepth, uv2).r;
                             float b2 = texture2D(tBgDepth, uv2).r;
                             if (s2 - b2 > 0.02) { invalid = true; }
+                        }
+                        // DARK-STROKE REJECTION: thin line art (occluder
+                        // outlines, the staff, small silhouettes) routinely
+                        // lands at BACKGROUND depth in estimated depth maps,
+                        // so no plug-adjacency test can exclude it — the
+                        // stroke itself is "background" as far as depth is
+                        // concerned, and it wallpapers into the wash. A
+                        // stroke is a strong local luma minimum; the wash
+                        // refills from its lighter surroundings.
+                        if (!invalid) {
+                            vec3 cc = texture2D(tColor, vUv).rgb;
+                            float lc = dot(cc, vec3(0.299, 0.587, 0.114));
+                            float lmax = 0.0;
+                            for (int k = 1; k <= 2; k++) {
+                                float o = float(k) * 2.5;
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2( o, 0.0) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(-o, 0.0) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(0.0,  o) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                                lmax = max(lmax, dot(texture2D(tColor, vUv + vec2(0.0, -o) * u_texel).rgb, vec3(0.299, 0.587, 0.114)));
+                            }
+                            if (lmax - lc > 0.25) invalid = true;
                         }
                         if (invalid) { gl_FragColor = vec4(0.0); }
                         else { gl_FragColor = vec4(texture2D(tColor, vUv).rgb, 1.0); }
@@ -9076,10 +9304,16 @@ function buildBackgroundLayer() {
                     if (fu && fu.u_bandMask) {
                         if (fu.u_bandMask.value && fu.u_bandMask.value.dispose) fu.u_bandMask.value.dispose();
                         fu.u_bandMask.value = cutDT;
-                        // With the FG pre-torn there are no rubber triangles to
-                        // cut — the stretch heuristics stay disarmed (they misfire
-                        // at rest on slow-ramp cliffs; see review D1b).
-                        fu.u_useBandCut.value = !!bgCutFGOnPlug && !fgPreTear;
+                        // A35: with the tear now dropping ALL rubber and the
+                        // ramp collapse removing the slow silhouette ramps the
+                        // heuristics used to misfire on (review D1b), the
+                        // per-fragment stretch net re-arms under pre-tear as a
+                        // safety net for whatever geometry survives — UNGATED
+                        // by the band, because in bake mode every reveal is
+                        // backed by the opaque plate. This is the transparency
+                        // filter that catches the residual fine streaks.
+                        fu.u_useBandCut.value = !!bgCutFGOnPlug;
+                        if (fu.u_bandCutAll) fu.u_bandCutAll.value = !!fgPreTear && !!bgTearAllRubber;
                         // Same rationale for the per-fragment gap discards
                         // (u_useDepthGrad was hard-on: `checked || true`). On the
                         // walls the tear deliberately KEEPS (far-mismatch overlaps,
@@ -9262,8 +9496,15 @@ function buildBackgroundLayer() {
                                 droppedHalo++; keep = false;
                             }
                             else if (nRib > 0 || thinVeto) {
-                                // ribbon interior / fallback collar: never torn
-                                if (mx - mn > fgTearStep) keptThin++;
+                                // ribbon interior / fallback collar: kept only when
+                                // rubber is tolerated — a spanning triangle here is
+                                // still a smear (A35: the ribbon interior is depth-
+                                // coherent after stroke repair, so tearing the
+                                // spanning ring cannot destroy the feature).
+                                if (mx - mn > fgTearStep) {
+                                    if (bgTearAllRubber) { droppedHalo++; keep = false; }
+                                    else keptThin++;
+                                }
                             }
                             // SOFT-CLIFF CORE TEAR: sub-threshold ramps the band never
                             // seeded (D3) — the full-frame plate is opaque everywhere,
@@ -9274,6 +9515,7 @@ function buildBackgroundLayer() {
                             else if (mx - mn > fgTearStep) {
                                 if (farMatch) { dropped++; keep = false; }
                                 else if (midOK) { droppedMid++; keep = false; }  // internal overlap: the under-sheet carries the local far side
+                                else if (bgTearAllRubber) { dropped++; keep = false; }  // A35: mismatched reveal beats a smear — the plate is opaque
                                 else keptUnbacked++;   // no sheet holds this cliff's far side: rubber (rare once the under-sheet exists)
                             }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
@@ -10188,9 +10430,24 @@ function buildBackgroundLayer() {
         if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
-        // The clone may inherit an armed band cut from the FG (rebuild case);
-        // the BG never cuts — clear it so no stale texture stays bound.
-        if (mat.uniforms.u_useBandCut) { mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null; }
+        // A35: the plate cuts its own rubber now. Its internal cliffs
+        // (mountain-vs-sky continuing under a reveal) used to smear as the
+        // one mesh exempt from every net; the stretch heuristics discard
+        // those fragments and show black — the honest rendering for
+        // content that exists in no capture. Legacy (non-pre-torn) builds
+        // keep the old behaviour: plate never cuts.
+        if (mat.uniforms.u_useBandCut) {
+            if (typeof bgTearAllRubber !== 'undefined' && bgTearAllRubber && typeof fgPreTear !== 'undefined' && fgPreTear && mat.uniforms.u_bandCutAll) {
+                mat.uniforms.u_useBandCut.value = true;
+                mat.uniforms.u_bandCutAll.value = true;
+                mat.uniforms.u_bandMask.value = null;
+                mat.uniforms.u_bandCutMismatch.value = bgBandCutMismatch;
+                if (mat.uniforms.u_bandCutMaxGrad) mat.uniforms.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
+                if (mat.uniforms.u_bandCutUvRate) mat.uniforms.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w);
+            } else {
+                mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null;
+            }
+        }
         // Tiny push back so the BG never z-fights the FG where their depths match.
         mat.uniforms.displacementBias.value = (mat.uniforms.displacementBias.value || 0) - 0.004;
         bgLayerMesh = new THREE.Mesh(bgExtGeom || L.mesh.geometry, mat);
