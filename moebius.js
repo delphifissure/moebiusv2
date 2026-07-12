@@ -7318,15 +7318,23 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         for (let y = 0; y < ph; y++) { const row = y*pw;
             for (let x = 0; x < pw; x++) if (reg[row+x]) { if (x<bx0)bx0=x; if (x>bx1)bx1=x; if (y<by0)by0=y; if (y>by1)by1=y; } }
         if (bx1 < 0) return;
-        const MXf = Math.round(pw * 0.5), MYf = Math.round(ph * 0.35);
+        // MARGINS ARE A WORLD-SPACE REQUIREMENT: the pan at the cone edge
+        // is a fixed world distance, so sizing margins as a fraction of
+        // image width under-covers narrow (portrait) assets — measured:
+        // frazetta leaked 31-74k hole px at the 45-degree poses where the
+        // wide starwatcher had zero. Margins are now normalized by the
+        // plane's world size (0.10 world for the backdrop = the 45-degree
+        // pan with headroom; 0.05 for frame-cut near content).
+        const MXf = Math.round(0.10 / planeW * pw), MYf = Math.round(0.10 / planeH * ph);
+        const MXn = Math.round(0.05 / planeW * pw), MYn = Math.round(0.05 / planeH * ph);
         // the wide backdrop margin belongs to the PRIMARY scene's farthest
         // bin only — a composited cutout's farthest bin is not a backdrop,
         // and clamp-sampled margins would smear its edge colours outward
         const wantFar = isFarthest && isPrimary;
-        const exL = wantFar ? MXf : (bx0 === 0    ? MXv : 0);
-        const exR = wantFar ? MXf : (bx1 === pw-1 ? MXv : 0);
-        const exT = wantFar ? MYf : (by0 === 0    ? MYv : 0);
-        const exB = wantFar ? MYf : (by1 === ph-1 ? MYv : 0);
+        const exL = wantFar ? MXf : (bx0 === 0    ? MXn : 0);
+        const exR = wantFar ? MXf : (bx1 === pw-1 ? MXn : 0);
+        const exT = wantFar ? MYf : (by0 === 0    ? MYn : 0);
+        const exB = wantFar ? MYf : (by1 === ph-1 ? MYn : 0);
         const bw = bx1-bx0+1, bh = by1-by0+1, BN = bw*bh;
         // textures over the in-frame bbox only (rows flipped:
         // uv v=1 at top, flipY=false data)
@@ -7397,11 +7405,13 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         cTex.minFilter = THREE.LinearFilter; cTex.magFilter = THREE.LinearFilter;
         if ('encoding' in cTex) cTex.encoding = THREE.sRGBEncoding;
         if ('colorSpace' in cTex) cTex.colorSpace = THREE.SRGBColorSpace;
-        // geometry: verts at texel centres over the EXTENDED grid
-        // (margins included); uv relative to the in-frame texture,
-        // running past [0,1] in margins → clamp-to-edge sampling
-        const gx0 = bx0-exL, gy0 = by0-exT;
-        const GW = bw+exL+exR, GH = bh+exT+exB, GN = GW*GH;
+        // geometry: dense verts over the IN-FRAME bbox only; margins are a
+        // separate COARSE SKIRT mesh (8px vertex steps) — margin content is
+        // clamp-sampled edge continuation, flat by construction, so it does
+        // not need per-texel vertices (world-sized margins on portrait
+        // assets would otherwise cost tens of millions of vertices)
+        const gx0 = bx0, gy0 = by0;
+        const GW = bw, GH = bh, GN = GW*GH;
         const pos = new Float32Array(GN*3), uv2 = new Float32Array(GN*2);
         for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) { const vi = y*GW+x;
             const gx = gx0+x, gy = gy0+y;
@@ -7413,7 +7423,6 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         }
         // adaptive index: quadtree blocks where planar+in-region, per-cell elsewhere
         const regB = (x, y) => { const gx = gx0+x, gy = gy0+y;
-            if (!isPrimary && (gx < 0 || gx >= pw || gy < 0 || gy >= ph)) return 0;
             const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
             return reg[cyy*pw+cxx]; };
         const depB = (x, y) => { const gx = gx0+x, gy = gy0+y;
@@ -7449,7 +7458,11 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
             if (!regB(cx2,cy2) || !regB(cx2+1,cy2) || !regB(cx2,cy2+1) || !regB(cx2+1,cy2+1)) continue;
             const z00 = depB(cx2,cy2), z10 = depB(cx2+1,cy2), z01 = depB(cx2,cy2+1), z11 = depB(cx2+1,cy2+1);
             const mn = Math.min(z00,z10,z01,z11), mx = Math.max(z00,z10,z01,z11);
-            if (mx - mn > fgTearStep) continue;   // internal cliff: mesh boundary, next layer shows
+            // internal cliff: mesh boundary, next layer shows — EXCEPT in the
+            // backdrop, which is the back-stop: nothing is behind it, so its
+            // claim-field seams keep their cells (a hidden rubber wall beats
+            // a hole; measured as 7-45px specks in the concave cave)
+            if (!wantFar && mx - mn > fgTearStep) continue;
             const a0 = cy2*GW+cx2;
             idx.push(a0, a0+GW, a0+1,  a0+GW, a0+GW+1, a0+1);
         }
@@ -7466,6 +7479,47 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
         m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
         if (bgMPIV2Export) bgMPIV2Export.push({ tag, k, rank, bw, bh, meanD: meanDV[k0], cT, dT, clm, cTex });
+        // MARGIN SKIRT: a coarse (8px-step) vertex ring covering the world-
+        // sized margins; uv runs past [0,1] so clamp-to-edge sampling paints
+        // the layer's edge continuation (alpha included — where the layer's
+        // edge texel is empty the skirt is invisible). Shares the material.
+        let skirtMesh = null;
+        if (exL || exR || exT || exB) {
+            const SS = 8;
+            const sx0 = bx0 - exL, sy0 = by0 - exT;
+            const SW2 = Math.ceil((bw + exL + exR) / SS) + 1, SH2 = Math.ceil((bh + exT + exB) / SS) + 1;
+            const sPos = new Float32Array(SW2*SH2*3), sUv = new Float32Array(SW2*SH2*2);
+            for (let y = 0; y < SH2; y++) for (let x = 0; x < SW2; x++) { const vi = y*SW2+x;
+                const gx = sx0 + x*SS, gy = sy0 + y*SS;
+                sPos[vi*3]   = ((gx+0.5)/pw - 0.5) * planeW;
+                sPos[vi*3+1] = (0.5 - (gy+0.5)/ph) * planeH;
+                sPos[vi*3+2] = 0;
+                sUv[vi*2]   = (gx - bx0 + 0.5)/bw;
+                sUv[vi*2+1] = 1 - (gy - by0 + 0.5)/bh;
+            }
+            const sIdx2 = [];
+            for (let cy2 = 0; cy2 < SH2-1; cy2++) for (let cx2 = 0; cx2 < SW2-1; cx2++) {
+                // skip cells fully inside the dense in-frame bbox (with two
+                // cells of overlap: the coarse and dense meshes sample depth
+                // at different points, and T-junction slivers at their border
+                // measured as 7-45px specks — the overlap buries them)
+                const gxA = sx0 + cx2*SS, gyA = sy0 + cy2*SS;
+                if (gxA >= bx0 + SS*2 && gxA + SS <= bx1 - SS*2 && gyA >= by0 + SS*2 && gyA + SS <= by1 - SS*2) continue;
+                const a0 = cy2*SW2+cx2;
+                sIdx2.push(a0, a0+SW2, a0+1,  a0+SW2, a0+SW2+1, a0+1);
+            }
+            if (sIdx2.length) {
+                const sg2 = new THREE.BufferGeometry();
+                sg2.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+                sg2.setAttribute('uv', new THREE.BufferAttribute(sUv, 2));
+                sg2.setIndex(new THREE.BufferAttribute(Uint32Array.from(sIdx2), 1));
+                skirtMesh = new THREE.Mesh(sg2, m2);
+                skirtMesh.userData.v2Plane = true;
+                skirtMesh.userData.v2rank = rank;
+                skirtMesh.userData.v2tag = tag;
+                skirtMesh.userData.v2Skirt = true;
+            }
+        }
         const mesh2 = new THREE.Mesh(g2, m2);
         mesh2.userData.v2Plane = true;      // depth pass: counts as scene (FG-class), not completion
         mesh2.userData.v2rank = rank;       // far -> near
@@ -7476,6 +7530,14 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         mesh2.renderOrder = (srcMesh.renderOrder || 0) - 0.45 + rank * 1e-3;
         scene.add(mesh2);
         outMeshes.push(mesh2);
+        if (skirtMesh) {
+            skirtMesh.position.copy(srcMesh.position);
+            skirtMesh.rotation.copy(srcMesh.rotation);
+            skirtMesh.scale.copy(srcMesh.scale);
+            skirtMesh.renderOrder = mesh2.renderOrder - 1e-4;
+            scene.add(skirtMesh);
+            outMeshes.push(skirtMesh);
+        }
         totTris += idx.length/3;
         console.log('[MPI-V2]['+tag+'] layer ' + k + ' @' + meanDV[k0].toFixed(3) + ': vis ' + nVis + 'px claim ' + nClaim + 'px bbox ' + bw + 'x' + bh + ' tris ' + (idx.length/3));
     });
@@ -10786,18 +10848,48 @@ function updateCameraAndProjection() {
         dollyZoomTime += dollyZoomSpeed * 100;
         let distFromSubject = dollyMinDistance + (dollyMaxDistance - dollyMinDistance) * (0.5 * (1 + Math.sin(dollyZoomTime)));
         camera.position.z = subjectFocalPlaneWorldZ + Math.max(0.001, distFromSubject);
-        if (subjectLockActive) {
-            const actualDistToSubj = Math.abs(camera.position.z - subjectFocalPlaneWorldZ);
-            if (subjectLockConstantK > 0.00001 && actualDistToSubj > 0.00001) {
-                camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(actualDistToSubj / subjectLockConstantK));
-            } else { camera.fov = initialFov; }
-        } else {
-            const distToPortal = Math.abs(camera.position.z - portalPlaneWorldZ);
-            if (distToPortal > 0.00001) {
-                camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(terrariumHeight / (2 * distToPortal)));
-            } else { camera.fov = initialFov; }
+        // PORTAL-NATIVE SUBJECT LOCK. The old fov compensation here was dead
+        // code: frameCorners() overwrites projectionMatrix from the eye and
+        // the fixed portal rect every frame, and that projection ALREADY
+        // pins the PORTAL plane exactly — measured 0.000px drift of
+        // portal-plane points across the full dolly sweep at lateral
+        // offsets 0 / 0.1 / 0.2 (the off-axis dolly-zoom invariant), with
+        // behind-portal content breathing 89-214px. So: subject plane at
+        // the portal needs nothing. For a subject plane OFF the portal,
+        // pin it by scaling the content about the eye-axis point on that
+        // plane. With portal at z=P and eye at z=e, a point on plane z=q
+        // projects through the portal with factor t = (e-P)/(e-q), so the
+        // pin requires s = t0/t = d*(e0-P) / (d0*(e-P)), d = e-q. The
+        // scale center must be (eyeX, eyeY, q): only then is the subject
+        // plane pinned for the CURRENT eye, off-axis included. At s=1
+        // (base distance) the transform is identity, so head-tracking
+        // parallax at rest is untouched.
+        if (subjectLockActive && Math.abs(subjectFocalPlaneWorldZ - portalPlaneWorldZ) > 1e-6) {
+            if (!window._dzBase) {
+                const list = [];
+                const add = (m) => { if (m) list.push({ m, sx: m.scale.x, sy: m.scale.y, sz: m.scale.z, px: m.position.x, py: m.position.y, pz: m.position.z }); };
+                if (typeof mediaLayers !== 'undefined') for (const Lx of mediaLayers) add(Lx.mesh);
+                if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) add(m);
+                if (typeof bgLayerMesh !== 'undefined') add(bgLayerMesh);
+                if (typeof mpiMidMesh !== 'undefined') add(mpiMidMesh);
+                if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) add(m);
+                if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) add(Lr.mesh);
+                window._dzBase = { list, e0: camera.position.z };
+            }
+            const P = portalPlaneWorldZ, q = subjectFocalPlaneWorldZ;
+            const e = camera.position.z, e0 = window._dzBase.e0;
+            const d = e - q, d0 = e0 - q;
+            const s = (Math.abs(d) < 1e-4 || Math.abs(e - P) < 1e-4) ? 1
+                    : (d * (e0 - P)) / (d0 * (e - P));
+            const ex = camera.position.x, ey = camera.position.y;
+            for (const b of window._dzBase.list) {
+                b.m.scale.set(b.sx * s, b.sy * s, b.sz * s);
+                b.m.position.set(ex + (b.px - ex) * s, ey + (b.py - ey) * s, q + (b.pz - q) * s);
+            }
         }
-        camera.fov = Math.max(5, Math.min(160, camera.fov));
+    } else if (window._dzBase) {
+        for (const b of window._dzBase.list) { b.m.scale.set(b.sx, b.sy, b.sz); b.m.position.set(b.px, b.py, b.pz); }
+        window._dzBase = null;
     }
 
     // --- 2. Handle Face Tracking & Gyro ---
@@ -10868,7 +10960,7 @@ function updateCameraAndProjection() {
     // --- 3. Update Dynamic Layer Uniforms ---
     for (const layer of mediaLayers) {
         if (layer.mesh && layer.mesh.material.uniforms) {
-            layer.mesh.position.z = portalPlaneWorldZ;
+            if (!window._dzBase) layer.mesh.position.z = portalPlaneWorldZ; // subject lock owns z while dollying
             const uniforms = layer.mesh.material.uniforms;
             uniforms.u_portalPlaneDepthNorm.value = currentNormPortalPlane;
             uniforms.u_worldOuterVolumeDepth.value = outerVolumeDepth;
