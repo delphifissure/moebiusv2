@@ -54,11 +54,16 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     const gd = (yy) => (meta.dHor + (meta.dNear - meta.dHor) * (yy - meta.horizon) / Math.max(1, meta.H - meta.horizon)) / 255;
     let carDev = 0;
     for (const [cxp, cyp] of meta.probe.caravan) carDev = Math.max(carDev, Math.abs(dAt(cxp, cyp) - gd(cyp)));
+    const orn = dAt(meta.probe.ornament[0], meta.probe.ornament[1]);
+    const fpD = dAt(meta.probe.footprint[0], meta.probe.footprint[1]);
+    const fpTruth = gd(meta.probe.footprint[1]);
     return {
       outline: +mean(outlinePts).toFixed(3),
       staff: +mean(staffPts).toFixed(3),
       iso: +mean(isoPts).toFixed(3),
       caravanDev: +carDev.toFixed(3),
+      ornament: +orn.toFixed(3),
+      footDev: +Math.abs(fpD - fpTruth).toFixed(3),
       occD: +occD.toFixed(3), skyD: +skyD.toFixed(3), W, H,
     };
   }, meta);
@@ -68,10 +73,14 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     const okStaff   = Math.abs(res.staff - res.occD) < 0.06;
     const okIso     = res.iso < res.skyD + 0.06;
     const okCaravan = res.caravanDev < 0.06;
+    const okOrn     = Math.abs(res.ornament - res.occD) < 0.06;
+    const okFoot    = res.footDev < 0.06;
     console.log((okOutline?'OK  ':'FAIL'), 'outline adopts occluder depth');
     console.log((okStaff?'OK  ':'FAIL'), 'staff adopts occluder depth (rides the outline component)');
     console.log((okIso?'OK  ':'FAIL'), 'isolated stroke untouched (negative control)');
     console.log((okCaravan?'OK  ':'FAIL'), 'far-side figures by the cliff NOT lifted (caravan case)');
+    console.log((okOrn?'OK  ':'FAIL'), 'thick ornament lifts (staff passes through)');
+    console.log((okFoot?'OK  ':'FAIL'), 'footprint beside outline stays (one-sided brush)');
   }
   await browser.close(); srv.kill();
   process.exit(0);
