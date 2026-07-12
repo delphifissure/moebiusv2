@@ -24,7 +24,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     });
     fs.writeFileSync(name, Buffer.from(d.split(',')[1], 'base64'));
   };
-  await page.evaluate(() => { bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
+  await page.evaluate(() => { bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
   await page.waitForTimeout(600);
   await shot('reb_A.png');
   await page.evaluate(() => { buildBackgroundLayer(); });

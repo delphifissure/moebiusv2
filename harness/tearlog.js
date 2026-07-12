@@ -13,6 +13,6 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate(() => { bgMPIMode = true; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
+  await page.evaluate(() => { bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
   await browser.close(); srv.kill();
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });

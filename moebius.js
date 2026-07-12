@@ -43,6 +43,31 @@ let isSweeping = false;           // Master lock for automated sweeps
 // your head. Double-click resets. Harness: window.setViewOffset(dx, dy).
 let manualCamDX = 0, manualCamDY = 0;
 let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
+// SUPPORTED VIEW CONE: the layer stack is complete out to a bounded view
+// angle; past it, content genuinely runs out (a flat capture cannot fill
+// all 180 degrees). Rule: full support inside bgViewFadeStartDeg, linear
+// fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
+// design statement instead of an artifact.
+let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+let _viewFadeEl = null;
+function updateViewFade() {
+    if (!canvasElement || !camera) return;
+    if (!_viewFadeEl) {
+        _viewFadeEl = document.createElement('div');
+        _viewFadeEl.style.cssText = 'position:fixed;background:#000;pointer-events:none;opacity:0;z-index:40;transition:none;';
+        document.body.appendChild(_viewFadeEl);
+    }
+    const r = canvasElement.getBoundingClientRect();
+    _viewFadeEl.style.left = r.left + 'px';
+    _viewFadeEl.style.top = r.top + 'px';
+    _viewFadeEl.style.width = r.width + 'px';
+    _viewFadeEl.style.height = r.height + 'px';
+    const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
+    const off = Math.hypot(camera.position.x, camera.position.y);
+    const ang = Math.atan2(off, dist) * 180 / Math.PI;
+    const f = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) / Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    _viewFadeEl.style.opacity = f > 0.003 ? f.toFixed(3) : '0';
+}
 let infillAtlasMesh = null;       // The static mesh for the baked atlas
 
 // Targets (will be initialized in initializeSceneAndRenderer)
@@ -6049,11 +6074,51 @@ function exportSDBundle() {
             meta.outpaintMarginPx = [xE.mx, xE.my];
             meta.outpaintSourceRes = [xE.pw, xE.ph];
         }
-        // PER-LAYER completion set (MPI slice 3b) — one color/depth/mask triple
-        // per layer with strip content; SD inpaints each layer with its own
-        // context only, then the results reimport as per-layer textures.
-        const nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
-        if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
+        // PER-LAYER completion set — v2 planes when the full-plane stack is
+        // built (one color/depth/mask triple per plane with claimed content;
+        // filenames round-trip through Import SD Layer Results), else the v1
+        // strip set.
+        let nLayerFiles = 0;
+        if (bgMPIV2Export && bgMPIV2Export.length) {
+            const layersMetaV2 = [];
+            for (const R of bgMPIV2Export) {
+                let nClm = 0; for (let i = 0; i < R.clm.length; i++) nClm += R.clm[i];
+                layersMetaV2.push({ tag: R.tag, bin: R.k, meanDepth: +R.meanD.toFixed(4), size: [R.bw, R.bh], claimTexels: nClm });
+                if (!nClm) continue;
+                const mkV = (fill) => { const cv = document.createElement('canvas'); cv.width = R.bw; cv.height = R.bh;
+                    const cc = cv.getContext('2d'); const id = cc.createImageData(R.bw, R.bh); fill(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+                const BNr = R.bw * R.bh;
+                // texture rows are bottom-first; PNGs are top-first
+                const flip = (y) => (R.bh - 1 - y);
+                files.push({ name: `v2_${R.tag}_bin${R.k}_color.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = (flip(y)*R.bw + x) * 4, o = (y*R.bw + x) * 4;
+                        d[o] = R.cT[s]; d[o+1] = R.cT[s+1]; d[o+2] = R.cT[s+2]; d[o+3] = R.cT[s+3];
+                    } }) });
+                files.push({ name: `v2_${R.tag}_bin${R.k}_depth.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = flip(y)*R.bw + x, o = (y*R.bw + x) * 4;
+                        const v = Math.max(0, Math.min(255, (R.dT[s]*255) | 0));
+                        d[o] = v; d[o+1] = v; d[o+2] = v; d[o+3] = R.cT[s*4+3];
+                    } }) });
+                files.push({ name: `v2_${R.tag}_bin${R.k}_mask_inpaint.png`, bytes: mkV(d => {
+                    for (let y = 0; y < R.bh; y++) for (let x = 0; x < R.bw; x++) {
+                        const s = flip(y)*R.bw + x, o = (y*R.bw + x) * 4;
+                        const v = R.clm[s] ? 255 : 0;
+                        d[o] = v; d[o+1] = v; d[o+2] = v; d[o+3] = 255;
+                    } }) });
+                meta.files[`v2_${R.tag}_bin${R.k}_color.png`] = `v2 plane ${R.tag}/bin${R.k}: visible + coarse completion (alpha = plane extent) — SD context`;
+                meta.files[`v2_${R.tag}_bin${R.k}_depth.png`] = `v2 plane ${R.tag}/bin${R.k}: smoothed plane depth — ControlNet conditioning`;
+                meta.files[`v2_${R.tag}_bin${R.k}_mask_inpaint.png`] = `v2 plane ${R.tag}/bin${R.k}: white = claimed region to regenerate with this plane's context`;
+                nLayerFiles++;
+            }
+            meta.mpiV2Planes = { count: bgMPIV2Export.length, emitted: nLayerFiles, planes: layersMetaV2,
+                note: 'inpaint each plane independently; reimport via Import SD Layer Results (filenames as emitted)' };
+            console.log('[SD-BUNDLE] v2 plane completion set: ' + nLayerFiles + ' planes emitted');
+        } else {
+            nLayerFiles = bgBuildMPILayerFiles(files, meta, _canvasToPngBytes);
+            if (nLayerFiles) console.log('[SD-BUNDLE] per-layer completion set: ' + nLayerFiles + ' layers emitted');
+        }
         files.push({ name: 'meta.json', bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2)) });
 
         renderer.setRenderTarget(null);
@@ -6503,8 +6568,10 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // without the under-sheet, halo tears fall back to rubber-stretch
 // streaks and the margins keep the JFA glow.
 let bgMPIMode = true;
-let bgMPIFullPlanes = false; // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on
+let bgMPIFullPlanes = true;  // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on; v1 remains via the checkbox
+let bgMPIV2Bins = 10;        // v2 quantile bins (separate from the v1 partition's top-K)
 let mpiFullMeshes = null;    // v2 layer plane meshes
+let bgMPIV2Export = null;    // v2 per-plane SD records: {tag,k,rank,bw,bh,meanD,cT,dT,clm,cTex}
 let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
 let bgMPIDecimate = true;  // adaptive quad indexing on flat layer interiors (EPS-bounded, tears kept per-texel)
 let bgMPIMaxLayers = 10;   // top-K components by area; smaller ones join the nearest layer by mean depth
@@ -7082,7 +7149,7 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     let NAv = 0;
     for (let i = 0; i < PN; i++) { if (alphaV && !alphaV[i]) continue; histV[Math.max(0, Math.min(255, (dV[i]*255)|0))]++; NAv++; }
     if (!NAv) return null;
-    const KV = Math.max(2, Math.min(bgMPIMaxLayers, 255));
+    const KV = Math.max(2, Math.min(bgMPIV2Bins, 255));
     const cutV = new Float32Array(KV+1); cutV[KV] = 1.0001;
     {
         let acc = 0, kNext = 1;
@@ -7114,6 +7181,7 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     const gp = srcMesh.geometry.parameters;
     const planeW = gp.width, planeH = gp.height;
     const rankOrderV = Array.from({length: KV}, (_, k) => k).sort((a,b) => meanDV[a]-meanDV[b]); // far -> near
+    const farKV = rankOrderV.length ? rankOrderV[0] + 1 : 1;   // the backdrop bin
     const outMeshes = [];
     const EPSd = 1.5/255, RBLUR = 8;
     let totTris = 0;
@@ -7159,6 +7227,15 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 else { const a2 = u2 >= 0 ? u2 : d2; const dd = Math.abs(y - ((a2/pw)|0));
                     num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
             }
+            // THE BACKDROP IS COMPLETE EVERYWHERE by definition: the primary's
+            // farthest bin claims every non-visible texel unconditionally
+            // (near-horizon rows fail the nearer-by-a-step gate, which left
+            // alpha-0 slivers in its frame margins — the measured left-edge
+            // hole bar at cone-edge poses).
+            if (isPrimary && k === farKV) {
+                reg[i] = 1; Ff[i] = den > 0 ? num / den : meanDV[k0]; nClaim++;
+                continue;
+            }
             if (den <= 0) continue;
             const cont = num / den;
             if (dV[i] - cont > fgTearStep) { reg[i] = 1; Ff[i] = cont; nClaim++; }
@@ -7202,6 +7279,20 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 if (ySub >= 0) { accF -= rowF[ySub*pw+x]; accM -= rowM[ySub*pw+x]; }
             }
         }
+        // EDGE-AWARE clamp: smoothing kills noise, but it must not drag a
+        // texel across an intra-bin depth edge — the figure's legs share a
+        // quantile slice with the dune around them, and unclamped blur
+        // welded them into one sheet that SHEARED the leg into the
+        // background under parallax (user-reported). Half a tear-step of
+        // movement is smoothing; more is a different surface: keep the
+        // texel's own depth there, so the silhouette survives and the
+        // cell-cut separates the surfaces.
+        for (let i = 0; i < PN; i++) {
+            if (!reg[i]) continue;
+            const dEdge = Sf[i] - Ff[i];
+            if (dEdge > fgTearStep*0.5) Sf[i] = Ff[i] + fgTearStep*0.5;
+            else if (dEdge < -fgTearStep*0.5) Sf[i] = Ff[i] - fgTearStep*0.5;
+        }
         // quarter-res pull-push completion colours
         const qw = Math.ceil(pw/4), qh = Math.ceil(ph/4), qN = qw*qh;
         const qpx = new Uint8Array(qN*4), qok = new Uint8Array(qN);
@@ -7227,15 +7318,23 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         for (let y = 0; y < ph; y++) { const row = y*pw;
             for (let x = 0; x < pw; x++) if (reg[row+x]) { if (x<bx0)bx0=x; if (x>bx1)bx1=x; if (y<by0)by0=y; if (y>by1)by1=y; } }
         if (bx1 < 0) return;
-        const MXf = Math.round(pw * 0.5), MYf = Math.round(ph * 0.35);
+        // MARGINS ARE A WORLD-SPACE REQUIREMENT: the pan at the cone edge
+        // is a fixed world distance, so sizing margins as a fraction of
+        // image width under-covers narrow (portrait) assets — measured:
+        // frazetta leaked 31-74k hole px at the 45-degree poses where the
+        // wide starwatcher had zero. Margins are now normalized by the
+        // plane's world size (0.10 world for the backdrop = the 45-degree
+        // pan with headroom; 0.05 for frame-cut near content).
+        const MXf = Math.round(0.10 / planeW * pw), MYf = Math.round(0.10 / planeH * ph);
+        const MXn = Math.round(0.05 / planeW * pw), MYn = Math.round(0.05 / planeH * ph);
         // the wide backdrop margin belongs to the PRIMARY scene's farthest
         // bin only — a composited cutout's farthest bin is not a backdrop,
         // and clamp-sampled margins would smear its edge colours outward
         const wantFar = isFarthest && isPrimary;
-        const exL = wantFar ? MXf : (bx0 === 0    ? MXv : 0);
-        const exR = wantFar ? MXf : (bx1 === pw-1 ? MXv : 0);
-        const exT = wantFar ? MYf : (by0 === 0    ? MYv : 0);
-        const exB = wantFar ? MYf : (by1 === ph-1 ? MYv : 0);
+        const exL = wantFar ? MXf : (bx0 === 0    ? MXn : 0);
+        const exR = wantFar ? MXf : (bx1 === pw-1 ? MXn : 0);
+        const exT = wantFar ? MYf : (by0 === 0    ? MYn : 0);
+        const exB = wantFar ? MYf : (by1 === ph-1 ? MYn : 0);
         const bw = bx1-bx0+1, bh = by1-by0+1, BN = bw*bh;
         // textures over the in-frame bbox only (rows flipped:
         // uv v=1 at top, flipY=false data)
@@ -7249,15 +7348,52 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 if (!reg[i]) { cT[co+3] = 0; continue; }
                 if (isV[i]) { cT[co] = cpxV[i*4]; cT[co+1] = cpxV[i*4+1]; cT[co+2] = cpxV[i*4+2]; cT[co+3] = 255; }
                 else {
-                    // completion: bilinear sample of the quarter-res fill
+                    // completion colour = anchor continuation blended with the
+                    // wash. The isotropic pull-push wash alone averaged the
+                    // whole surround into occluder-shaped grey GHOSTS; the
+                    // layer's own row/column anchors (already found for the
+                    // depth continuation) carry the horizontal banding of
+                    // skies and grounds through the claim. 50/50 with the
+                    // wash softens residual row streaking.
                     const fx = Math.min(qw-1.001, Math.max(0, gx/4 - 0.5)), fy = Math.min(qh-1.001, Math.max(0, gy/4 - 0.5));
                     const x0q = fx|0, y0q = fy|0, tx = fx-x0q, ty = fy-y0q;
                     const i00 = (y0q*qw+x0q)*3, i10 = i00+3, i01 = i00+qw*3, i11 = i01+3;
+                    let aRc = 0, aGc = 0, aBc = 0, aW = 0;
+                    const addAn = (j, w) => { if (j < 0 || w <= 0) return;
+                        aRc += cpxV[j*4]*w; aGc += cpxV[j*4+1]*w; aBc += cpxV[j*4+2]*w; aW += w; };
+                    { const l2 = aL[i], r2 = aR[i], u2 = aU[i], d2 = aD[i];
+                      // ROW-FIRST: rows are same-surface continuation (sky stays
+                      // sky-banded, ground stays ground-banded — the membrane
+                      // lesson); columns drag other bands vertically through the
+                      // claim and only serve as fallback when a row has no anchor.
+                      if (l2 >= 0) addAn(l2, 1/Math.max(1, gx - (l2 % pw)));
+                      if (r2 >= 0) addAn(r2, 1/Math.max(1, (r2 % pw) - gx));
+                      if (aW <= 0) {
+                          if (u2 >= 0) addAn(u2, 1/Math.max(1, gy - ((u2/pw)|0)));
+                          if (d2 >= 0) addAn(d2, 1/Math.max(1, ((d2/pw)|0) - gy));
+                      } }
                     for (let c2 = 0; c2 < 3; c2++) {
-                        cT[co+c2] = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
+                        const wsh = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
+                        cT[co+c2] = aW > 0 ? 0.5*(aRc*(c2===0)+aGc*(c2===1)+aBc*(c2===2))/aW + 0.5*wsh : wsh;
                     }
                     cT[co+3] = 255;
                 }
+            }
+        }
+        // soften anchor-continuation striation (4 Jacobi passes over the
+        // claimed texels; visible texels stay untouched and act as boundary
+        // conditions, so silhouette-adjacent colours pull real content in)
+        const clm = new Uint8Array(BN);
+        for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
+            for (let x = 0; x < bw; x++) { const gx = bx0+x, i = gy*pw+gx;
+                if (reg[i] && !isV[i]) clm[dRow+x] = 1; } }
+        {
+            const idxC = [];
+            for (let y = 1; y < bh-1; y++) for (let x = 1; x < bw-1; x++) { const o = y*bw+x;
+                if (clm[o] && cT[(o-1)*4+3] && cT[(o+1)*4+3] && cT[(o-bw)*4+3] && cT[(o+bw)*4+3]) idxC.push(o); }
+            for (let p = 0; p < 4; p++) {
+                for (const o of idxC) for (let c2 = 0; c2 < 3; c2++)
+                    cT[o*4+c2] = (cT[o*4+c2] + cT[(o-1)*4+c2] + cT[(o+1)*4+c2] + cT[(o-bw)*4+c2] + cT[(o+bw)*4+c2]) / 5;
             }
         }
         const dTex = new THREE.DataTexture(dT, bw, bh, THREE.RedFormat, THREE.FloatType);
@@ -7269,11 +7405,13 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         cTex.minFilter = THREE.LinearFilter; cTex.magFilter = THREE.LinearFilter;
         if ('encoding' in cTex) cTex.encoding = THREE.sRGBEncoding;
         if ('colorSpace' in cTex) cTex.colorSpace = THREE.SRGBColorSpace;
-        // geometry: verts at texel centres over the EXTENDED grid
-        // (margins included); uv relative to the in-frame texture,
-        // running past [0,1] in margins → clamp-to-edge sampling
-        const gx0 = bx0-exL, gy0 = by0-exT;
-        const GW = bw+exL+exR, GH = bh+exT+exB, GN = GW*GH;
+        // geometry: dense verts over the IN-FRAME bbox only; margins are a
+        // separate COARSE SKIRT mesh (8px vertex steps) — margin content is
+        // clamp-sampled edge continuation, flat by construction, so it does
+        // not need per-texel vertices (world-sized margins on portrait
+        // assets would otherwise cost tens of millions of vertices)
+        const gx0 = bx0, gy0 = by0;
+        const GW = bw, GH = bh, GN = GW*GH;
         const pos = new Float32Array(GN*3), uv2 = new Float32Array(GN*2);
         for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) { const vi = y*GW+x;
             const gx = gx0+x, gy = gy0+y;
@@ -7285,7 +7423,6 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         }
         // adaptive index: quadtree blocks where planar+in-region, per-cell elsewhere
         const regB = (x, y) => { const gx = gx0+x, gy = gy0+y;
-            if (!isPrimary && (gx < 0 || gx >= pw || gy < 0 || gy >= ph)) return 0;
             const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
             return reg[cyy*pw+cxx]; };
         const depB = (x, y) => { const gx = gx0+x, gy = gy0+y;
@@ -7321,7 +7458,11 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
             if (!regB(cx2,cy2) || !regB(cx2+1,cy2) || !regB(cx2,cy2+1) || !regB(cx2+1,cy2+1)) continue;
             const z00 = depB(cx2,cy2), z10 = depB(cx2+1,cy2), z01 = depB(cx2,cy2+1), z11 = depB(cx2+1,cy2+1);
             const mn = Math.min(z00,z10,z01,z11), mx = Math.max(z00,z10,z01,z11);
-            if (mx - mn > fgTearStep) continue;   // internal cliff: mesh boundary, next layer shows
+            // internal cliff: mesh boundary, next layer shows — EXCEPT in the
+            // backdrop, which is the back-stop: nothing is behind it, so its
+            // claim-field seams keep their cells (a hidden rubber wall beats
+            // a hole; measured as 7-45px specks in the concave cave)
+            if (!wantFar && mx - mn > fgTearStep) continue;
             const a0 = cy2*GW+cx2;
             idx.push(a0, a0+GW, a0+1,  a0+GW, a0+GW+1, a0+1);
         }
@@ -7337,6 +7478,48 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         m2.uniforms.u_useEdgeMask.value = false;
         if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
         m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
+        if (bgMPIV2Export) bgMPIV2Export.push({ tag, k, rank, bw, bh, meanD: meanDV[k0], cT, dT, clm, cTex });
+        // MARGIN SKIRT: a coarse (8px-step) vertex ring covering the world-
+        // sized margins; uv runs past [0,1] so clamp-to-edge sampling paints
+        // the layer's edge continuation (alpha included — where the layer's
+        // edge texel is empty the skirt is invisible). Shares the material.
+        let skirtMesh = null;
+        if (exL || exR || exT || exB) {
+            const SS = 8;
+            const sx0 = bx0 - exL, sy0 = by0 - exT;
+            const SW2 = Math.ceil((bw + exL + exR) / SS) + 1, SH2 = Math.ceil((bh + exT + exB) / SS) + 1;
+            const sPos = new Float32Array(SW2*SH2*3), sUv = new Float32Array(SW2*SH2*2);
+            for (let y = 0; y < SH2; y++) for (let x = 0; x < SW2; x++) { const vi = y*SW2+x;
+                const gx = sx0 + x*SS, gy = sy0 + y*SS;
+                sPos[vi*3]   = ((gx+0.5)/pw - 0.5) * planeW;
+                sPos[vi*3+1] = (0.5 - (gy+0.5)/ph) * planeH;
+                sPos[vi*3+2] = 0;
+                sUv[vi*2]   = (gx - bx0 + 0.5)/bw;
+                sUv[vi*2+1] = 1 - (gy - by0 + 0.5)/bh;
+            }
+            const sIdx2 = [];
+            for (let cy2 = 0; cy2 < SH2-1; cy2++) for (let cx2 = 0; cx2 < SW2-1; cx2++) {
+                // skip cells fully inside the dense in-frame bbox (with two
+                // cells of overlap: the coarse and dense meshes sample depth
+                // at different points, and T-junction slivers at their border
+                // measured as 7-45px specks — the overlap buries them)
+                const gxA = sx0 + cx2*SS, gyA = sy0 + cy2*SS;
+                if (gxA >= bx0 + SS*2 && gxA + SS <= bx1 - SS*2 && gyA >= by0 + SS*2 && gyA + SS <= by1 - SS*2) continue;
+                const a0 = cy2*SW2+cx2;
+                sIdx2.push(a0, a0+SW2, a0+1,  a0+SW2, a0+SW2+1, a0+1);
+            }
+            if (sIdx2.length) {
+                const sg2 = new THREE.BufferGeometry();
+                sg2.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+                sg2.setAttribute('uv', new THREE.BufferAttribute(sUv, 2));
+                sg2.setIndex(new THREE.BufferAttribute(Uint32Array.from(sIdx2), 1));
+                skirtMesh = new THREE.Mesh(sg2, m2);
+                skirtMesh.userData.v2Plane = true;
+                skirtMesh.userData.v2rank = rank;
+                skirtMesh.userData.v2tag = tag;
+                skirtMesh.userData.v2Skirt = true;
+            }
+        }
         const mesh2 = new THREE.Mesh(g2, m2);
         mesh2.userData.v2Plane = true;      // depth pass: counts as scene (FG-class), not completion
         mesh2.userData.v2rank = rank;       // far -> near
@@ -7347,6 +7530,14 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         mesh2.renderOrder = (srcMesh.renderOrder || 0) - 0.45 + rank * 1e-3;
         scene.add(mesh2);
         outMeshes.push(mesh2);
+        if (skirtMesh) {
+            skirtMesh.position.copy(srcMesh.position);
+            skirtMesh.rotation.copy(srcMesh.rotation);
+            skirtMesh.scale.copy(srcMesh.scale);
+            skirtMesh.renderOrder = mesh2.renderOrder - 1e-4;
+            scene.add(skirtMesh);
+            outMeshes.push(skirtMesh);
+        }
         totTris += idx.length/3;
         console.log('[MPI-V2]['+tag+'] layer ' + k + ' @' + meanDV[k0].toFixed(3) + ': vis ' + nVis + 'px claim ' + nClaim + 'px bbox ' + bw + 'x' + bh + ' tris ' + (idx.length/3));
     });
@@ -8283,6 +8474,7 @@ function buildBackgroundLayer() {
                 // is skipped: this branch replaces it and returns.
                 if (bgMPIFullPlanes) {
                     const tV0 = Date.now();
+                    bgMPIV2Export = [];
                     if (mpiFullMeshes) { for (const m of mpiFullMeshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } mpiFullMeshes = null; }
                     if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
                     if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
@@ -10128,6 +10320,33 @@ function _wireDebugSheetControls() {
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
     const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', buildBackgroundLayer);
+    // AUTO-BUILD: the layer stack builds itself when media is ready and
+    // whenever the primary layer's depth SOURCE changes (new upload). The
+    // build itself swaps display textures, so the guard records the
+    // post-build identity — no rebuild loop. Button text doubles as the
+    // status indicator (the build is synchronous; the text paints first
+    // because the build is deferred one tick).
+    window.bgAutoBuild = true;
+    {
+        let lastDepthKey = null, building = false;
+        const btn = document.getElementById('bgLayerBuildBtn');
+        setInterval(() => {
+            if (!window.bgAutoBuild || building || (typeof isSweeping !== 'undefined' && isSweeping)) return;
+            const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+            if (!L0 || !L0.mesh || !L0.textures || !L0.textures.depth) return;
+            const key = L0.textures.depth.uuid;
+            if (key === lastDepthKey) return;
+            building = true;
+            const label = btn ? btn.textContent : '';
+            if (btn) btn.textContent = '⏳ building layers…';
+            setTimeout(() => {
+                try { buildBackgroundLayer(); } catch (e) { console.error('[AUTO-BUILD]', e); }
+                lastDepthKey = mediaLayers[0]?.textures?.depth?.uuid || key;
+                if (btn) btn.textContent = label;
+                building = false;
+            }, 60);
+        }, 800);
+    }
     document.getElementById('bgColorImport')?.addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
@@ -10629,18 +10848,48 @@ function updateCameraAndProjection() {
         dollyZoomTime += dollyZoomSpeed * 100;
         let distFromSubject = dollyMinDistance + (dollyMaxDistance - dollyMinDistance) * (0.5 * (1 + Math.sin(dollyZoomTime)));
         camera.position.z = subjectFocalPlaneWorldZ + Math.max(0.001, distFromSubject);
-        if (subjectLockActive) {
-            const actualDistToSubj = Math.abs(camera.position.z - subjectFocalPlaneWorldZ);
-            if (subjectLockConstantK > 0.00001 && actualDistToSubj > 0.00001) {
-                camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(actualDistToSubj / subjectLockConstantK));
-            } else { camera.fov = initialFov; }
-        } else {
-            const distToPortal = Math.abs(camera.position.z - portalPlaneWorldZ);
-            if (distToPortal > 0.00001) {
-                camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(terrariumHeight / (2 * distToPortal)));
-            } else { camera.fov = initialFov; }
+        // PORTAL-NATIVE SUBJECT LOCK. The old fov compensation here was dead
+        // code: frameCorners() overwrites projectionMatrix from the eye and
+        // the fixed portal rect every frame, and that projection ALREADY
+        // pins the PORTAL plane exactly — measured 0.000px drift of
+        // portal-plane points across the full dolly sweep at lateral
+        // offsets 0 / 0.1 / 0.2 (the off-axis dolly-zoom invariant), with
+        // behind-portal content breathing 89-214px. So: subject plane at
+        // the portal needs nothing. For a subject plane OFF the portal,
+        // pin it by scaling the content about the eye-axis point on that
+        // plane. With portal at z=P and eye at z=e, a point on plane z=q
+        // projects through the portal with factor t = (e-P)/(e-q), so the
+        // pin requires s = t0/t = d*(e0-P) / (d0*(e-P)), d = e-q. The
+        // scale center must be (eyeX, eyeY, q): only then is the subject
+        // plane pinned for the CURRENT eye, off-axis included. At s=1
+        // (base distance) the transform is identity, so head-tracking
+        // parallax at rest is untouched.
+        if (subjectLockActive && Math.abs(subjectFocalPlaneWorldZ - portalPlaneWorldZ) > 1e-6) {
+            if (!window._dzBase) {
+                const list = [];
+                const add = (m) => { if (m) list.push({ m, sx: m.scale.x, sy: m.scale.y, sz: m.scale.z, px: m.position.x, py: m.position.y, pz: m.position.z }); };
+                if (typeof mediaLayers !== 'undefined') for (const Lx of mediaLayers) add(Lx.mesh);
+                if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) add(m);
+                if (typeof bgLayerMesh !== 'undefined') add(bgLayerMesh);
+                if (typeof mpiMidMesh !== 'undefined') add(mpiMidMesh);
+                if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) add(m);
+                if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) add(Lr.mesh);
+                window._dzBase = { list, e0: camera.position.z };
+            }
+            const P = portalPlaneWorldZ, q = subjectFocalPlaneWorldZ;
+            const e = camera.position.z, e0 = window._dzBase.e0;
+            const d = e - q, d0 = e0 - q;
+            const s = (Math.abs(d) < 1e-4 || Math.abs(e - P) < 1e-4) ? 1
+                    : (d * (e0 - P)) / (d0 * (e - P));
+            const ex = camera.position.x, ey = camera.position.y;
+            for (const b of window._dzBase.list) {
+                b.m.scale.set(b.sx * s, b.sy * s, b.sz * s);
+                b.m.position.set(ex + (b.px - ex) * s, ey + (b.py - ey) * s, q + (b.pz - q) * s);
+            }
         }
-        camera.fov = Math.max(5, Math.min(160, camera.fov));
+    } else if (window._dzBase) {
+        for (const b of window._dzBase.list) { b.m.scale.set(b.sx, b.sy, b.sz); b.m.position.set(b.px, b.py, b.pz); }
+        window._dzBase = null;
     }
 
     // --- 2. Handle Face Tracking & Gyro ---
@@ -10700,6 +10949,7 @@ function updateCameraAndProjection() {
         camera.position.x = faceTrackCamX + gyroCamX + manualCamDX;
         camera.position.y = faceTrackCamY + gyroCamY + manualCamDY;
     }
+    updateViewFade();
 
     camera.updateProjectionMatrix();
     const pbl = new THREE.Vector3(-terrariumWidth/2,-terrariumHeight/2,portalPlaneWorldZ);
@@ -10710,7 +10960,7 @@ function updateCameraAndProjection() {
     // --- 3. Update Dynamic Layer Uniforms ---
     for (const layer of mediaLayers) {
         if (layer.mesh && layer.mesh.material.uniforms) {
-            layer.mesh.position.z = portalPlaneWorldZ;
+            if (!window._dzBase) layer.mesh.position.z = portalPlaneWorldZ; // subject lock owns z while dollying
             const uniforms = layer.mesh.material.uniforms;
             uniforms.u_portalPlaneDepthNorm.value = currentNormPortalPlane;
             uniforms.u_worldOuterVolumeDepth.value = outerVolumeDepth;
@@ -12054,8 +12304,9 @@ async function snapshotAndFill() {
 // conditioning input and stays as the live pipeline established it, so
 // structure (and every verified contract property) is untouched.
 async function importMPILayerPatches() {
+    if (bgMPIV2Export && bgMPIV2Export.length) return importMPIV2PlanePatches();
     if (!bgMPIStripExport || !mpiStripMeshes || !mpiStripMeshes.length) {
-        alert('Build the BG layer first (with MPI strips on) — there are no layer sheets to update.');
+        alert('Build the BG layer first — there are no layer sheets to update.');
         return;
     }
     const input = document.createElement('input');
@@ -12083,6 +12334,56 @@ async function importMPILayerPatches() {
         if (nPx) applied++; else skipped.push(f.name + ' (layer ' + k + ' owns no strip texels)');
     }
     alert('Layer import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+// V2 PLANE REIMPORT: accept any subset of SD-inpainted
+// v2_{tag}_bin{k}_color.png files (filenames as the bundle emitted them)
+// and write each one's pixels into that plane's LIVE colour texture at
+// its claimed texels. Colours only — plane depth was the conditioning
+// input and stays, so structure is untouched.
+async function importMPIV2PlanePatches() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/*'; input.multiple = true;
+    const fileList = await new Promise((resolve) => {
+        input.onchange = (e) => resolve(Array.from(e.target.files || []));
+        input.click();
+    });
+    if (!fileList.length) return;
+    const loadImg = (file) => new Promise((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = (e) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = e.target.result; };
+        rd.onerror = reject; rd.readAsDataURL(file);
+    });
+    let applied = 0; const skipped = [];
+    for (const f of fileList) {
+        const m = /v2_(L\d+)_bin(\d+)_color/i.exec(f.name);
+        if (!m) { skipped.push(f.name + ' (name must contain v2_{tag}_bin{k}_color)'); continue; }
+        const R = bgMPIV2Export.find(r => r.tag === m[1] && r.k === parseInt(m[2], 10));
+        if (!R) { skipped.push(f.name + ' (no such plane in the current build)'); continue; }
+        let img;
+        try { img = await loadImg(f); } catch (e) { skipped.push(f.name + ' (unreadable)'); continue; }
+        const nPx = applyMPIV2PlaneImage(R, img);
+        console.log('[MPI-V2-IMPORT] ' + R.tag + '/bin' + R.k + ': ' + nPx + 'px updated from ' + f.name);
+        if (nPx) applied++; else skipped.push(f.name + ' (plane has no claimed texels)');
+    }
+    alert('v2 plane import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+function applyMPIV2PlaneImage(R, img) {
+    const cv = document.createElement('canvas'); cv.width = R.bw; cv.height = R.bh;
+    const cc = cv.getContext('2d', { willReadFrequently: true });
+    cc.drawImage(img, 0, 0, R.bw, R.bh);
+    const px = cc.getImageData(0, 0, R.bw, R.bh).data;   // top-first
+    let nPx = 0;
+    for (let y = 0; y < R.bh; y++) { const srcRow = y * R.bw, dstRow = (R.bh - 1 - y) * R.bw;  // texture rows bottom-first
+        for (let x = 0; x < R.bw; x++) {
+            const s = (srcRow + x) * 4, d = dstRow + x;
+            if (!R.clm[d]) continue;
+            if (px[s + 3] < 8) continue;   // transparent in the SD output: keep coarse
+            R.cT[d*4] = px[s]; R.cT[d*4+1] = px[s+1]; R.cT[d*4+2] = px[s+2];
+            nPx++;
+        }
+    }
+    if (nPx) R.cTex.needsUpdate = true;
+    return nPx;
 }
 // Write one layer's SD colours into the strip slot textures (colours only;
 // depth stays as conditioned). Accepts any drawable (img or canvas).

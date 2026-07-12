@@ -16,7 +16,7 @@ const PREFIX = process.argv[2] || 'mn', X = parseFloat(process.argv[3]||'0.11'),
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && fgMarkDilationMaterial && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate(() => { bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
+  await page.evaluate(() => { bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
   await page.waitForTimeout(800);
   const dataUrl = await page.evaluate(async ({X,Y}) => {
     isSweeping = true;

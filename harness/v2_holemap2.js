@@ -1,4 +1,3 @@
-// Depth-pass attribution at pose: FG-only vs PLATE-only (with BG included in pass).
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -11,19 +10,14 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 60000 });
   for (let t = 0; t < 60; t++) {
-    const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
+    const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate(() => { bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
-  await page.waitForTimeout(800);
-  const shot = async (mode) => await page.evaluate(async (mode) => {
-    isSweeping = true;
-    window._depthPassIncludeBG = true;
+  const res = await page.evaluate(async () => {
+    bgMPIFullPlanes = true; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    isSweeping = true; camera.position.x = -0.14; camera.position.y = 0.1;
+    await new Promise(r2 => { let n=0; const tick=()=>{ camera.position.x=-0.14; camera.position.y=0.1; n++; n<6?requestAnimationFrame(tick):r2(); }; requestAnimationFrame(tick); });
     if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = true;
-    if (bgLayerMesh) bgLayerMesh.visible = (mode !== 'fg');
-    if (mediaLayers[0].mesh) mediaLayers[0].mesh.visible = (mode !== 'bg');
-    camera.position.x = 0.123; camera.position.y = -0.055;
-    await new Promise(r2 => { let n=0; const tick=()=>{ camera.position.x=0.123; camera.position.y=-0.055; n++; n<4?requestAnimationFrame(tick):r2(); }; requestAnimationFrame(tick); });
     renderNormalizedDepthPass();
     const rt = screenNormalizedDepthTarget, W = rt.width, H = rt.height;
     const tmpRT = new THREE.WebGLRenderTarget(W, H, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat });
@@ -34,23 +28,19 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     const px = new Uint8Array(W*H*4);
     renderer.readRenderTargetPixels(tmpRT, 0, 0, W, H, px);
     renderer.setRenderTarget(null); q.material = prev; tmpRT.dispose();
-    if (bgLayerMesh) bgLayerMesh.visible = true;
-    if (mediaLayers[0].mesh) mediaLayers[0].mesh.visible = true;
-    const c = document.createElement('canvas'); c.width=W; c.height=H;
-    const cx=c.getContext('2d'); const id=cx.createImageData(W,H);
-    for (let yy=0; yy<H; yy++) for (let xx=0; xx<W; xx++) {
-      const s=((H-1-yy)*W+xx)*4, d=(yy*W+xx)*4;
-      if (px[s+3]<128){ id.data[d]=255;id.data[d+1]=0;id.data[d+2]=255; }
-      else { const v=px[s]; id.data[d]=v;id.data[d+1]=v;id.data[d+2]=v; }
-      id.data[d+3]=255;
+    if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = false;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const cc = c.getContext('2d'); const id = cc.createImageData(W, H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const s = ((H-1-y)*W+x)*4, o = (y*W+x)*4;
+      const hole = px[s+3] < 128;
+      id.data[o] = hole ? 255 : (px[s]>>2); id.data[o+1] = hole ? 0 : (px[s]>>2); id.data[o+2] = hole ? 0 : (px[s]>>2); id.data[o+3] = 255;
     }
-    cx.putImageData(id,0,0);
+    cc.putImageData(id, 0, 0);
     return c.toDataURL('image/png');
-  }, mode);
-  for (const m of ['fg','bg']) {
-    const d = await shot(m);
-    fs.writeFileSync('dattrib_'+m+'.png', Buffer.from(d.split(',')[1],'base64'));
-    console.log(m, 'done');
-  }
+  });
+  fs.writeFileSync('vc_holemap.png', Buffer.from(res.split(',')[1], 'base64'));
+  console.log('done');
   await browser.close(); srv.kill();
+  process.exit(0);
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });

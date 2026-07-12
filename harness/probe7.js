@@ -21,7 +21,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
   }
   const res = await page.evaluate(async () => {
     const L = mediaLayers[0];
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const mu = L.mesh.material.uniforms;
     // A) pure depth material into the cache
     const pure = new THREE.ShaderMaterial({

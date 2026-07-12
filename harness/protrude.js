@@ -17,7 +17,7 @@ const X = parseFloat(process.argv[2]||'0.123'), Y = parseFloat(process.argv[3]||
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate(() => { bgMPIMode = true; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
+  await page.evaluate(() => { bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
   await page.waitForTimeout(1500);
   const res = await page.evaluate(async ({X,Y}) => {
     isSweeping = true;

@@ -15,7 +15,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
   const raw = async (mode) => await page.evaluate(async (mode) => {
-    bgMPIMode = mode; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIMode = mode; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     isSweeping = true;
     camera.position.x = 0; camera.position.y = 0;
     await new Promise(r2 => { let n=0; const tick=()=>{ camera.position.x=0; camera.position.y=0; n++; n<4?requestAnimationFrame(tick):r2(); }; requestAnimationFrame(tick); });

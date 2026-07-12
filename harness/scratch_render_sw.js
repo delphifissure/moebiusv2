@@ -31,7 +31,7 @@ const URL = 'http://localhost:8099/scratch_moebius.html';
 
   // directional plug, auto Otsu valid; build the BG layer (runs the plug + fill)
   await page.evaluate(() => {
-    if (typeof bgPlugMode!=='undefined') bgPlugMode='directional';
+    if (typeof bgPlugMode!=='undefined') bgMPIFullPlanes=false; bgPlugMode='directional';
     if (typeof bgValidMode!=='undefined') bgValidMode='auto';
     buildBackgroundLayer();
   });

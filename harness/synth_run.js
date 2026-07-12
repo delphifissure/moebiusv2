@@ -26,7 +26,7 @@ const meta = JSON.parse(fs.readFileSync(`synth/${NAME}_meta.json`, 'utf8'));
   }
   const res = await page.evaluate(async (meta) => {
     window._dbgFillCapture = true;
-    bgMPIMode = true; bgPlugMode='directional'; bgValidMode='auto';
+    bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto';
     const okBuild = buildBackgroundLayer();
     const D = window._dbgFill;
     if (!D) return { err: 'no dbg' };

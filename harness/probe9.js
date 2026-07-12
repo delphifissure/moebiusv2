@@ -16,7 +16,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
   const res = await page.evaluate(async () => {
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const shotDepth = (fgOnly) => {
       isSweeping = true;
       camera.position.x = 0; camera.position.y = 0;

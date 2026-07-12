@@ -17,7 +17,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
   }
   const res = await page.evaluate(async () => {
     window._dbgFillCapture = true;
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const D = window._dbgFill;
     const { pw, ph, plug, srcDepth, thinM, haloM, dispD, rawD } = D;
     const step = fgTearStep;
