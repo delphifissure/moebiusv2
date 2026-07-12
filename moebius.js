@@ -9657,6 +9657,7 @@ function buildBackgroundLayer() {
                     if (sm2.uniforms.u_useBandCut) { sm2.uniforms.u_useBandCut.value = false; sm2.uniforms.u_bandMask.value = null; }
                     sm2.uniforms.displacementBias.value = (sm2.uniforms.displacementBias.value || 0) - 0.0025;
                     const smesh = new THREE.Mesh(sg, sm2);
+                    smesh.userData.slot = s7;   // per-layer SD reimport targets slot textures by this id
                     smesh.position.copy(L.mesh.position);
                     smesh.rotation.copy(L.mesh.rotation);
                     smesh.scale.copy(L.mesh.scale);
@@ -11606,6 +11607,72 @@ async function snapshotAndFill() {
 /**
  * Imports SD inpainted images back into the scene as a patch mesh
  */
+// PER-LAYER SD REIMPORT (MPI slice 3b, return path): accept any subset of
+// SD-inpainted layer{k}_color.png files (filenames as the bundle exported
+// them) and write each one's pixels into the strip slot textures wherever
+// that layer owns the slot. Colours only — the strip DEPTH was the SD
+// conditioning input and stays as the live pipeline established it, so
+// structure (and every verified contract property) is untouched.
+async function importMPILayerPatches() {
+    if (!bgMPIStripExport || !mpiStripMeshes || !mpiStripMeshes.length) {
+        alert('Build the BG layer first (with MPI strips on) — there are no layer sheets to update.');
+        return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = 'image/png,image/*'; input.multiple = true;
+    const fileList = await new Promise((resolve) => {
+        input.onchange = (e) => resolve(Array.from(e.target.files || []));
+        input.click();
+    });
+    if (!fileList.length) return;
+    const sE = bgMPIStripExport, pw = sE.pw, ph = sE.ph, PN = pw * ph;
+    const loadImg = (file) => new Promise((resolve, reject) => {
+        const rd = new FileReader();
+        rd.onload = (e) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = reject; im.src = e.target.result; };
+        rd.onerror = reject; rd.readAsDataURL(file);
+    });
+    let applied = 0, skipped = [];
+    for (const f of fileList) {
+        const m = /layer(\d+)_color/i.exec(f.name);
+        if (!m) { skipped.push(f.name + ' (name must contain layer{k}_color)'); continue; }
+        const k = parseInt(m[1], 10);
+        let img;
+        try { img = await loadImg(f); } catch (e) { skipped.push(f.name + ' (unreadable)'); continue; }
+        const nPx = applyMPILayerImage(k, img);
+        console.log('[MPI-IMPORT] layer ' + k + ': ' + nPx + 'px updated from ' + f.name);
+        if (nPx) applied++; else skipped.push(f.name + ' (layer ' + k + ' owns no strip texels)');
+    }
+    alert('Layer import: ' + applied + ' file(s) applied.' + (skipped.length ? '\nSkipped: ' + skipped.join(', ') : ''));
+}
+// Write one layer's SD colours into the strip slot textures (colours only;
+// depth stays as conditioned). Accepts any drawable (img or canvas).
+function applyMPILayerImage(k, img) {
+    if (!bgMPIStripExport || !mpiStripMeshes) return 0;
+    const sE = bgMPIStripExport, pw = sE.pw, ph = sE.ph;
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph;
+    const cc = cv.getContext('2d', { willReadFrequently: true });
+    cc.drawImage(img, 0, 0, pw, ph);
+    const px = cc.getImageData(0, 0, pw, ph).data;
+    let nPx = 0;
+    for (let s = 0; s < 2; s++) {
+        const mesh = mpiStripMeshes.find(mm => mm.userData.slot === s);
+        if (!mesh) continue;
+        const tex = mesh.material.uniforms.map.value;
+        const td = tex.image.data;   // RGBA, rows flipped vs source
+        for (let y = 0; y < ph; y++) { const src = y * pw, dst = (ph - 1 - y) * pw;
+            for (let x = 0; x < pw; x++) { const i = src + x;
+                if (sE.slotO[s][i] !== k) continue;
+                const si = i * 4, di = (dst + x) * 4;
+                if (px[si + 3] < 8) continue;             // SD output transparent here: keep coarse
+                td[di] = px[si]; td[di+1] = px[si+1]; td[di+2] = px[si+2];
+                sE.slotC[s][i*3] = px[si]; sE.slotC[s][i*3+1] = px[si+1]; sE.slotC[s][i*3+2] = px[si+2];
+                nPx++;
+            }
+        }
+        tex.needsUpdate = true;
+    }
+    return nPx;
+}
 async function importSDInpaintedPatch() {
     console.log("--- Importing SD Inpainted Patch ---");
     
@@ -14310,6 +14377,7 @@ function setupStaticControlListeners() {
         exportAtlasesBtn.addEventListener('click', exportSDPipelineData);
     }
     
+    document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);
