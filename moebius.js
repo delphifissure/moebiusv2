@@ -7406,12 +7406,52 @@ function applyLiveBake(L) {
                 }
                 if (window._srCapture) window._srDbg = { w, h, stroke: stroke.slice(), adopt: adopt.slice(), D0: D.slice(), lum: lum.slice() };
                 let repaired = 0;
+                const adoptedM = new Uint8Array(N);
                 for (let i = 0; i < N; i++) if (adopt[i] > 0 && adopt[i] > D[i] + GAP) {
                     D[i] = adopt[i];
                     if (L._rawDepth && adopt[i] > L._rawDepth[i]) L._rawDepth[i] = adopt[i];
+                    adoptedM[i] = 1;
                     repaired++;
                 }
-                if (repaired) console.log('[STROKE-REPAIR] ' + repaired + 'px of dark line art re-anchored to occluder depth (' + nStroke + 'px stroke-classified)');
+                // GAP CLOSING (A39): the estimator undershoots the colour
+                // silhouette, so a lifted outline usually has a 1-2px FAR
+                // channel between it and its occluder. Left open, the
+                // outline is a fragile 1px near-depth RIDGE: every quad
+                // touching it spans a cliff, the stretch net eats the
+                // stroke's own pixels (the "lost black outlines") and what
+                // survives renders as 1px rubber filaments. Close thin far
+                // channels that are near-on-both-sides AND adjacent to an
+                // adopted stroke — the outline becomes contiguous with its
+                // occluder: one silhouette, one cliff, at the stroke's
+                // OUTER edge.
+                if (repaired) {
+                    let closed = 0;
+                    for (let pass = 0; pass < 2; pass++) {
+                        const lifts = [];
+                        for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                            const i = y*w+x;
+                            const dl = D[i-1], dr = D[i+1], du = D[i-w], dd2 = D[i+w];
+                            let v = 0;
+                            if (dl > D[i] + GAP && dr > D[i] + GAP) v = Math.min(dl, dr);
+                            else if (du > D[i] + GAP && dd2 > D[i] + GAP) v = Math.min(du, dd2);
+                            if (!v) continue;
+                            let nearAdopt = false;
+                            for (let dy = -2; dy <= 2 && !nearAdopt; dy++) for (let dx = -2; dx <= 2; dx++) {
+                                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                                if (adoptedM[yy*w+xx]) { nearAdopt = true; break; }
+                            }
+                            if (nearAdopt) lifts.push(i, v);
+                        }
+                        for (let k = 0; k < lifts.length; k += 2) {
+                            const i = lifts[k], v = lifts[k+1];
+                            D[i] = v; adoptedM[i] = 1;
+                            if (L._rawDepth && v > L._rawDepth[i]) L._rawDepth[i] = v;
+                            closed++;
+                        }
+                        if (!lifts.length) break;
+                    }
+                    console.log('[STROKE-REPAIR] ' + repaired + 'px re-anchored, ' + closed + 'px gap-closed onto occluders (' + nStroke + 'px stroke-classified)');
+                }
             }
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
@@ -8212,15 +8252,6 @@ function buildBackgroundLayer() {
             const dQ = new Float32Array(PNq);
             for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
             const RB = Math.max(8, bgBandMaxGrowPx | 0);
-            const disocc = new Uint8Array(PNq);
-            let nD = 0;
-            for (const r of [Math.max(2, RB >> 2), RB >> 1, RB]) {
-                const nearMax = bgSlide2D(dQ, pw, ph, r, false);
-                const thrQ = Math.max(0.03, (r / RB) * 0.5);
-                for (let i = 0; i < PNq; i++) {
-                    if (!disocc[i] && nearMax[i] - dQ[i] > thrQ) { disocc[i] = 1; nD++; }
-                }
-            }
             // FULL-INTERIOR FAR ENVELOPE (A38). A single radius-RB floor
             // cannot floor content wider than 2*RB — a big occluder's
             // interior is its own floor, so the plate cloned it at NEAR
@@ -8258,6 +8289,14 @@ function buildBackgroundLayer() {
                     if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
                     plateQ[i] = v; } }
             if (window._srCapture) window._qbDbg = { plate: plateQ.slice(), d: dQ.slice(), pw, ph };
+            // SD MASK (A39): the honest "where diffusion will paint" is
+            // exactly where the plate SYNTHESIZES content — wherever the
+            // cone envelope departs the source depth. (The earlier cone
+            // band marked only the physics-minimal reveal ring, so the
+            // highlight rimmed the regions instead of filling them.)
+            const disocc = new Uint8Array(PNq);
+            let nD = 0;
+            for (let i = 0; i < PNq; i++) if (dQ[i] - plateQ[i] > 0.02) { disocc[i] = 1; nD++; }
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
@@ -8321,9 +8360,38 @@ function buildBackgroundLayer() {
             if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; L.mesh.visible = true; }
             if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
             if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
-            // restore the full (untorn) FG index if a prior full bake tore it
-            if (L.mesh.geometry.userData && L.mesh.geometry.userData._fullIndex)
-                L.mesh.geometry.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex, 1));
+            // GEOMETRIC PRE-TEAR (A39): drop every FG triangle spanning a
+            // cliff — the plate backs every reveal, so a hole is always
+            // safe, and geometry cannot leave the 1px rubber filaments the
+            // thresholded fragment net lets through around lifted outlines.
+            {
+                const g = L.mesh.geometry;
+                if (g && g.index) {
+                    if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                    const srcI = g.userData._fullIndex;
+                    const gp = g.parameters || {};
+                    const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1;
+                    if (vw > 1 && vh > 1) {
+                        const outI = new srcI.constructor(srcI.length);
+                        const sxT = (pw - 1) / (vw - 1), syT = (ph - 1) / (vh - 1);
+                        let nI = 0, droppedT = 0;
+                        for (let t = 0; t < srcI.length; t += 3) {
+                            let mn = 2, mx = -1;
+                            for (let k = 0; k < 3; k++) {
+                                const vi = srcI[t + k];
+                                const ti = Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
+                                const dv = dQ[ti];
+                                if (dv < mn) mn = dv;
+                                if (dv > mx) mx = dv;
+                            }
+                            if (mx - mn > fgTearStep) { droppedT++; continue; }
+                            outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
+                        }
+                        g.setIndex(new THREE.BufferAttribute(outI.subarray(0, nI), 1));
+                        console.log('[QUICK-BAKE] FG pre-torn: ' + droppedT + ' cliff triangles dropped of ' + (srcI.length / 3));
+                    }
+                }
+            }
             const matQ = L.mesh.material.clone();
             matQ.uniforms.displacementMap.value = plateDT;
             matQ.uniforms.map.value = bgColorTarget.texture;
