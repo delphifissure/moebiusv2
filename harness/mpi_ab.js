@@ -26,7 +26,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     console.log(name, 'done');
   };
   for (const mode of [false, true]) {
-    await page.evaluate((mode) => { bgMPIMode = mode; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); }, mode);
+    await page.evaluate((mode) => { bgMPIMode = mode; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); }, mode);
     await page.waitForTimeout(800);
     await shot(`mpi2_${mode?'on':'off'}_rest.png`, 0, 0);
     await shot(`mpi2_${mode?'on':'off'}_pose.png`, 0.123, -0.055);

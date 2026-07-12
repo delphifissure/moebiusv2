@@ -17,7 +17,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
   }
   seen.clear();
   await page.evaluate(async () => {
-    bgMPIMode = true; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     await new Promise(r2 => { let n=0; const tick=()=>{ n++; n<12?requestAnimationFrame(tick):r2(); }; requestAnimationFrame(tick); });
   });
   console.log('=== console/pageerror during 12 frames after MPI build ===');

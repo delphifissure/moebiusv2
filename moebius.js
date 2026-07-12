@@ -6528,7 +6528,7 @@ let bgGlowAttach = false;  // opt-in: attach emissive blobs (lamp glow) to their
 // without the under-sheet, halo tears fall back to rubber-stretch
 // streaks and the margins keep the JFA glow.
 let bgMPIMode = true;
-let bgMPIFullPlanes = false; // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on
+let bgMPIFullPlanes = true;  // MPI v2: FULL completed planes (wide-angle path) — replaces the v1 plug/tear pipeline when on; v1 remains via the checkbox
 let bgMPIV2Bins = 10;        // v2 quantile bins (separate from the v1 partition's top-K)
 let mpiFullMeshes = null;    // v2 layer plane meshes
 let bgMPIStrips = true;    // per-layer plates, live (MPI slice 3): pair-validated layer continuations under nearer layers
@@ -7140,6 +7140,7 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     const gp = srcMesh.geometry.parameters;
     const planeW = gp.width, planeH = gp.height;
     const rankOrderV = Array.from({length: KV}, (_, k) => k).sort((a,b) => meanDV[a]-meanDV[b]); // far -> near
+    const farKV = rankOrderV.length ? rankOrderV[0] + 1 : 1;   // the backdrop bin
     const outMeshes = [];
     const EPSd = 1.5/255, RBLUR = 8;
     let totTris = 0;
@@ -7184,6 +7185,15 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                     num += (dV[u2] + (dV[d2]-dV[u2]) * (du/(du+dd2))) / (du+dd2); den += 1/(du+dd2); }
                 else { const a2 = u2 >= 0 ? u2 : d2; const dd = Math.abs(y - ((a2/pw)|0));
                     num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
+            }
+            // THE BACKDROP IS COMPLETE EVERYWHERE by definition: the primary's
+            // farthest bin claims every non-visible texel unconditionally
+            // (near-horizon rows fail the nearer-by-a-step gate, which left
+            // alpha-0 slivers in its frame margins — the measured left-edge
+            // hole bar at cone-edge poses).
+            if (isPrimary && k === farKV) {
+                reg[i] = 1; Ff[i] = den > 0 ? num / den : meanDV[k0]; nClaim++;
+                continue;
             }
             if (den <= 0) continue;
             const cont = num / den;
@@ -7289,15 +7299,52 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 if (!reg[i]) { cT[co+3] = 0; continue; }
                 if (isV[i]) { cT[co] = cpxV[i*4]; cT[co+1] = cpxV[i*4+1]; cT[co+2] = cpxV[i*4+2]; cT[co+3] = 255; }
                 else {
-                    // completion: bilinear sample of the quarter-res fill
+                    // completion colour = anchor continuation blended with the
+                    // wash. The isotropic pull-push wash alone averaged the
+                    // whole surround into occluder-shaped grey GHOSTS; the
+                    // layer's own row/column anchors (already found for the
+                    // depth continuation) carry the horizontal banding of
+                    // skies and grounds through the claim. 50/50 with the
+                    // wash softens residual row streaking.
                     const fx = Math.min(qw-1.001, Math.max(0, gx/4 - 0.5)), fy = Math.min(qh-1.001, Math.max(0, gy/4 - 0.5));
                     const x0q = fx|0, y0q = fy|0, tx = fx-x0q, ty = fy-y0q;
                     const i00 = (y0q*qw+x0q)*3, i10 = i00+3, i01 = i00+qw*3, i11 = i01+3;
+                    let aRc = 0, aGc = 0, aBc = 0, aW = 0;
+                    const addAn = (j, w) => { if (j < 0 || w <= 0) return;
+                        aRc += cpxV[j*4]*w; aGc += cpxV[j*4+1]*w; aBc += cpxV[j*4+2]*w; aW += w; };
+                    { const l2 = aL[i], r2 = aR[i], u2 = aU[i], d2 = aD[i];
+                      // ROW-FIRST: rows are same-surface continuation (sky stays
+                      // sky-banded, ground stays ground-banded — the membrane
+                      // lesson); columns drag other bands vertically through the
+                      // claim and only serve as fallback when a row has no anchor.
+                      if (l2 >= 0) addAn(l2, 1/Math.max(1, gx - (l2 % pw)));
+                      if (r2 >= 0) addAn(r2, 1/Math.max(1, (r2 % pw) - gx));
+                      if (aW <= 0) {
+                          if (u2 >= 0) addAn(u2, 1/Math.max(1, gy - ((u2/pw)|0)));
+                          if (d2 >= 0) addAn(d2, 1/Math.max(1, ((d2/pw)|0) - gy));
+                      } }
                     for (let c2 = 0; c2 < 3; c2++) {
-                        cT[co+c2] = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
+                        const wsh = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
+                        cT[co+c2] = aW > 0 ? 0.5*(aRc*(c2===0)+aGc*(c2===1)+aBc*(c2===2))/aW + 0.5*wsh : wsh;
                     }
                     cT[co+3] = 255;
                 }
+            }
+        }
+        // soften anchor-continuation striation (4 Jacobi passes over the
+        // claimed texels; visible texels stay untouched and act as boundary
+        // conditions, so silhouette-adjacent colours pull real content in)
+        {
+            const clm = new Uint8Array(BN);
+            for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
+                for (let x = 0; x < bw; x++) { const gx = bx0+x, i = gy*pw+gx;
+                    if (reg[i] && !isV[i]) clm[dRow+x] = 1; } }
+            const idxC = [];
+            for (let y = 1; y < bh-1; y++) for (let x = 1; x < bw-1; x++) { const o = y*bw+x;
+                if (clm[o] && cT[(o-1)*4+3] && cT[(o+1)*4+3] && cT[(o-bw)*4+3] && cT[(o+bw)*4+3]) idxC.push(o); }
+            for (let p = 0; p < 4; p++) {
+                for (const o of idxC) for (let c2 = 0; c2 < 3; c2++)
+                    cT[o*4+c2] = (cT[o*4+c2] + cT[(o-1)*4+c2] + cT[(o+1)*4+c2] + cT[(o-bw)*4+c2] + cT[(o+bw)*4+c2]) / 5;
             }
         }
         const dTex = new THREE.DataTexture(dT, bw, bh, THREE.RedFormat, THREE.FloatType);

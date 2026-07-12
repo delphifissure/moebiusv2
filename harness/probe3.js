@@ -40,7 +40,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     };
     const L = mediaLayers[0];
     // (a) current build
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     out.a_current = holeCount();
     // (b) untorn mesh: restore full index, no re-tear
     fgPreTear = false;

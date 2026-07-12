@@ -16,7 +16,7 @@ const DEC = process.argv[2] === 'on';
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate((dec) => { bgMPIDecimate = dec; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); }, DEC);
+  await page.evaluate((dec) => { bgMPIDecimate = dec; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); }, DEC);
   await page.waitForTimeout(600);
   const shot = async (name, X, Y) => {
     const d = await page.evaluate(async ({X,Y}) => {

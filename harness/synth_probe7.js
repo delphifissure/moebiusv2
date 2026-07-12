@@ -19,7 +19,7 @@ const NAME = process.argv[2];
   }
   const res = await page.evaluate(async () => {
     window._dbgFillCapture = true;
-    bgMPIMode = true; bgPlugMode='directional'; bgValidMode='auto';
+    bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto';
     buildBackgroundLayer();
     const D = window._dbgFill;
     const { pw, ph, srcDepth, rawD } = D;

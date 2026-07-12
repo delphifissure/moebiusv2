@@ -59,7 +59,7 @@ const PREFIX = process.argv[2] || 'rv';
 
   // Build the BG layer (directional plug)
   await page.evaluate(() => {
-    if (typeof bgPlugMode!=='undefined') bgPlugMode='directional';
+    if (typeof bgPlugMode!=='undefined') bgMPIFullPlanes=false; bgPlugMode='directional';
     if (typeof bgValidMode!=='undefined') bgValidMode='auto';
     buildBackgroundLayer();
   });

@@ -38,7 +38,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     };
     const L = mediaLayers[0];
     L._thinHaloApplied = true; fgPreTear = false;
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const before = holeCount();
     const tex = L.textures.depth;                       // the baked canvas texture
     tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;

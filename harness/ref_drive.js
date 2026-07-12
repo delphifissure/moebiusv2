@@ -22,7 +22,7 @@ const PREFIX = process.argv[2] || 'rf';
     if (t === 59) process.exit(1);
     await new Promise(r => setTimeout(r, 2000));
   }
-  await page.evaluate(() => { bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
+  await page.evaluate(() => { bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer(); });
   await page.waitForTimeout(800);
 
   async function shot(name, o) {

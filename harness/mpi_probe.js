@@ -16,7 +16,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
   const res = await page.evaluate(async () => {
-    bgMPIMode=true; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIMode=true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const D = window._mpiDebug;
     if (!D) return { err: 'no _mpiDebug (bgMPIMode off?)' };
     const { pw, ph, K, texLayer, meanD } = D;

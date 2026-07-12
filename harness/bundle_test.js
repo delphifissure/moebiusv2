@@ -15,7 +15,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
   const res = await page.evaluate(async () => {
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const files = [];
     const meta = { files: {} };
     const toPng = (cv) => { // return dataURL length as byte proxy + keep first layer's PNGs

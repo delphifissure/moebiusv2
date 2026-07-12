@@ -16,7 +16,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
   }
   const res = await page.evaluate(async () => {
     window._dbgFillCapture = true;
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     const D = window._dbgFill;
     const { pw, ph, band, underMask, plug, srcDepth } = D;
     const X0=550, Y0=450, X1=1200, Y1=1100, CW=X1-X0, CH=Y1-Y0;

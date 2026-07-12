@@ -41,7 +41,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
     // suppress the halo BEFORE the build so L.textures.depth stays pure bake
     L._thinHaloApplied = true;
     fgPreTear = false;
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     out.baked_nohalo_untorn = holeCount();
     return out;
   });

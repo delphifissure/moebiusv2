@@ -15,7 +15,7 @@ const MPI = process.argv[2] !== 'off';
   }
   const res = await page.evaluate(async (MPI) => {
     bgMPIMode = MPI;
-    bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
+    bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
     await new Promise(r2 => { let n=0; const tick=()=>{ n++; n<6?requestAnimationFrame(tick):r2(); }; requestAnimationFrame(tick); });
     const L = mediaLayers[0];
     const g = (m) => m ? { vis: m.visible, scale: [m.scale.x.toFixed(4), m.scale.y.toFixed(4)], pos: [m.position.x.toFixed(3), m.position.y.toFixed(3), m.position.z.toFixed(3)] } : null;
