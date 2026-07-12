@@ -24,6 +24,8 @@ const FLAGS = (process.argv[4]||'').split(',').filter(Boolean);
   }
   await page.evaluate((flags) => {
     if (flags.includes('noGC')) window._srNoGC = true;
+    if (flags.includes('noScale')) window._srNoScale = true;
+    const so = flags.find(f => f.startsWith('scaleOnly:')); if (so) window._srScaleOnly = so.split(':')[1];
     if (flags.includes('noP2')) window._srNoP2 = true;
     if (flags.includes('noCont')) window._srNoCont = true;
     bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
