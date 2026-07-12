@@ -8212,7 +8212,6 @@ function buildBackgroundLayer() {
             const dQ = new Float32Array(PNq);
             for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
             const RB = Math.max(8, bgBandMaxGrowPx | 0);
-            const floorQ = bgSlide2D(dQ, pw, ph, RB, true);
             const disocc = new Uint8Array(PNq);
             let nD = 0;
             for (const r of [Math.max(2, RB >> 2), RB >> 1, RB]) {
@@ -8222,15 +8221,43 @@ function buildBackgroundLayer() {
                     if (!disocc[i] && nearMax[i] - dQ[i] > thrQ) { disocc[i] = 1; nD++; }
                 }
             }
-            // Floor only under GENUINE standing content: a tight 0.02 gate
-            // floors the plate under any texture relief (organic depth
-            // exceeds it over a 28px window nearly everywhere), which
-            // invalidates ~all colour seeds and degenerates the wash to
-            // NaN-white. True occluder cliffs stand well above the local
-            // floor; smooth relief stays plate=source and seeds stay live.
-            const THq = Math.max(0.08, fgTearStep * 2);
-            const plateQ = new Float32Array(PNq);
-            for (let i = 0; i < PNq; i++) plateQ[i] = (dQ[i] - floorQ[i] > THq) ? floorQ[i] : dQ[i];
+            // FULL-INTERIOR FAR ENVELOPE (A38). A single radius-RB floor
+            // cannot floor content wider than 2*RB — a big occluder's
+            // interior is its own floor, so the plate cloned it at NEAR
+            // depth, its interior texels passed the seed test and poured
+            // FG colours into the wash, and under parallax the plate's
+            // clone rubber-banded into the background (the astronaut smear).
+            // CONE EROSION (A38 final form). The plate's real contract is
+            // "no cliff anywhere" — cliffs are what rubber-band. Standing-
+            // content masks kept failing on scene statistics (ground's own
+            // perspective gradient defeats any slope-linear gate at large
+            // radii; compounding erosions cascade through big blobs). The
+            // mask-free construction: plate = the LOWER ENVELOPE of depth
+            // under a maximum slope, min_i(d(i) + s*dist(i,j)) — the
+            // classic two-pass Manhattan chamfer sweep, O(N) exactly. By
+            // construction the plate's gradient never exceeds s: nothing
+            // to rubber. Continuous ground (slope < s) is untouched; a
+            // standing blob becomes a gentle ramp down to its surround;
+            // the untouched core of a very wide blob is covered at
+            // identical depth by the FG mesh and never shows. The seed
+            // pass then invalidates exactly the ~(step/s)px ring where the
+            // envelope departs the source, so the wash ring is clean far
+            // colour. s must exceed any plausible ground slope.
+            const sCone = 0.0025;
+            const plateQ = dQ.slice();
+            for (let y = 0; y < ph; y++) { const row = y*pw;
+                for (let x = 0; x < pw; x++) { const i = row+x;
+                    let v = plateQ[i];
+                    if (x > 0  && plateQ[i-1]  + sCone < v) v = plateQ[i-1]  + sCone;
+                    if (y > 0  && plateQ[i-pw] + sCone < v) v = plateQ[i-pw] + sCone;
+                    plateQ[i] = v; } }
+            for (let y = ph - 1; y >= 0; y--) { const row = y*pw;
+                for (let x = pw - 1; x >= 0; x--) { const i = row+x;
+                    let v = plateQ[i];
+                    if (x < pw-1 && plateQ[i+1]  + sCone < v) v = plateQ[i+1]  + sCone;
+                    if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
+                    plateQ[i] = v; } }
+            if (window._srCapture) window._qbDbg = { plate: plateQ.slice(), d: dQ.slice(), pw, ph };
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
