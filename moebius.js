@@ -4811,7 +4811,8 @@ function renderNormalizedDepthPass() {
         // the depth pass (and footprint pass) by design — except when the debug
         // sheet explicitly asks to see the plug as geometry.
         if (isMediaLayer && object.material.uniforms.u_isBackgroundLayer &&
-            object.material.uniforms.u_isBackgroundLayer.value && !_depthPassIncludeBG) {
+            object.material.uniforms.u_isBackgroundLayer.value && !_depthPassIncludeBG &&
+            !object.userData.v2Plane) {   // v2 full planes ARE the displayed scene, not a completion behind it
             originalMaterials.set(object, object.material);
             object.material = new THREE.MeshBasicMaterial({ visible: false });
             return;
@@ -7055,6 +7056,304 @@ let srcBandSeedMaterial = null, bgCombineMaterial = null, bgColorSeedMaterial = 
 let bgMorphMaterial = null; // grayscale erode/dilate for the depth opening (unused since v3.1)
 let bgLakeMaterial = null;  // v3.7: outside-flag propagation + interior-lake fill
 
+// ---- MPI v2 CORE: full completed planes for ONE media layer ----
+// dV: working depth (preprocessed), cpxV: RGBA source colour, alphaV:
+// footprint mask or null (opaque), srcMesh: the layer's mesh (transform +
+// material template + plane dimensions). Adds the plane meshes to the
+// scene and returns { meshes, texLayer, meanD, K, tris }. Composited
+// layers get the SAME treatment as the primary: quantile bins over their
+// own footprint, full flank-validated completion of their internal
+// occlusions, smoothed intra-layer depth — their transparent surround
+// stays transparent, so other layers composite through.
+function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary) {
+    const PN = pw * ph;
+    // ---- F1: DEPTH-QUANTILE BINS (classic multiplane) ----
+    // Cliff-connectivity is the wrong partition for full planes:
+    // the figure joins the ground at its feet and the ground
+    // ramps smoothly to the horizon, so 99% of the image lands
+    // in one component (in v1, the TEARS did the segmentation).
+    // Equal-count histogram slices give K layers with mass, no
+    // tuning; a smooth ramp is sliced into bands whose shared
+    // boundaries are depth-CONTINUOUS — no reveal can open
+    // along them, and a 2px weld skirt (added after the claims)
+    // hides the mesh seam. Every layer keeps its exact per-texel
+    // depth map, so these are relief planes, not flat cards.
+    const histV = new Float64Array(256);
+    let NAv = 0;
+    for (let i = 0; i < PN; i++) { if (alphaV && !alphaV[i]) continue; histV[Math.max(0, Math.min(255, (dV[i]*255)|0))]++; NAv++; }
+    if (!NAv) return null;
+    const KV = Math.max(2, Math.min(bgMPIMaxLayers, 255));
+    const cutV = new Float32Array(KV+1); cutV[KV] = 1.0001;
+    {
+        let acc = 0, kNext = 1;
+        const per = NAv / KV;
+        for (let b = 0; b < 256 && kNext < KV; b++) {
+            acc += histV[b];
+            while (kNext < KV && acc >= per * kNext) { cutV[kNext] = (b+1)/255; kNext++; }
+        }
+    }
+    const texLV = new Uint8Array(PN);
+    const sumDk = new Float64Array(KV+1), cntDk = new Float64Array(KV+1);
+    for (let i = 0; i < PN; i++) {
+        if (alphaV && !alphaV[i]) { texLV[i] = 0; continue; }
+        const v = dV[i];
+        let k2 = 1; while (k2 < KV && v >= cutV[k2]) k2++;
+        texLV[i] = k2; sumDk[k2] += v; cntDk[k2]++;
+    }
+    const meanDV = [];
+    for (let k2 = 1; k2 <= KV; k2++) meanDV.push(cntDk[k2] ? sumDk[k2]/cntDk[k2] : (cutV[k2-1]+cutV[k2])/2);
+
+    // (colour is passed in as cpxV — the caller reads each layer's source)
+    // ---- per-layer scratch ----
+    const aL = new Int32Array(PN), aR = new Int32Array(PN), aU = new Int32Array(PN), aD = new Int32Array(PN);
+    const reg = new Uint8Array(PN), isV = new Uint8Array(PN);
+    const Ff = new Float32Array(PN), Sf = new Float32Array(PN);
+    const psF = new Float64Array((pw+1)), psM = new Float64Array((pw+1)); // row prefix scratch
+    const rowF = new Float64Array(PN), rowM = new Float64Array(PN);      // horizontally blurred
+    const MXv = Math.round(pw * 0.15), MYv = Math.round(ph * 0.15);
+    const gp = srcMesh.geometry.parameters;
+    const planeW = gp.width, planeH = gp.height;
+    const rankOrderV = Array.from({length: KV}, (_, k) => k).sort((a,b) => meanDV[a]-meanDV[b]); // far -> near
+    const outMeshes = [];
+    const EPSd = 1.5/255, RBLUR = 8;
+    let totTris = 0;
+    rankOrderV.forEach((k0, rank) => {
+        const k = k0 + 1;
+        const isFarthest = (rank === 0);
+        // nearest visible-k anchors, unbounded; -2 = frame side
+        for (let y = 0; y < ph; y++) { const row = y*pw;
+            let last = -2;
+            for (let x = 0; x < pw; x++) { const i = row+x; if (texLV[i] === k) { last = i; aL[i] = i; } else aL[i] = last; }
+            last = -2;
+            for (let x = pw-1; x >= 0; x--) { const i = row+x; if (texLV[i] === k) { last = i; aR[i] = i; } else aR[i] = last; }
+        }
+        for (let x = 0; x < pw; x++) {
+            let last = -2;
+            for (let y = 0; y < ph; y++) { const i = y*pw+x; if (texLV[i] === k) { last = i; aU[i] = i; } else aU[i] = last; }
+            last = -2;
+            for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; if (texLV[i] === k) { last = i; aD[i] = i; } else aD[i] = last; }
+        }
+        // region: visible + flank-validated claims where the visible
+        // surface is strictly nearer than the layer's continuation
+        let nVis = 0, nClaim = 0;
+        for (let i = 0; i < PN; i++) {
+            if (texLV[i] === k) { isV[i] = 1; reg[i] = 1; Ff[i] = dV[i]; nVis++; continue; }
+            isV[i] = 0; reg[i] = 0;
+            if (alphaV && !alphaV[i]) continue;   // outside the layer's footprint: other layers composite through
+            const l2 = aL[i], r2 = aR[i], u2 = aU[i], d2 = aD[i];
+            const rowHas = (l2 >= 0 || r2 >= 0) && (l2 !== -2 || r2 !== -2);
+            const colHas = (u2 >= 0 || d2 >= 0) && (u2 !== -2 || d2 !== -2);
+            if (!rowHas && !colHas) continue;
+            // continued depth: inverse-distance blend of row/col lerp lines
+            const x = i % pw, y = (i / pw) | 0;
+            let num = 0, den = 0;
+            if (rowHas) {
+                if (l2 >= 0 && r2 >= 0) { const dl = x - (l2 % pw), drr = (r2 % pw) - x;
+                    num += (dV[l2] + (dV[r2]-dV[l2]) * (dl/(dl+drr))) / (dl+drr); den += 1/(dl+drr); }
+                else { const a2 = l2 >= 0 ? l2 : r2; const dd = Math.abs(x - (a2 % pw));
+                    num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
+            }
+            if (colHas) {
+                if (u2 >= 0 && d2 >= 0) { const du = y - ((u2/pw)|0), dd2 = ((d2/pw)|0) - y;
+                    num += (dV[u2] + (dV[d2]-dV[u2]) * (du/(du+dd2))) / (du+dd2); den += 1/(du+dd2); }
+                else { const a2 = u2 >= 0 ? u2 : d2; const dd = Math.abs(y - ((a2/pw)|0));
+                    num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
+            }
+            if (den <= 0) continue;
+            const cont = num / den;
+            if (dV[i] - cont > fgTearStep) { reg[i] = 1; Ff[i] = cont; nClaim++; }
+        }
+        if (!nVis) return;
+        // 2px WELD SKIRT: neighbours depth-continuous with the layer
+        // join it as visible texels (source colour, own depth) — bin
+        // seams on smooth ramps get overlapping geometry at identical
+        // depth and colour, so the mesh boundary cannot crack. The
+        // comparison is against the LAYER's depth at the border texel,
+        // so a nearer occluder never gets skirted onto.
+        for (let p7 = 0; p7 < 2; p7++) {
+            const addSk = [];
+            for (let y = 0; y < ph; y++) { const row = y*pw;
+                for (let x = 0; x < pw; x++) { const i = row+x;
+                    if (!reg[i]) continue;
+                    const fi = Ff[i];
+                    let j;
+                    if (x > 0)    { j = i-1;  if (!reg[j] && (!alphaV || alphaV[j]) && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
+                    if (x < pw-1) { j = i+1;  if (!reg[j] && (!alphaV || alphaV[j]) && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
+                    if (y > 0)    { j = i-pw; if (!reg[j] && (!alphaV || alphaV[j]) && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
+                    if (y < ph-1) { j = i+pw; if (!reg[j] && (!alphaV || alphaV[j]) && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
+                }
+            }
+            for (const j of addSk) { if (!reg[j]) { reg[j] = 1; isV[j] = 1; Ff[j] = dV[j]; } }
+        }
+        // masked box blur (radius RBLUR) — intra-layer smoothing
+        for (let y = 0; y < ph; y++) { const row = y*pw;
+            psF[0] = 0; psM[0] = 0;
+            for (let x = 0; x < pw; x++) { const i = row+x; psF[x+1] = psF[x] + (reg[i] ? Ff[i] : 0); psM[x+1] = psM[x] + reg[i]; }
+            for (let x = 0; x < pw; x++) { const lo = Math.max(0, x-RBLUR), hi = Math.min(pw, x+RBLUR+1);
+                rowF[row+x] = psF[hi]-psF[lo]; rowM[row+x] = psM[hi]-psM[lo]; }
+        }
+        for (let x = 0; x < pw; x++) {
+            let accF = 0, accM = 0;
+            for (let y = 0; y < Math.min(ph, RBLUR+1); y++) { accF += rowF[y*pw+x]; accM += rowM[y*pw+x]; }
+            for (let y = 0; y < ph; y++) { const i = y*pw+x;
+                Sf[i] = accM > 0 ? accF/accM : (reg[i] ? Ff[i] : meanDV[k0]);
+                const yAdd = y+RBLUR+1, ySub = y-RBLUR;
+                if (yAdd < ph) { accF += rowF[yAdd*pw+x]; accM += rowM[yAdd*pw+x]; }
+                if (ySub >= 0) { accF -= rowF[ySub*pw+x]; accM -= rowM[ySub*pw+x]; }
+            }
+        }
+        // quarter-res pull-push completion colours
+        const qw = Math.ceil(pw/4), qh = Math.ceil(ph/4), qN = qw*qh;
+        const qpx = new Uint8Array(qN*4), qok = new Uint8Array(qN);
+        for (let qy = 0; qy < qh; qy++) for (let qx = 0; qx < qw; qx++) {
+            let r2 = 0, g2 = 0, b2 = 0, n2 = 0;
+            for (let sy = qy*4; sy < Math.min(ph, qy*4+4); sy++) for (let sx2 = qx*4; sx2 < Math.min(pw, qx*4+4); sx2++) {
+                const i = sy*pw+sx2; if (!isV[i]) continue;
+                r2 += cpxV[i*4]; g2 += cpxV[i*4+1]; b2 += cpxV[i*4+2]; n2++;
+            }
+            const qi = qy*qw+qx;
+            if (n2) { qpx[qi*4] = r2/n2; qpx[qi*4+1] = g2/n2; qpx[qi*4+2] = b2/n2; qpx[qi*4+3] = 255; qok[qi] = 1; }
+        }
+        const qFill = bgPullPushFill(qpx, qok, qw, qh);
+        // in-frame bbox; margins are GEOMETRY-ONLY — vertices past
+        // the texture edge sample via GL clamp-to-edge, which IS
+        // per-layer edge continuation for free (edge texel in
+        // region → margin renders that layer; edge texel empty →
+        // alpha 0). The farthest layer gets wide margins (the
+        // backdrop the view pans across); frame-touching nearer
+        // layers get the standard margin so frame-cut near
+        // content moves with its own parallax instead of holes.
+        let bx0 = pw, by0 = ph, bx1 = -1, by1 = -1;
+        for (let y = 0; y < ph; y++) { const row = y*pw;
+            for (let x = 0; x < pw; x++) if (reg[row+x]) { if (x<bx0)bx0=x; if (x>bx1)bx1=x; if (y<by0)by0=y; if (y>by1)by1=y; } }
+        if (bx1 < 0) return;
+        const MXf = Math.round(pw * 0.5), MYf = Math.round(ph * 0.35);
+        // the wide backdrop margin belongs to the PRIMARY scene's farthest
+        // bin only — a composited cutout's farthest bin is not a backdrop,
+        // and clamp-sampled margins would smear its edge colours outward
+        const wantFar = isFarthest && isPrimary;
+        const exL = wantFar ? MXf : (bx0 === 0    ? MXv : 0);
+        const exR = wantFar ? MXf : (bx1 === pw-1 ? MXv : 0);
+        const exT = wantFar ? MYf : (by0 === 0    ? MYv : 0);
+        const exB = wantFar ? MYf : (by1 === ph-1 ? MYv : 0);
+        const bw = bx1-bx0+1, bh = by1-by0+1, BN = bw*bh;
+        // textures over the in-frame bbox only (rows flipped:
+        // uv v=1 at top, flipY=false data)
+        const dT = new Float32Array(BN);
+        const cT = new Uint8Array(BN*4);
+        for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
+            for (let x = 0; x < bw; x++) { const gx = bx0+x, o = (dRow+x);
+                const i = gy*pw+gx;
+                dT[o] = Sf[i];
+                const co = o*4;
+                if (!reg[i]) { cT[co+3] = 0; continue; }
+                if (isV[i]) { cT[co] = cpxV[i*4]; cT[co+1] = cpxV[i*4+1]; cT[co+2] = cpxV[i*4+2]; cT[co+3] = 255; }
+                else {
+                    // completion: bilinear sample of the quarter-res fill
+                    const fx = Math.min(qw-1.001, Math.max(0, gx/4 - 0.5)), fy = Math.min(qh-1.001, Math.max(0, gy/4 - 0.5));
+                    const x0q = fx|0, y0q = fy|0, tx = fx-x0q, ty = fy-y0q;
+                    const i00 = (y0q*qw+x0q)*3, i10 = i00+3, i01 = i00+qw*3, i11 = i01+3;
+                    for (let c2 = 0; c2 < 3; c2++) {
+                        cT[co+c2] = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
+                    }
+                    cT[co+3] = 255;
+                }
+            }
+        }
+        const dTex = new THREE.DataTexture(dT, bw, bh, THREE.RedFormat, THREE.FloatType);
+        dTex.needsUpdate = true; dTex.flipY = false;
+        dTex.minFilter = THREE.LinearFilter; dTex.magFilter = THREE.LinearFilter;
+        if ('colorSpace' in dTex) dTex.colorSpace = THREE.NoColorSpace;
+        const cTex = new THREE.DataTexture(cT, bw, bh, THREE.RGBAFormat, THREE.UnsignedByteType);
+        cTex.needsUpdate = true; cTex.flipY = false;
+        cTex.minFilter = THREE.LinearFilter; cTex.magFilter = THREE.LinearFilter;
+        if ('encoding' in cTex) cTex.encoding = THREE.sRGBEncoding;
+        if ('colorSpace' in cTex) cTex.colorSpace = THREE.SRGBColorSpace;
+        // geometry: verts at texel centres over the EXTENDED grid
+        // (margins included); uv relative to the in-frame texture,
+        // running past [0,1] in margins → clamp-to-edge sampling
+        const gx0 = bx0-exL, gy0 = by0-exT;
+        const GW = bw+exL+exR, GH = bh+exT+exB, GN = GW*GH;
+        const pos = new Float32Array(GN*3), uv2 = new Float32Array(GN*2);
+        for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) { const vi = y*GW+x;
+            const gx = gx0+x, gy = gy0+y;
+            pos[vi*3]   = ((gx+0.5)/pw - 0.5) * planeW;
+            pos[vi*3+1] = (0.5 - (gy+0.5)/ph) * planeH;
+            pos[vi*3+2] = 0;
+            uv2[vi*2]   = (gx - bx0 + 0.5)/bw;
+            uv2[vi*2+1] = 1 - (gy - by0 + 0.5)/bh;
+        }
+        // adaptive index: quadtree blocks where planar+in-region, per-cell elsewhere
+        const regB = (x, y) => { const gx = gx0+x, gy = gy0+y;
+            if (!isPrimary && (gx < 0 || gx >= pw || gy < 0 || gy >= ph)) return 0;
+            const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
+            return reg[cyy*pw+cxx]; };
+        const depB = (x, y) => { const gx = gx0+x, gy = gy0+y;
+            const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
+            return dT[(bh-1-(cyy-by0))*bw + (cxx-bx0)]; };
+        const cw2 = GW-1, ch2 = GH-1;
+        const covered = new Uint8Array(cw2*ch2);
+        const idx = [];
+        for (let B = 16; B >= 2; B >>= 1) {
+            for (let by = 0; by + B <= ch2; by += B) for (let bx = 0; bx + B <= cw2; bx += B) {
+                let ok2 = true;
+                for (let cy2 = by; ok2 && cy2 < by+B; cy2++) for (let cx2 = bx; cx2 < bx+B; cx2++) {
+                    if (covered[cy2*cw2+cx2]) { ok2 = false; break; } }
+                if (!ok2) continue;
+                for (let y5 = by; ok2 && y5 <= by+B; y5++) for (let x5 = bx; x5 <= bx+B; x5++) {
+                    if (!regB(x5, y5)) { ok2 = false; break; } }
+                if (!ok2) continue;
+                const zA = depB(bx, by), zP1 = depB(bx, by+B), zP2 = depB(bx+B, by+B), zP3 = depB(bx+B, by);
+                for (let y5 = 0; ok2 && y5 <= B; y5++) { const v5 = y5/B;
+                    for (let x5 = 0; x5 <= B; x5++) { const u5 = x5/B;
+                        const z = (u5+v5 <= 1) ? zA + u5*(zP3-zA) + v5*(zP1-zA)
+                                               : zP2 + (1-u5)*(zP1-zP2) + (1-v5)*(zP3-zP2);
+                        if (Math.abs(depB(bx+x5, by+y5) - z) > EPSd) { ok2 = false; break; }
+                    } }
+                if (!ok2) continue;
+                const a0 = by*GW+bx;
+                idx.push(a0, a0+B*GW, a0+B,  a0+B*GW, a0+B*GW+B, a0+B);
+                for (let cy2 = by; cy2 < by+B; cy2++) for (let cx2 = bx; cx2 < bx+B; cx2++) covered[cy2*cw2+cx2] = 1;
+            }
+        }
+        for (let cy2 = 0; cy2 < ch2; cy2++) for (let cx2 = 0; cx2 < cw2; cx2++) {
+            if (covered[cy2*cw2+cx2]) continue;
+            if (!regB(cx2,cy2) || !regB(cx2+1,cy2) || !regB(cx2,cy2+1) || !regB(cx2+1,cy2+1)) continue;
+            const z00 = depB(cx2,cy2), z10 = depB(cx2+1,cy2), z01 = depB(cx2,cy2+1), z11 = depB(cx2+1,cy2+1);
+            const mn = Math.min(z00,z10,z01,z11), mx = Math.max(z00,z10,z01,z11);
+            if (mx - mn > fgTearStep) continue;   // internal cliff: mesh boundary, next layer shows
+            const a0 = cy2*GW+cx2;
+            idx.push(a0, a0+GW, a0+1,  a0+GW, a0+GW+1, a0+1);
+        }
+        if (!idx.length) return;
+        const g2 = new THREE.BufferGeometry();
+        g2.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        g2.setAttribute('uv', new THREE.BufferAttribute(uv2, 2));
+        g2.setIndex(new THREE.BufferAttribute(Uint32Array.from(idx), 1));
+        const m2 = srcMesh.material.clone();
+        m2.uniforms.displacementMap.value = dTex;
+        m2.uniforms.map.value = cTex;
+        m2.uniforms.u_isBackgroundLayer.value = true;
+        m2.uniforms.u_useEdgeMask.value = false;
+        if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
+        m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
+        const mesh2 = new THREE.Mesh(g2, m2);
+        mesh2.userData.v2Plane = true;      // depth pass: counts as scene (FG-class), not completion
+        mesh2.userData.v2rank = rank;       // far -> near
+        mesh2.userData.v2tag = tag;
+        mesh2.position.copy(srcMesh.position);
+        mesh2.rotation.copy(srcMesh.rotation);
+        mesh2.scale.copy(srcMesh.scale);
+        mesh2.renderOrder = (srcMesh.renderOrder || 0) - 0.45 + rank * 1e-3;
+        scene.add(mesh2);
+        outMeshes.push(mesh2);
+        totTris += idx.length/3;
+        console.log('[MPI-V2]['+tag+'] layer ' + k + ' @' + meanDV[k0].toFixed(3) + ': vis ' + nVis + 'px claim ' + nClaim + 'px bbox ' + bw + 'x' + bh + ' tris ' + (idx.length/3));
+    });
+
+    return { meshes: outMeshes, texLayer: texLV, meanD: meanDV, K: KV, tris: totTris };
+}
+
 function buildBackgroundLayer() {
     try {
         const L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
@@ -7988,286 +8287,66 @@ function buildBackgroundLayer() {
                     if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
                     if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
                     if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
-                    const dV = dispBase;   // closing-cleaned depth (display side = the only side in v2)
-                    // ---- F1: DEPTH-QUANTILE BINS (classic multiplane) ----
-                    // Cliff-connectivity is the wrong partition for full planes:
-                    // the figure joins the ground at its feet and the ground
-                    // ramps smoothly to the horizon, so 99% of the image lands
-                    // in one component (in v1, the TEARS did the segmentation).
-                    // Equal-count histogram slices give K layers with mass, no
-                    // tuning; a smooth ramp is sliced into bands whose shared
-                    // boundaries are depth-CONTINUOUS — no reveal can open
-                    // along them, and a 2px weld skirt (added after the claims)
-                    // hides the mesh seam. Every layer keeps its exact per-texel
-                    // depth map, so these are relief planes, not flat cards.
-                    const histV = new Float64Array(256);
-                    for (let i = 0; i < PN; i++) histV[Math.max(0, Math.min(255, (dV[i]*255)|0))]++;
-                    const KV = Math.max(2, Math.min(bgMPIMaxLayers, 255));
-                    const cutV = new Float32Array(KV+1); cutV[KV] = 1.0001;
-                    {
-                        let acc = 0, kNext = 1;
-                        const per = PN / KV;
-                        for (let b = 0; b < 256 && kNext < KV; b++) {
-                            acc += histV[b];
-                            while (kNext < KV && acc >= per * kNext) { cutV[kNext] = (b+1)/255; kNext++; }
-                        }
-                    }
-                    const texLV = new Uint8Array(PN);
-                    const sumDk = new Float64Array(KV+1), cntDk = new Float64Array(KV+1);
-                    for (let i = 0; i < PN; i++) {
-                        const v = dV[i];
-                        let k2 = 1; while (k2 < KV && v >= cutV[k2]) k2++;
-                        texLV[i] = k2; sumDk[k2] += v; cntDk[k2]++;
-                    }
-                    const meanDV = [];
-                    for (let k2 = 1; k2 <= KV; k2++) meanDV.push(cntDk[k2] ? sumDk[k2]/cntDk[k2] : (cutV[k2-1]+cutV[k2])/2);
-                _mark('v2-partition');
-                    // ---- colour source (full res) ----
+                    for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = true;
+                    // ---- primary layer ----
                     const cImgV = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
                     cx.clearRect(0, 0, pw, ph); cx.drawImage(cImgV, 0, 0, pw, ph);
                     const cpxV = cx.getImageData(0, 0, pw, ph).data;
-                    // ---- per-layer scratch (reused across layers) ----
-                    const aL = new Int32Array(PN), aR = new Int32Array(PN), aU = new Int32Array(PN), aD = new Int32Array(PN);
-                    const reg = new Uint8Array(PN), isV = new Uint8Array(PN);
-                    const Ff = new Float32Array(PN), Sf = new Float32Array(PN);
-                    const psF = new Float64Array((pw+1)), psM = new Float64Array((pw+1)); // row prefix scratch
-                    const rowF = new Float64Array(PN), rowM = new Float64Array(PN);      // horizontally blurred
-                    const MXv = Math.round(pw * 0.15), MYv = Math.round(ph * 0.15);
-                    const gp = L.mesh.geometry.parameters;
-                    const planeW = gp.width, planeH = gp.height;
-                    const rankOrderV = Array.from({length: KV}, (_, k) => k).sort((a,b) => meanDV[a]-meanDV[b]); // far -> near
-                    mpiFullMeshes = [];
-                    const EPSd = 1.5/255, RBLUR = 8;
-                    let totTris = 0;
-                    rankOrderV.forEach((k0, rank) => {
-                        const k = k0 + 1;
-                        const isFarthest = (rank === 0);
-                        // nearest visible-k anchors, unbounded; -2 = frame side
-                        for (let y = 0; y < ph; y++) { const row = y*pw;
-                            let last = -2;
-                            for (let x = 0; x < pw; x++) { const i = row+x; if (texLV[i] === k) { last = i; aL[i] = i; } else aL[i] = last; }
-                            last = -2;
-                            for (let x = pw-1; x >= 0; x--) { const i = row+x; if (texLV[i] === k) { last = i; aR[i] = i; } else aR[i] = last; }
-                        }
-                        for (let x = 0; x < pw; x++) {
-                            let last = -2;
-                            for (let y = 0; y < ph; y++) { const i = y*pw+x; if (texLV[i] === k) { last = i; aU[i] = i; } else aU[i] = last; }
-                            last = -2;
-                            for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; if (texLV[i] === k) { last = i; aD[i] = i; } else aD[i] = last; }
-                        }
-                        // region: visible + flank-validated claims where the visible
-                        // surface is strictly nearer than the layer's continuation
-                        let nVis = 0, nClaim = 0;
-                        for (let i = 0; i < PN; i++) {
-                            if (texLV[i] === k) { isV[i] = 1; reg[i] = 1; Ff[i] = dV[i]; nVis++; continue; }
-                            isV[i] = 0; reg[i] = 0;
-                            const l2 = aL[i], r2 = aR[i], u2 = aU[i], d2 = aD[i];
-                            const rowHas = (l2 >= 0 || r2 >= 0) && (l2 !== -2 || r2 !== -2);
-                            const colHas = (u2 >= 0 || d2 >= 0) && (u2 !== -2 || d2 !== -2);
-                            if (!rowHas && !colHas) continue;
-                            // continued depth: inverse-distance blend of row/col lerp lines
-                            const x = i % pw, y = (i / pw) | 0;
-                            let num = 0, den = 0;
-                            if (rowHas) {
-                                if (l2 >= 0 && r2 >= 0) { const dl = x - (l2 % pw), drr = (r2 % pw) - x;
-                                    num += (dV[l2] + (dV[r2]-dV[l2]) * (dl/(dl+drr))) / (dl+drr); den += 1/(dl+drr); }
-                                else { const a2 = l2 >= 0 ? l2 : r2; const dd = Math.abs(x - (a2 % pw));
-                                    num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
-                            }
-                            if (colHas) {
-                                if (u2 >= 0 && d2 >= 0) { const du = y - ((u2/pw)|0), dd2 = ((d2/pw)|0) - y;
-                                    num += (dV[u2] + (dV[d2]-dV[u2]) * (du/(du+dd2))) / (du+dd2); den += 1/(du+dd2); }
-                                else { const a2 = u2 >= 0 ? u2 : d2; const dd = Math.abs(y - ((a2/pw)|0));
-                                    num += dV[a2] / Math.max(1, dd); den += 1/Math.max(1, dd); }
-                            }
-                            if (den <= 0) continue;
-                            const cont = num / den;
-                            if (dV[i] - cont > fgTearStep) { reg[i] = 1; Ff[i] = cont; nClaim++; }
-                        }
-                        if (!nVis) return;
-                        // 2px WELD SKIRT: neighbours depth-continuous with the layer
-                        // join it as visible texels (source colour, own depth) — bin
-                        // seams on smooth ramps get overlapping geometry at identical
-                        // depth and colour, so the mesh boundary cannot crack. The
-                        // comparison is against the LAYER's depth at the border texel,
-                        // so a nearer occluder never gets skirted onto.
-                        for (let p7 = 0; p7 < 2; p7++) {
-                            const addSk = [];
-                            for (let y = 0; y < ph; y++) { const row = y*pw;
-                                for (let x = 0; x < pw; x++) { const i = row+x;
-                                    if (!reg[i]) continue;
-                                    const fi = Ff[i];
-                                    let j;
-                                    if (x > 0)    { j = i-1;  if (!reg[j] && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
-                                    if (x < pw-1) { j = i+1;  if (!reg[j] && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
-                                    if (y > 0)    { j = i-pw; if (!reg[j] && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
-                                    if (y < ph-1) { j = i+pw; if (!reg[j] && Math.abs(dV[j]-fi) <= fgTearStep) addSk.push(j); }
-                                }
-                            }
-                            for (const j of addSk) { if (!reg[j]) { reg[j] = 1; isV[j] = 1; Ff[j] = dV[j]; } }
-                        }
-                        // masked box blur (radius RBLUR) — intra-layer smoothing
-                        for (let y = 0; y < ph; y++) { const row = y*pw;
-                            psF[0] = 0; psM[0] = 0;
-                            for (let x = 0; x < pw; x++) { const i = row+x; psF[x+1] = psF[x] + (reg[i] ? Ff[i] : 0); psM[x+1] = psM[x] + reg[i]; }
-                            for (let x = 0; x < pw; x++) { const lo = Math.max(0, x-RBLUR), hi = Math.min(pw, x+RBLUR+1);
-                                rowF[row+x] = psF[hi]-psF[lo]; rowM[row+x] = psM[hi]-psM[lo]; }
-                        }
-                        for (let x = 0; x < pw; x++) {
-                            let accF = 0, accM = 0;
-                            for (let y = 0; y < Math.min(ph, RBLUR+1); y++) { accF += rowF[y*pw+x]; accM += rowM[y*pw+x]; }
-                            for (let y = 0; y < ph; y++) { const i = y*pw+x;
-                                Sf[i] = accM > 0 ? accF/accM : (reg[i] ? Ff[i] : meanDV[k0]);
-                                const yAdd = y+RBLUR+1, ySub = y-RBLUR;
-                                if (yAdd < ph) { accF += rowF[yAdd*pw+x]; accM += rowM[yAdd*pw+x]; }
-                                if (ySub >= 0) { accF -= rowF[ySub*pw+x]; accM -= rowM[ySub*pw+x]; }
-                            }
-                        }
-                        // quarter-res pull-push completion colours
-                        const qw = Math.ceil(pw/4), qh = Math.ceil(ph/4), qN = qw*qh;
-                        const qpx = new Uint8Array(qN*4), qok = new Uint8Array(qN);
-                        for (let qy = 0; qy < qh; qy++) for (let qx = 0; qx < qw; qx++) {
-                            let r2 = 0, g2 = 0, b2 = 0, n2 = 0;
-                            for (let sy = qy*4; sy < Math.min(ph, qy*4+4); sy++) for (let sx2 = qx*4; sx2 < Math.min(pw, qx*4+4); sx2++) {
-                                const i = sy*pw+sx2; if (!isV[i]) continue;
-                                r2 += cpxV[i*4]; g2 += cpxV[i*4+1]; b2 += cpxV[i*4+2]; n2++;
-                            }
-                            const qi = qy*qw+qx;
-                            if (n2) { qpx[qi*4] = r2/n2; qpx[qi*4+1] = g2/n2; qpx[qi*4+2] = b2/n2; qpx[qi*4+3] = 255; qok[qi] = 1; }
-                        }
-                        const qFill = bgPullPushFill(qpx, qok, qw, qh);
-                        // in-frame bbox; margins are GEOMETRY-ONLY — vertices past
-                        // the texture edge sample via GL clamp-to-edge, which IS
-                        // per-layer edge continuation for free (edge texel in
-                        // region → margin renders that layer; edge texel empty →
-                        // alpha 0). The farthest layer gets wide margins (the
-                        // backdrop the view pans across); frame-touching nearer
-                        // layers get the standard margin so frame-cut near
-                        // content moves with its own parallax instead of holes.
-                        let bx0 = pw, by0 = ph, bx1 = -1, by1 = -1;
-                        for (let y = 0; y < ph; y++) { const row = y*pw;
-                            for (let x = 0; x < pw; x++) if (reg[row+x]) { if (x<bx0)bx0=x; if (x>bx1)bx1=x; if (y<by0)by0=y; if (y>by1)by1=y; } }
-                        if (bx1 < 0) return;
-                        const MXf = Math.round(pw * 0.5), MYf = Math.round(ph * 0.35);
-                        const exL = isFarthest ? MXf : (bx0 === 0    ? MXv : 0);
-                        const exR = isFarthest ? MXf : (bx1 === pw-1 ? MXv : 0);
-                        const exT = isFarthest ? MYf : (by0 === 0    ? MYv : 0);
-                        const exB = isFarthest ? MYf : (by1 === ph-1 ? MYv : 0);
-                        const bw = bx1-bx0+1, bh = by1-by0+1, BN = bw*bh;
-                        // textures over the in-frame bbox only (rows flipped:
-                        // uv v=1 at top, flipY=false data)
-                        const dT = new Float32Array(BN);
-                        const cT = new Uint8Array(BN*4);
-                        for (let y = 0; y < bh; y++) { const gy = by0+y, dRow = (bh-1-y)*bw;
-                            for (let x = 0; x < bw; x++) { const gx = bx0+x, o = (dRow+x);
-                                const i = gy*pw+gx;
-                                dT[o] = Sf[i];
-                                const co = o*4;
-                                if (!reg[i]) { cT[co+3] = 0; continue; }
-                                if (isV[i]) { cT[co] = cpxV[i*4]; cT[co+1] = cpxV[i*4+1]; cT[co+2] = cpxV[i*4+2]; cT[co+3] = 255; }
-                                else {
-                                    // completion: bilinear sample of the quarter-res fill
-                                    const fx = Math.min(qw-1.001, Math.max(0, gx/4 - 0.5)), fy = Math.min(qh-1.001, Math.max(0, gy/4 - 0.5));
-                                    const x0q = fx|0, y0q = fy|0, tx = fx-x0q, ty = fy-y0q;
-                                    const i00 = (y0q*qw+x0q)*3, i10 = i00+3, i01 = i00+qw*3, i11 = i01+3;
-                                    for (let c2 = 0; c2 < 3; c2++) {
-                                        cT[co+c2] = qFill[i00+c2]*(1-tx)*(1-ty) + qFill[i10+c2]*tx*(1-ty) + qFill[i01+c2]*(1-tx)*ty + qFill[i11+c2]*tx*ty;
-                                    }
-                                    cT[co+3] = 255;
-                                }
-                            }
-                        }
-                        const dTex = new THREE.DataTexture(dT, bw, bh, THREE.RedFormat, THREE.FloatType);
-                        dTex.needsUpdate = true; dTex.flipY = false;
-                        dTex.minFilter = THREE.LinearFilter; dTex.magFilter = THREE.LinearFilter;
-                        if ('colorSpace' in dTex) dTex.colorSpace = THREE.NoColorSpace;
-                        const cTex = new THREE.DataTexture(cT, bw, bh, THREE.RGBAFormat, THREE.UnsignedByteType);
-                        cTex.needsUpdate = true; cTex.flipY = false;
-                        cTex.minFilter = THREE.LinearFilter; cTex.magFilter = THREE.LinearFilter;
-                        if ('encoding' in cTex) cTex.encoding = THREE.sRGBEncoding;
-                        if ('colorSpace' in cTex) cTex.colorSpace = THREE.SRGBColorSpace;
-                        // geometry: verts at texel centres over the EXTENDED grid
-                        // (margins included); uv relative to the in-frame texture,
-                        // running past [0,1] in margins → clamp-to-edge sampling
-                        const gx0 = bx0-exL, gy0 = by0-exT;
-                        const GW = bw+exL+exR, GH = bh+exT+exB, GN = GW*GH;
-                        const pos = new Float32Array(GN*3), uv2 = new Float32Array(GN*2);
-                        for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) { const vi = y*GW+x;
-                            const gx = gx0+x, gy = gy0+y;
-                            pos[vi*3]   = ((gx+0.5)/pw - 0.5) * planeW;
-                            pos[vi*3+1] = (0.5 - (gy+0.5)/ph) * planeH;
-                            pos[vi*3+2] = 0;
-                            uv2[vi*2]   = (gx - bx0 + 0.5)/bw;
-                            uv2[vi*2+1] = 1 - (gy - by0 + 0.5)/bh;
-                        }
-                        // adaptive index: quadtree blocks where planar+in-region, per-cell elsewhere
-                        const regB = (x, y) => { const gx = gx0+x, gy = gy0+y;
-                            const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
-                            return reg[cyy*pw+cxx]; };
-                        const depB = (x, y) => { const gx = gx0+x, gy = gy0+y;
-                            const cxx = Math.max(bx0, Math.min(bx1, gx)), cyy = Math.max(by0, Math.min(by1, gy));
-                            return dT[(bh-1-(cyy-by0))*bw + (cxx-bx0)]; };
-                        const cw2 = GW-1, ch2 = GH-1;
-                        const covered = new Uint8Array(cw2*ch2);
-                        const idx = [];
-                        for (let B = 16; B >= 2; B >>= 1) {
-                            for (let by = 0; by + B <= ch2; by += B) for (let bx = 0; bx + B <= cw2; bx += B) {
-                                let ok2 = true;
-                                for (let cy2 = by; ok2 && cy2 < by+B; cy2++) for (let cx2 = bx; cx2 < bx+B; cx2++) {
-                                    if (covered[cy2*cw2+cx2]) { ok2 = false; break; } }
-                                if (!ok2) continue;
-                                for (let y5 = by; ok2 && y5 <= by+B; y5++) for (let x5 = bx; x5 <= bx+B; x5++) {
-                                    if (!regB(x5, y5)) { ok2 = false; break; } }
-                                if (!ok2) continue;
-                                const zA = depB(bx, by), zP1 = depB(bx, by+B), zP2 = depB(bx+B, by+B), zP3 = depB(bx+B, by);
-                                for (let y5 = 0; ok2 && y5 <= B; y5++) { const v5 = y5/B;
-                                    for (let x5 = 0; x5 <= B; x5++) { const u5 = x5/B;
-                                        const z = (u5+v5 <= 1) ? zA + u5*(zP3-zA) + v5*(zP1-zA)
-                                                               : zP2 + (1-u5)*(zP1-zP2) + (1-v5)*(zP3-zP2);
-                                        if (Math.abs(depB(bx+x5, by+y5) - z) > EPSd) { ok2 = false; break; }
-                                    } }
-                                if (!ok2) continue;
-                                const a0 = by*GW+bx;
-                                idx.push(a0, a0+B*GW, a0+B,  a0+B*GW, a0+B*GW+B, a0+B);
-                                for (let cy2 = by; cy2 < by+B; cy2++) for (let cx2 = bx; cx2 < bx+B; cx2++) covered[cy2*cw2+cx2] = 1;
-                            }
-                        }
-                        for (let cy2 = 0; cy2 < ch2; cy2++) for (let cx2 = 0; cx2 < cw2; cx2++) {
-                            if (covered[cy2*cw2+cx2]) continue;
-                            if (!regB(cx2,cy2) || !regB(cx2+1,cy2) || !regB(cx2,cy2+1) || !regB(cx2+1,cy2+1)) continue;
-                            const z00 = depB(cx2,cy2), z10 = depB(cx2+1,cy2), z01 = depB(cx2,cy2+1), z11 = depB(cx2+1,cy2+1);
-                            const mn = Math.min(z00,z10,z01,z11), mx = Math.max(z00,z10,z01,z11);
-                            if (mx - mn > fgTearStep) continue;   // internal cliff: mesh boundary, next layer shows
-                            const a0 = cy2*GW+cx2;
-                            idx.push(a0, a0+GW, a0+1,  a0+GW, a0+GW+1, a0+1);
-                        }
-                        if (!idx.length) return;
-                        const g2 = new THREE.BufferGeometry();
-                        g2.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-                        g2.setAttribute('uv', new THREE.BufferAttribute(uv2, 2));
-                        g2.setIndex(new THREE.BufferAttribute(Uint32Array.from(idx), 1));
-                        const m2 = L.mesh.material.clone();
-                        m2.uniforms.displacementMap.value = dTex;
-                        m2.uniforms.map.value = cTex;
-                        m2.uniforms.u_isBackgroundLayer.value = true;
-                        m2.uniforms.u_useEdgeMask.value = false;
-                        if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
-                        m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
-                        const mesh2 = new THREE.Mesh(g2, m2);
-                        mesh2.position.copy(L.mesh.position);
-                        mesh2.rotation.copy(L.mesh.rotation);
-                        mesh2.scale.copy(L.mesh.scale);
-                        mesh2.renderOrder = (L.mesh.renderOrder || 0) - 0.45 + rank * 1e-3;
-                        scene.add(mesh2);
-                        mpiFullMeshes.push(mesh2);
-                        totTris += idx.length/3;
-                        console.log('[MPI-V2] layer ' + k + ' @' + meanDV[k0].toFixed(3) + ': vis ' + nVis + 'px claim ' + nClaim + 'px bbox ' + bw + 'x' + bh + ' tris ' + (idx.length/3));
-                    });
-                _mark('v2-planes');
+                _mark('v2-read');
+                    const r0 = bgBuildFullPlanesCore(dispBase, cpxV, null, pw, ph, L.mesh, 'L0', true);
+                    mpiFullMeshes = r0 ? r0.meshes.slice() : [];
+                    let totV2 = r0 ? r0.tris : 0;
                     L.mesh.visible = false;
-                    bgMPIExport = { pw, ph, layers: KV, texLayer: texLV, meanD: meanDV };
+                _mark('v2-planes');
+                    // ---- additional composited layers: SAME treatment ----
+                    // Each added layer is quantile-sliced and completed within
+                    // its own alpha footprint; the transparent surround stays
+                    // transparent, so the layers composite through each other.
+                    for (let li = 1; li < mediaLayers.length; li++) {
+                        const Lx = mediaLayers[li];
+                        try {
+                            if (!Lx || !Lx.mesh || !Lx.textures || !Lx.textures.color || !Lx.textures.depth) continue;
+                            const cI = Lx.textures.color.image || (Lx.elements && Lx.elements.color);
+                            const dI = Lx.textures.depth.image2d || Lx.textures.depth.image || (Lx.elements && Lx.elements.depth);
+                            if (!cI || !dI) continue;
+                            const lw2 = cI.naturalWidth || cI.width, lh2 = cI.naturalHeight || cI.height;
+                            if (!lw2 || !lh2) continue;
+                            const cvL = document.createElement('canvas'); cvL.width = lw2; cvL.height = lh2;
+                            const cxL = cvL.getContext('2d', { willReadFrequently: true });
+                            cxL.drawImage(cI, 0, 0, lw2, lh2);
+                            const cpxL = cxL.getImageData(0, 0, lw2, lh2).data;
+                            cxL.clearRect(0, 0, lw2, lh2); cxL.drawImage(dI, 0, 0, lw2, lh2);
+                            const dpxL = cxL.getImageData(0, 0, lw2, lh2).data;
+                            const LN2 = lw2*lh2;
+                            const dL = new Float32Array(LN2), aM = new Uint8Array(LN2);
+                            let nOpaque = 0;
+                            for (let i = 0; i < LN2; i++) {
+                                dL[i] = dpxL[i*4] / 255;
+                                aM[i] = cpxL[i*4+3] >= 128 ? 1 : 0; nOpaque += aM[i];
+                            }
+                            if (!nOpaque) continue;
+                            // light preprocessing: shallow closing only (added
+                            // layers skip the primary's despeckle machinery)
+                            {
+                                const dil2 = bgSlide2D(dL, lw2, lh2, 5, false);
+                                const clo2 = bgSlide2D(dil2, lw2, lh2, 5, true);
+                                for (let i = 0; i < LN2; i++) {
+                                    const up2 = clo2[i] - dL[i];
+                                    if (up2 > 0.008 && up2 <= fgTearStep * 2) dL[i] = clo2[i];
+                                }
+                            }
+                            const rX = bgBuildFullPlanesCore(dL, cpxL, aM, lw2, lh2, Lx.mesh, 'L'+li, false);
+                            if (rX && rX.meshes.length) {
+                                for (const m3 of rX.meshes) mpiFullMeshes.push(m3);
+                                totV2 += rX.tris;
+                                Lx.mesh.visible = false;
+                            }
+                        } catch (eL) { console.warn('[MPI-V2] layer ' + li + ' failed (kept as flat composite):', eL); }
+                    }
+                _mark('v2-extra-layers');
+                    bgMPIExport = r0 ? { pw, ph, layers: r0.K, texLayer: r0.texLayer, meanD: r0.meanD } : null;
                     bgBuildStamp = new Date().toISOString().slice(11, 19);
-                    console.log('[MPI-V2] full planes: ' + mpiFullMeshes.length + ' layers, ' + totTris + ' tris total (' + (Date.now()-tV0) + 'ms)');
+                    console.log('[MPI-V2] full planes: ' + mpiFullMeshes.length + ' plane meshes across ' + mediaLayers.length + ' media layer(s), ' + totV2 + ' tris (' + (Date.now()-tV0) + 'ms)');
                     console.log('[PERF] build ' + (Date.now() - _pt0) + 'ms | ' + _perf.join(' | '));
                     return true;
                 }
@@ -8947,6 +9026,8 @@ function buildBackgroundLayer() {
                         // monolithic mesh instead of leaving it hidden behind
                         // stale layer meshes
                         if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; }
+                        if (mpiFullMeshes) { for (const m of mpiFullMeshes) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); } mpiFullMeshes = null;
+                            for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = true; }
                         L.mesh.visible = true;
                         if (bgMPIMode) {
                             const tM = Date.now();
@@ -10063,15 +10144,35 @@ function _wireDebugSheetControls() {
         e.target.value = '';
     });
     document.getElementById('bgLayerToggle')?.addEventListener('change', (e) => {
-        if (bgLayerMesh) bgLayerMesh.visible = e.target.checked;
+        const on = e.target.checked;
+        if (mpiFullMeshes && mpiFullMeshes.length) {
+            // v2: "show BG" toggles the whole plane stack vs the original flat sources
+            for (const m of mpiFullMeshes) m.visible = on;
+            for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = !on;
+            return;
+        }
+        if (bgLayerMesh) bgLayerMesh.visible = on;
+        if (mpiMidMesh) mpiMidMesh.visible = on;
+        if (mpiStripMeshes) for (const sm of mpiStripMeshes) sm.visible = on;
         // The FG stretch cut is only safe while the plug is there to back it —
         // disarm it whenever the BG layer is hidden, re-arm when shown.
         const fu = mediaLayers[0]?.mesh?.material?.uniforms;
-        if (fu && fu.u_useBandCut) fu.u_useBandCut.value = e.target.checked && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
+        if (fu && fu.u_useBandCut) fu.u_useBandCut.value = on && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
     });
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
+        const solo = e.target.checked;
+        if (mpiFullMeshes && mpiFullMeshes.length) {
+            // v2: "BG only" hides the primary's NEAREST bin — peek behind the front
+            let maxR = -1;
+            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank > maxR) maxR = m.userData.v2rank;
+            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank === maxR) m.visible = !solo;
+            return;
+        }
+        // v1: the "FG" is the original mesh AND, under the MPI partition, the
+        // layer meshes that replaced it (hiding only the original did nothing)
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
-        if (L0 && L0.mesh) L0.mesh.visible = !e.target.checked;
+        if (mpiLayers && mpiLayers.length) { for (const Lr of mpiLayers) Lr.mesh.visible = !solo; }
+        else if (L0 && L0.mesh) L0.mesh.visible = !solo;
     });
     const _reachSlider = document.getElementById('fgReachSlider');
     const _reachValue = document.getElementById('fgReachSliderValue');
@@ -14646,33 +14747,36 @@ function setupStaticControlListeners() {
         canvasElement.addEventListener('mousedown', handleCanvasMouseDown);
         canvasElement.addEventListener('mousemove', handleCanvasMouseMove);
         window.addEventListener('mouseup', handleCanvasMouseUp);
-        // MANUAL VIEW DRAG: right-drag (or shift+drag) adds a delta to the
-        // head position — test any pose without moving your head. Grab
-        // metaphor: drag the scene right = camera moves left. Double-click
-        // resets to the tracked pose. Left-drag without shift keeps its
-        // existing behaviours (depth peek etc).
-        canvasElement.addEventListener('contextmenu', (e) => e.preventDefault());
-        canvasElement.addEventListener('pointerdown', (e) => {
-            if (e.button !== 2 && !(e.button === 0 && e.shiftKey)) return;
+        // MANUAL VIEW DRAG: command-drag (mac) / ctrl-drag / shift-drag adds
+        // a delta to the head position — test any pose without moving your
+        // head. Grab metaphor: drag the scene right = camera moves left.
+        // Double-click resets to the tracked pose. Capture-phase listeners on
+        // window so no other canvas handler can swallow the gesture.
+        const _viewDragStart = (e) => {
+            if (e.target !== canvasElement) return;
+            if (!(e.metaKey || e.ctrlKey || e.shiftKey) || e.button !== 0) return;
             _viewDragActive = true; _viewDragLX = e.clientX; _viewDragLY = e.clientY;
-            canvasElement.setPointerCapture(e.pointerId);
-            e.preventDefault();
-        });
-        canvasElement.addEventListener('pointermove', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            console.log('[VIEW] drag start');
+        };
+        const _viewDragMove = (e) => {
             if (!_viewDragActive) return;
             const r = canvasElement.getBoundingClientRect();
             const sx = terrariumWidth / Math.max(1, r.width);   // full canvas drag ~ one frame width of travel
             manualCamDX -= (e.clientX - _viewDragLX) * sx * 2;
             manualCamDY += (e.clientY - _viewDragLY) * sx * 2;  // screen y down = camera up (grab)
             _viewDragLX = e.clientX; _viewDragLY = e.clientY;
-        });
+            e.preventDefault(); e.stopPropagation();
+        };
         const _viewDragEnd = (e) => {
             if (!_viewDragActive) return;
             _viewDragActive = false;
             console.log('[VIEW] manual offset:', manualCamDX.toFixed(3), manualCamDY.toFixed(3));
         };
-        canvasElement.addEventListener('pointerup', _viewDragEnd);
-        canvasElement.addEventListener('pointercancel', _viewDragEnd);
+        window.addEventListener('pointerdown', _viewDragStart, true);
+        window.addEventListener('pointermove', _viewDragMove, true);
+        window.addEventListener('pointerup', _viewDragEnd, true);
+        window.addEventListener('pointercancel', _viewDragEnd, true);
         canvasElement.addEventListener('dblclick', () => {
             manualCamDX = 0; manualCamDY = 0;
             console.log('[VIEW] manual offset reset');
