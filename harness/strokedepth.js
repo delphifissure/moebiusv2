@@ -50,10 +50,15 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     for (let y = p.staffYs[0]; y <= p.staffYs[1]; y += 5) staffPts.push([p.staffX, y]);
     for (let x = p.isoXs[0]; x <= p.isoXs[1]; x += 5) isoPts.push([x, Math.round(p.isoY - (x - p.isoXs[0]) * 30 / 190)]);
     const skyD = meta.dSky / 255;
+    // caravan ground truth: ground depth at each figure's row
+    const gd = (yy) => (meta.dHor + (meta.dNear - meta.dHor) * (yy - meta.horizon) / Math.max(1, meta.H - meta.horizon)) / 255;
+    let carDev = 0;
+    for (const [cxp, cyp] of meta.probe.caravan) carDev = Math.max(carDev, Math.abs(dAt(cxp, cyp) - gd(cyp)));
     return {
       outline: +mean(outlinePts).toFixed(3),
       staff: +mean(staffPts).toFixed(3),
       iso: +mean(isoPts).toFixed(3),
+      caravanDev: +carDev.toFixed(3),
       occD: +occD.toFixed(3), skyD: +skyD.toFixed(3), W, H,
     };
   }, meta);
@@ -62,9 +67,11 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     const okOutline = Math.abs(res.outline - res.occD) < 0.06;
     const okStaff   = Math.abs(res.staff - res.occD) < 0.06;
     const okIso     = res.iso < res.skyD + 0.06;
+    const okCaravan = res.caravanDev < 0.06;
     console.log((okOutline?'OK  ':'FAIL'), 'outline adopts occluder depth');
-    console.log((okStaff?'OK  ':'FAIL'), 'staff adopts occluder depth (geodesic)');
+    console.log((okStaff?'OK  ':'FAIL'), 'staff adopts occluder depth (rides the outline component)');
     console.log((okIso?'OK  ':'FAIL'), 'isolated stroke untouched (negative control)');
+    console.log((okCaravan?'OK  ':'FAIL'), 'far-side figures by the cliff NOT lifted (caravan case)');
   }
   await browser.close(); srv.kill();
   process.exit(0);
