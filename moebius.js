@@ -4811,7 +4811,8 @@ function renderNormalizedDepthPass() {
         // the depth pass (and footprint pass) by design — except when the debug
         // sheet explicitly asks to see the plug as geometry.
         if (isMediaLayer && object.material.uniforms.u_isBackgroundLayer &&
-            object.material.uniforms.u_isBackgroundLayer.value && !_depthPassIncludeBG) {
+            object.material.uniforms.u_isBackgroundLayer.value && !_depthPassIncludeBG &&
+            !object.userData.v2Plane) {   // v2 full planes ARE the displayed scene, not a completion behind it
             originalMaterials.set(object, object.material);
             object.material = new THREE.MeshBasicMaterial({ visible: false });
             return;
@@ -7337,6 +7338,9 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         if (m2.uniforms.u_useBandCut) { m2.uniforms.u_useBandCut.value = false; m2.uniforms.u_bandMask.value = null; }
         m2.uniforms.displacementBias.value = (m2.uniforms.displacementBias.value || 0) - 0.003;
         const mesh2 = new THREE.Mesh(g2, m2);
+        mesh2.userData.v2Plane = true;      // depth pass: counts as scene (FG-class), not completion
+        mesh2.userData.v2rank = rank;       // far -> near
+        mesh2.userData.v2tag = tag;
         mesh2.position.copy(srcMesh.position);
         mesh2.rotation.copy(srcMesh.rotation);
         mesh2.scale.copy(srcMesh.scale);
@@ -10140,15 +10144,35 @@ function _wireDebugSheetControls() {
         e.target.value = '';
     });
     document.getElementById('bgLayerToggle')?.addEventListener('change', (e) => {
-        if (bgLayerMesh) bgLayerMesh.visible = e.target.checked;
+        const on = e.target.checked;
+        if (mpiFullMeshes && mpiFullMeshes.length) {
+            // v2: "show BG" toggles the whole plane stack vs the original flat sources
+            for (const m of mpiFullMeshes) m.visible = on;
+            for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = !on;
+            return;
+        }
+        if (bgLayerMesh) bgLayerMesh.visible = on;
+        if (mpiMidMesh) mpiMidMesh.visible = on;
+        if (mpiStripMeshes) for (const sm of mpiStripMeshes) sm.visible = on;
         // The FG stretch cut is only safe while the plug is there to back it —
         // disarm it whenever the BG layer is hidden, re-arm when shown.
         const fu = mediaLayers[0]?.mesh?.material?.uniforms;
-        if (fu && fu.u_useBandCut) fu.u_useBandCut.value = e.target.checked && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
+        if (fu && fu.u_useBandCut) fu.u_useBandCut.value = on && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
     });
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
+        const solo = e.target.checked;
+        if (mpiFullMeshes && mpiFullMeshes.length) {
+            // v2: "BG only" hides the primary's NEAREST bin — peek behind the front
+            let maxR = -1;
+            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank > maxR) maxR = m.userData.v2rank;
+            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank === maxR) m.visible = !solo;
+            return;
+        }
+        // v1: the "FG" is the original mesh AND, under the MPI partition, the
+        // layer meshes that replaced it (hiding only the original did nothing)
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
-        if (L0 && L0.mesh) L0.mesh.visible = !e.target.checked;
+        if (mpiLayers && mpiLayers.length) { for (const Lr of mpiLayers) Lr.mesh.visible = !solo; }
+        else if (L0 && L0.mesh) L0.mesh.visible = !solo;
     });
     const _reachSlider = document.getElementById('fgReachSlider');
     const _reachValue = document.getElementById('fgReachSliderValue');
@@ -14723,33 +14747,36 @@ function setupStaticControlListeners() {
         canvasElement.addEventListener('mousedown', handleCanvasMouseDown);
         canvasElement.addEventListener('mousemove', handleCanvasMouseMove);
         window.addEventListener('mouseup', handleCanvasMouseUp);
-        // MANUAL VIEW DRAG: right-drag (or shift+drag) adds a delta to the
-        // head position — test any pose without moving your head. Grab
-        // metaphor: drag the scene right = camera moves left. Double-click
-        // resets to the tracked pose. Left-drag without shift keeps its
-        // existing behaviours (depth peek etc).
-        canvasElement.addEventListener('contextmenu', (e) => e.preventDefault());
-        canvasElement.addEventListener('pointerdown', (e) => {
-            if (e.button !== 2 && !(e.button === 0 && e.shiftKey)) return;
+        // MANUAL VIEW DRAG: command-drag (mac) / ctrl-drag / shift-drag adds
+        // a delta to the head position — test any pose without moving your
+        // head. Grab metaphor: drag the scene right = camera moves left.
+        // Double-click resets to the tracked pose. Capture-phase listeners on
+        // window so no other canvas handler can swallow the gesture.
+        const _viewDragStart = (e) => {
+            if (e.target !== canvasElement) return;
+            if (!(e.metaKey || e.ctrlKey || e.shiftKey) || e.button !== 0) return;
             _viewDragActive = true; _viewDragLX = e.clientX; _viewDragLY = e.clientY;
-            canvasElement.setPointerCapture(e.pointerId);
-            e.preventDefault();
-        });
-        canvasElement.addEventListener('pointermove', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            console.log('[VIEW] drag start');
+        };
+        const _viewDragMove = (e) => {
             if (!_viewDragActive) return;
             const r = canvasElement.getBoundingClientRect();
             const sx = terrariumWidth / Math.max(1, r.width);   // full canvas drag ~ one frame width of travel
             manualCamDX -= (e.clientX - _viewDragLX) * sx * 2;
             manualCamDY += (e.clientY - _viewDragLY) * sx * 2;  // screen y down = camera up (grab)
             _viewDragLX = e.clientX; _viewDragLY = e.clientY;
-        });
+            e.preventDefault(); e.stopPropagation();
+        };
         const _viewDragEnd = (e) => {
             if (!_viewDragActive) return;
             _viewDragActive = false;
             console.log('[VIEW] manual offset:', manualCamDX.toFixed(3), manualCamDY.toFixed(3));
         };
-        canvasElement.addEventListener('pointerup', _viewDragEnd);
-        canvasElement.addEventListener('pointercancel', _viewDragEnd);
+        window.addEventListener('pointerdown', _viewDragStart, true);
+        window.addEventListener('pointermove', _viewDragMove, true);
+        window.addEventListener('pointerup', _viewDragEnd, true);
+        window.addEventListener('pointercancel', _viewDragEnd, true);
         canvasElement.addEventListener('dblclick', () => {
             manualCamDX = 0; manualCamDY = 0;
             console.log('[VIEW] manual offset reset');
