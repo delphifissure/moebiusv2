@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.2-a49 | wash-only aggressive ink mask', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.3-a50 | v1 scrub uses wash-ink mask; live sheet buffers', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.2-a49 | wash-only aggressive ink mask';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.3-a50 | v1 scrub uses wash-ink mask; live sheet buffers';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -5831,6 +5831,42 @@ function exportDebugContactSheet() {
                 Lx.mesh.visible = Lx.mesh.userData._preDbgVisSrc;
                 delete Lx.mesh.userData._preDbgVisSrc;
             }
+        }
+
+        // A50: in single-pass modes (v1 bake / quick bake) the realtime
+        // multipass never runs, so pingPongRenderTargetB still holds the
+        // LAST multipass frame — typically the load-time default image.
+        // Every colour-derived pane (gap mask, FG-sub contract, scene
+        // color) then shows a stale scene. Refresh the gapped colour pass
+        // here: identical to the realtime capture, with completion meshes
+        // (u_isBackgroundLayer, minus v2 planes) hidden exactly as the
+        // depth pass hides them, so colorTex and depthTex agree.
+        if ((!useInpainting || window._bgQuickBaked) && pingPongRenderTargetB && scene && camera) {
+            const hiddenBG = [];
+            scene.traverse((o) => {
+                if (!o.isMesh || !o.visible) return;
+                const u = o.material && o.material.uniforms;
+                if (u && u.u_isBackgroundLayer && u.u_isBackgroundLayer.value && !o.userData.v2Plane) {
+                    hiddenBG.push(o); o.visible = false;
+                }
+            });
+            const uiChecks = [['u_useDepthGrad','useDepthGradCheck'],['u_useSobel','useSobelCheck'],
+                ['u_useLuma','useLumaCheck'],['u_useChroma','useChromaCheck'],['u_useCrease','useCreaseCheck'],
+                ['u_useCurvature','useCurvatureCheck'],['u_useUVStretch','useUVStretchCheck'],
+                ['u_useGrazingAngle','useGrazingAngleCheck']];
+            for (const [un, id] of uiChecks) setAllLayerUniforms(un, document.getElementById(id)?.checked || false);
+            setAllLayerUniforms('u_useEdgeMask', false);
+            const prevRT = renderer.getRenderTarget();
+            const prevCC = new THREE.Color(); renderer.getClearColor(prevCC);
+            const prevCA = renderer.getClearAlpha();
+            renderer.setClearColor(new THREE.Color(0, 0, 0), 0.0);   // alpha 0 marks holes
+            renderer.setRenderTarget(pingPongRenderTargetB); renderer.clear();
+            renderer.render(scene, camera);
+            renderer.setRenderTarget(prevRT);
+            renderer.setClearColor(prevCC, prevCA);
+            for (const [un] of uiChecks) setAllLayerUniforms(un, false);
+            for (const o of hiddenBG) o.visible = true;
+            console.log('[DBG-SHEET] gapped colour pass refreshed (single-pass mode)');
         }
 
         // --- Refresh the buffers for the CURRENT pose ---
@@ -8662,8 +8698,13 @@ function buildBackgroundLayer() {
                         // inline probes below sit at FIXED 2.5/5px offsets and
                         // land INSIDE wide ink at 1920+ (measured: the whole
                         // outline seeded the wash and baked into the plate).
+                        // A50: the mask texture is LINEAR-filtered and the wash
+                        // may run below source resolution — gate on COVERAGE
+                        // (any ink inside this wash texel's footprint), not on
+                        // a centre hit. Rejection-only: over-rejection costs
+                        // blur, never structure.
                         if (!invalid && u_useInk) {
-                            if (texture2D(tInk, vUv).r > 0.5) invalid = true;
+                            if (texture2D(tInk, vUv).r > 0.25) invalid = true;
                         }
                         if (!invalid) {
                             vec3 cc = texture2D(tColor, vUv).rgb;
@@ -8825,17 +8866,35 @@ function buildBackgroundLayer() {
                           : (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) ? L._strokeMask : null;
             if (washSrc) {
                 const sm = washSrc;
-                const dil = new Uint8Array(PNq);
-                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
-                    const i = y*pw+x;
-                    if (!sm[i] &&
-                        !(x > 0 && sm[i-1]) && !(x < pw-1 && sm[i+1]) &&
-                        !(y > 0 && sm[i-pw]) && !(y < ph-1 && sm[i+pw])) continue;
-                    dil[(ph-1-y)*pw+x] = 255;
+                // A50: the wash runs at CANVAS resolution but the mask is at
+                // SOURCE resolution. Two leaks at 1920+ sources: (a) NEAREST
+                // sampling hits one source texel per wash texel, so half-
+                // covered texels keep ink-tinted colour (dashed stroke
+                // remnants); (b) a fixed 1px dilation refills rejected
+                // strokes from their own bright anti-halo rims — the wash
+                // re-draws the figure as WHITE line art. Fix: dilation
+                // scales with source width so the refill sources beyond the
+                // stroke system, and the texture goes out LINEAR so the
+                // shader can gate on coverage instead of centre-hit.
+                let base = new Uint8Array(PNq);
+                for (let i = 0; i < PNq; i++) if (sm[i]) base[i] = 1;
+                const RD = Math.max(1, Math.round(pw / 1200));
+                for (let p = 0; p < RD; p++) {
+                    const nb = base.slice();
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x;
+                        if (base[i]) continue;
+                        if ((x > 0 && base[i-1]) || (x < pw-1 && base[i+1]) ||
+                            (y > 0 && base[i-pw]) || (y < ph-1 && base[i+pw])) nb[i] = 1;
+                    }
+                    base = nb;
                 }
+                const dil = new Uint8Array(PNq);
+                for (let y = 0; y < ph; y++) { const s = y*pw, d = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) if (base[s+x]) dil[d+x] = 255; }
                 inkDT = new THREE.DataTexture(dil, pw, ph, THREE.RedFormat, THREE.UnsignedByteType);
                 inkDT.needsUpdate = true; inkDT.flipY = false;
-                inkDT.minFilter = THREE.NearestFilter; inkDT.magFilter = THREE.NearestFilter;
+                inkDT.minFilter = THREE.LinearFilter; inkDT.magFilter = THREE.LinearFilter;
                 if ('colorSpace' in inkDT) inkDT.colorSpace = THREE.NoColorSpace;
             }
             // colour wash: the existing one-shot pull-push against the plate depth
@@ -8954,7 +9013,21 @@ function buildBackgroundLayer() {
             }
             if (matQ.uniforms.u_cutSharp) matQ.uniforms.u_cutSharp.value = false;
             armNet(L.mesh.material.uniforms);
-            bgLayerMesh = new THREE.Mesh(L.mesh.geometry, matQ);
+            // A50: the plate must render SOLID, but sharing the FG geometry
+            // AFTER the pre-tear inherits every cliff hole — and lifted ink
+            // strokes are cliffs (two per stroke), so the plate re-drew the
+            // figure's entire line work as THROUGH-HOLES: the "black
+            // outlines" in BG-solo and behind every reveal. All discards
+            // were off (the uniforms said solid); the geometry wasn't.
+            // Give the plate its own copy with the full (untorn) index.
+            let gQ = L.mesh.geometry;
+            if (gQ.userData && gQ.userData._fullIndex) {
+                gQ = L.mesh.geometry.clone();
+                gQ.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex.slice(), 1));
+                gQ.userData = {};
+                console.log('[QUICK-BAKE] plate geometry decoupled from pre-torn FG (full index restored)');
+            }
+            bgLayerMesh = new THREE.Mesh(gQ, matQ);
             bgLayerMesh.position.copy(L.mesh.position);
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
@@ -10913,8 +10986,16 @@ function buildBackgroundLayer() {
                     // pull-push base; the FG mesh keeps drawing the real ink.
                     // BG-interior ink far from any occluder is genuine plate
                     // content and stays.
-                    if (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
-                        const sm = L._strokeMask;
+                    // A50: prefer the aggressive wash-ink mask (strict ∪ contrast-
+                    // scaled) — the strict classifier is blind to dark-on-dark ink,
+                    // which is exactly what survives on the plate near silhouettes.
+                    // Rejection-only semantics hold here too: a false positive just
+                    // recolours one px from the ink-free base (blur, not protrusion),
+                    // and only within scrubReach of removed content.
+                    const smScrub = (L._washInkMask && L._washInkW === pw && L._washInkH === ph) ? L._washInkMask
+                                  : (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) ? L._strokeMask : null;
+                    if (smScrub) {
+                        const sm = smScrub;
                         // reach scales with stroke width (tuned at ~1200px sources)
                         const scrubReach = Math.max(4, Math.round(4 * pw / 1200));
                         const fringePasses = Math.max(1, Math.round(pw / 1200));
@@ -11492,7 +11573,17 @@ function buildBackgroundLayer() {
         }
         // Tiny push back so the BG never z-fights the FG where their depths match.
         mat.uniforms.displacementBias.value = (mat.uniforms.displacementBias.value || 0) - 0.004;
-        bgLayerMesh = new THREE.Mesh(bgExtGeom || L.mesh.geometry, mat);
+        // A50: same solidity contract as the quick plate — never inherit the
+        // FG's pre-torn index (ink-stroke cliffs would punch outline-shaped
+        // holes through the backstop).
+        let gV = bgExtGeom || L.mesh.geometry;
+        if (!bgExtGeom && gV.userData && gV.userData._fullIndex) {
+            gV = L.mesh.geometry.clone();
+            gV.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex.slice(), 1));
+            gV.userData = {};
+            console.log('[RUNG-PLUG] plate geometry decoupled from pre-torn FG (full index restored)');
+        }
+        bgLayerMesh = new THREE.Mesh(gV, mat);
         bgLayerMesh.position.copy(L.mesh.position);
         bgLayerMesh.rotation.copy(L.mesh.rotation);
         bgLayerMesh.scale.copy(L.mesh.scale);
