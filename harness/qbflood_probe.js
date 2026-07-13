@@ -55,13 +55,21 @@ const SRC = process.argv[2] || null;
     const o2 = ((H - 1 - Math.round(500 * sy)) * W + Math.round(512 * sx)) * 4;
     const washRing = [px[o2], px[o2+1], px[o2+2]];
     const ringRed = washRing[0] > 120 && washRing[1] < 80 && washRing[2] < 80;
-    return { plateCenter, plateRing, gMax, washC, red, washRing, ringRed };
+    // A48: outline ink must not survive in the wash — sample the wash along
+    // the synT outline ring + staff; minimum luma must stay above ink level
+    let inkMin = 1;
+    const lumAt = (xs, ys) => { const oo = ((H - 1 - Math.round(ys * sy)) * W + Math.round(xs * sx)) * 4;
+      return (0.2126 * px[oo] + 0.7152 * px[oo+1] + 0.0722 * px[oo+2]) / 255; };
+    for (let yq = 360; yq <= 640; yq += 20) { inkMin = Math.min(inkMin, lumAt(497, yq), lumAt(702, yq)); }
+    for (let yq = 160; yq <= 340; yq += 20) inkMin = Math.min(inkMin, lumAt(600, yq));
+    return { plateCenter, plateRing, gMax, washC, red, washRing, ringRed, inkMin: +inkMin.toFixed(3) };
   });
   const groundAt500 = +((40 + (230 - 40) * (500 - 300) / 500) / 255).toFixed(3);
   console.log((SRC ? 'PRE-FIX ' : 'LIVE    '), JSON.stringify(res), 'groundTruthFloor~' + groundAt500);
   console.log(' reveal ring ~ local ground  :', Math.abs(res.plateRing - groundAt500) < 0.08 ? 'OK' : 'FAIL(' + res.plateRing + ')');
   console.log(' no-cliff contract (gMax<=0.004):', res.gMax <= 0.004 ? 'OK' : 'FAIL(' + res.gMax + ')');
   console.log(' reveal-ring wash clean      :', !res.ringRed ? 'OK' : 'FAIL(red)');
+  console.log(' no outline ink in wash      :', res.inkMin > 0.22 ? 'OK' : 'FAIL(' + res.inkMin + ')');
   await browser.close(); srv.kill();
   process.exit(0);
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });
