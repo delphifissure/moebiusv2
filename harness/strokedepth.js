@@ -57,7 +57,16 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     const orn = dAt(meta.probe.ornament[0], meta.probe.ornament[1]);
     const fpD = dAt(meta.probe.footprint[0], meta.probe.footprint[1]);
     const fpTruth = gd(meta.probe.footprint[1]);
+    // horizon-line control: thin scenery ink crossing behind the staff must
+    // NOT adopt near depth — it must match the surface it lies on (probe the
+    // rows just below the 2px line; the line sits ON the scene's sky step)
+    const hPts = [], hRef = [];
+    for (const [hx0, hx1] of p.horizonXs) for (let x = hx0; x <= hx1; x += 20) {
+      hPts.push([x, p.horizonY]); hRef.push([x, p.horizonY + 4]);
+    }
     return {
+      horizon: +mean(hPts).toFixed(3),
+      horizonRef: +mean(hRef).toFixed(3),
       outline: +mean(outlinePts).toFixed(3),
       staff: +mean(staffPts).toFixed(3),
       iso: +mean(isoPts).toFixed(3),
@@ -75,12 +84,14 @@ const meta = JSON.parse(fs.readFileSync('synth/synT_meta.json', 'utf8'));
     const okCaravan = res.caravanDev < 0.06;
     const okOrn     = Math.abs(res.ornament - res.occD) < 0.06;
     const okFoot    = res.footDev < 0.06;
+    const okHorizon = Math.abs(res.horizon - res.horizonRef) < 0.06;
     console.log((okOutline?'OK  ':'FAIL'), 'outline adopts occluder depth');
-    console.log((okStaff?'OK  ':'FAIL'), 'staff adopts occluder depth (rides the outline component)');
+    console.log((okStaff?'OK  ':'FAIL'), 'staff at native near depth stays (estimator-caught object)');
     console.log((okIso?'OK  ':'FAIL'), 'isolated stroke untouched (negative control)');
     console.log((okCaravan?'OK  ':'FAIL'), 'far-side figures by the cliff NOT lifted (caravan case)');
-    console.log((okOrn?'OK  ':'FAIL'), 'thick ornament lifts (staff passes through)');
+    console.log((okOrn?'OK  ':'FAIL'), 'thick ornament lifts (threaded on near ink)');
     console.log((okFoot?'OK  ':'FAIL'), 'footprint beside outline stays (one-sided brush)');
+    console.log((okHorizon?'OK  ':'FAIL'), 'horizon line behind occluder NOT lifted (anti-staff control)');
   }
   await browser.close(); srv.kill();
   process.exit(0);
