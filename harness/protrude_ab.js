@@ -16,7 +16,7 @@ const FLAGS = (process.argv[4]||'').split(',').filter(Boolean);
     args: ['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist'] });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   const logs = [];
-  page.on('console', m => { const t = m.text(); if (/STROKE-REPAIR/.test(t)) logs.push(t); });
+  page.on('console', m => { const t = m.text(); if (/STROKE-REPAIR|RUNG-PLUG/.test(t)) logs.push(t); });
   await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 60000 });
   for (let t = 0; t < 60; t++) {
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
@@ -25,12 +25,23 @@ const FLAGS = (process.argv[4]||'').split(',').filter(Boolean);
   await page.evaluate((flags) => {
     if (flags.includes('noGC')) window._srNoGC = true;
     if (flags.includes('noScale')) window._srNoScale = true;
+    if (flags.includes('bsVerbose')) window._bsVerbose = true;
     const so = flags.find(f => f.startsWith('scaleOnly:')); if (so) window._srScaleOnly = so.split(':')[1];
     if (flags.includes('noP2')) window._srNoP2 = true;
     if (flags.includes('noCont')) window._srNoCont = true;
     bgMPIMode = true; bgMPIFullPlanes=false; bgPlugMode='directional'; bgValidMode='auto'; buildBackgroundLayer();
   }, FLAGS);
   await page.waitForTimeout(1500);
+  await page.evaluate((flags) => {
+    if (flags.includes('noStrips') && typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes)
+      for (const m of mpiStripMeshes) m.visible = false;
+    if (flags.includes('noSlot0') && typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes)
+      for (const m of mpiStripMeshes) if (m.userData.slot === 0) m.visible = false;
+    if (flags.includes('noSlot1') && typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes)
+      for (const m of mpiStripMeshes) if (m.userData.slot === 1) m.visible = false;
+    if (flags.includes('noPlate') && typeof bgLayerMesh !== 'undefined' && bgLayerMesh)
+      bgLayerMesh.visible = false;
+  }, FLAGS);
   const res = await page.evaluate(async ({X,Y}) => {
     isSweeping = true;
     camera.position.x = X; camera.position.y = Y;

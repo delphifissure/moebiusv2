@@ -8100,6 +8100,160 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     return { meshes: outMeshes, texLayer: texLV, meanD: meanDV, K: KV, tris: totTris };
 }
 
+// A43 CLOSED-LOOP BACKSTOP SWEEP: after the bake, render the same FG-only
+// vs backstop depth passes the protrusion contract measures, at extreme
+// head poses, and back-PROJECT every on-screen violation to the backstop
+// texel that produced it (displacement is along the plane normal, so a
+// texel's rendered position is exactly project(planeXY(uv), z(depth))).
+// Plate culprits flatten to the local floor (same colour, floor parallax
+// — the despeckle philosophy); strip culprits are dropped (alpha 0 +
+// depth fallback). This is enforcement by MEASUREMENT: it catches the
+// classes no texture-space contract can see — parallax separation from
+// the backer, tessellation mismatch at torn edges — for any image.
+function bgBackstopSweep() {
+    try {
+        if (!window._bsRefs || !bgLayerMesh) return;
+        const R = window._bsRefs;
+        const pw = R.pw, ph = R.ph;
+        const cam0 = camera.position.clone();
+        const sweepWas = (typeof isSweeping !== 'undefined') ? isSweeping : false;
+        isSweeping = true;
+        const t0 = Date.now();
+        const grab = () => {
+            renderNormalizedDepthPass();
+            const rt = screenNormalizedDepthTarget, W = rt.width, H = rt.height;
+            const tmpRT = new THREE.WebGLRenderTarget(W, H, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat });
+            const q = postProcessScene.children[0]; const prev = q.material;
+            q.material = copyMaterial; copyMaterial.uniforms.tDiffuse.value = rt.texture;
+            renderer.setRenderTarget(tmpRT); renderer.setViewport(0, 0, W, H); renderer.clear();
+            renderer.render(postProcessScene, postProcessCamera);
+            const px = new Uint8Array(W * H * 4);
+            renderer.readRenderTargetPixels(tmpRT, 0, 0, W, H, px);
+            renderer.setRenderTarget(null); q.material = prev; tmpRT.dispose();
+            return { px, W, H };
+        };
+        const strips = (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) ? mpiStripMeshes.filter(m => m.userData._bs) : [];
+        let fixedP = 0, fixedS = 0;
+        const poses = [[0.123, -0.055], [-0.123, 0.055], [0.16, 0.06], [-0.16, -0.06]];
+        const vec = new THREE.Vector3();
+        for (const [PX, PY] of poses) {
+            camera.position.set(PX, PY, 0.2);
+            render();   // updates the portal frusta + all matrixWorlds
+            if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = false;
+            const fg = grab();
+            if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = true;
+            const midWas = (typeof mpiMidMesh !== 'undefined' && mpiMidMesh) ? mpiMidMesh.visible : null;
+            if (midWas !== null) mpiMidMesh.visible = false;
+            const bs = grab();
+            if (midWas !== null) mpiMidMesh.visible = midWas;
+            if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = false;
+            const W = fg.W, H = fg.H, WH = W * H;
+            // fgMax over r8 (separable), FG-covered only
+            const R8 = 8;
+            const rowM = new Uint8Array(WH), fgMax = new Uint8Array(WH);
+            for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { let m = 0;
+                for (let o = -R8; o <= R8; o++) { const xx = x + o; if (xx < 0 || xx >= W) continue;
+                    const ii = y * W + xx; if (fg.px[ii*4+3] >= 128 && fg.px[ii*4] > m) m = fg.px[ii*4]; }
+                rowM[y * W + x] = m; }
+            for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) { let m = 0;
+                for (let o = -R8; o <= R8; o++) { const yy = y + o; if (yy < 0 || yy >= H) continue;
+                    if (rowM[yy * W + x] > m) m = rowM[yy * W + x]; }
+                fgMax[y * W + x] = m; }
+            const violSet = new Set();
+            let covered = 0;
+            for (let i = 0; i < WH; i++) {
+                if (fg.px[i*4+3] < 128) continue;
+                covered++;
+                if (bs.px[i*4] - fgMax[i] > 2) violSet.add(i);
+            }
+            if (window._bsVerbose) console.log('[RUNG-PLUG] sweep pose ' + PX + ',' + PY +
+                ' cam ' + camera.position.x.toFixed(3) + ',' + camera.position.y.toFixed(3) + ',' + camera.position.z.toFixed(3) +
+                ' covered ' + covered + ' viol ' + violSet.size);
+            if (!violSet.size) continue;
+            // GATHER: inverse-project each violating pixel along the FULL
+            // depth range — every backstop texel that could render at that
+            // pixel at any depth lies on that segment. Guaranteed coverage
+            // (a scatter pass misses texels to rounding). The plane is
+            // frontal, so view-z of any undisplaced vertex is one constant
+            // and the inversion is closed-form per depth sample.
+            const gatherFix = (mesh, kind, ud) => {
+                const gp = mesh.geometry.parameters || (mediaLayers[0].mesh.geometry.parameters);
+                const gw = gp.width, gh = gp.height;
+                const u = mesh.material.uniforms;
+                const P = u.u_portalPlaneDepthNorm ? u.u_portalPlaneDepthNorm.value : 0.5;
+                const VO = u.u_worldOuterVolumeDepth ? u.u_worldOuterVolumeDepth.value : 0;
+                const VI = u.u_worldInnerVolumeDepth ? u.u_worldInnerVolumeDepth.value : 0;
+                const dBias = u.displacementBias ? u.displacementBias.value : 0;
+                const sstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+                const dispOf = (d) => d < P ? -VO * (1 - sstep(0, P, d)) : VI * sstep(P, 1, d);
+                const tw = kind === 'plate' ? pw : ud.PW, th = kind === 'plate' ? ph : ud.PH;
+                const ext = kind === 'plate' ? R.ext : null;
+                const uvW = ext ? ext.EPW : tw, uvH = ext ? ext.EPH : th;
+                const ox = ext ? ext.mx : 0, oy = ext ? ext.my : 0;
+                const MV = mesh.modelViewMatrix.elements;
+                const MVinv = new THREE.Matrix4().copy(mesh.modelViewMatrix).invert().elements;
+                const Zc = MV[14];   // view z of the undisplaced (frontal) plane
+                const pe = camera.projectionMatrix.elements;
+                const P00 = pe[0], P02 = pe[8], P11 = pe[5], P12 = pe[9];
+                let n = 0;
+                const DS = 64;
+                for (const vp of violSet) {
+                    const vx = vp % W, vy = (vp / W) | 0;
+                    const ndcX = (vx + 0.5) / W * 2 - 1, ndcY = (vy + 0.5) / H * 2 - 1;
+                    for (let dq = 0; dq <= DS; dq++) {
+                        const d = dq / DS;
+                        const zv = Zc + dispOf(d) + dBias;
+                        const xv = (-zv * ndcX - P02 * zv) / P00;
+                        const yv = (-zv * ndcY - P12 * zv) / P11;
+                        // undisplaced vertex shares xv,yv with view z = Zc
+                        const lx = MVinv[0] * xv + MVinv[4] * yv + MVinv[8] * Zc + MVinv[12];
+                        const ly = MVinv[1] * xv + MVinv[5] * yv + MVinv[9] * Zc + MVinv[13];
+                        const tx = Math.round((lx / gw + 0.5) * uvW - 0.5) - ox;
+                        const ty = Math.round((0.5 - ly / gh) * uvH - 0.5) - oy;
+                        for (let ry = -1; ry <= 1; ry++) for (let rx = -1; rx <= 1; rx++) {
+                            const x = tx + rx, y = ty + ry;
+                            if (x < 0 || x >= tw || y < 0 || y >= th) continue;
+                            const i = y * tw + x;
+                            if (kind === 'plate') {
+                                const cur = ext ? ext.extDepth[(y + oy) * ext.EPW + (x + ox)] : R.plugDepth[i];
+                                if (cur <= R.floorC[i] + fgTearStep) continue;   // at-floor content is the legitimate reveal filler
+                                const f = R.floorC[i];
+                                R.plugDepth[i] = f;
+                                R.plugFlipped[(ph - 1 - y) * pw + x] = f;
+                                if (ext) {
+                                    ext.extDepth[(y + oy) * ext.EPW + (x + ox)] = f;
+                                    ext.eplug[(ext.EPH - 1 - (y + oy)) * ext.EPW + (x + ox)] = f;
+                                }
+                                n++;
+                            } else {
+                                if (!ud.O[i]) continue;
+                                if (Math.abs(ud.Dd[i] - d) > 0.05) continue;
+                                ud.O[i] = 0;
+                                const fl = (ud.PH - 1 - y) * ud.PW + x;
+                                ud.mD[fl] = ud.frontD ? Math.max(0, ud.frontD[i] - 0.004) : 0;
+                                ud.mF[fl * 4 + 3] = 0;
+                                n++;
+                            }
+                        }
+                    }
+                }
+                return n;
+            };
+                        const markPlate = () => { R.plugDT.needsUpdate = true; if (R.ext) R.ext.eplugDT.needsUpdate = true; };
+            const nP = gatherFix(bgLayerMesh, 'plate', null);
+            if (nP) { fixedP += nP; markPlate(); }
+            for (const sm of strips) {
+                const nS = gatherFix(sm, 'strip', sm.userData._bs);
+                if (nS) { fixedS += nS; sm.userData._bs.dT.needsUpdate = true; sm.userData._bs.fT.needsUpdate = true; }
+            }
+        }
+        camera.position.copy(cam0);
+        isSweeping = sweepWas;
+        if (fixedP + fixedS) console.log('[RUNG-PLUG] backstop sweep: ' + fixedP + ' plate texels flattened, ' + fixedS + ' strip texels dropped across ' + poses.length + ' poses (' + (Date.now() - t0) + 'ms)');
+        else console.log('[RUNG-PLUG] backstop sweep: clean at ' + poses.length + ' poses (' + (Date.now() - t0) + 'ms)');
+    } catch (e) { console.warn('[RUNG-PLUG] backstop sweep failed:', e); }
+}
+
 function buildBackgroundLayer() {
     try {
         const L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
@@ -8914,6 +9068,7 @@ function buildBackgroundLayer() {
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
                 let dispBase = depth;   // display-side base: closing-cleaned copy when stroke dips are found (plug pipeline keeps `depth`)
                 let floorField = null;  // local lower envelope (shared: floor rind + under-sheet)
+                let dropM = null;       // texels of pre-tear-DROPPED FG triangles (backstop contract, A43)
                 let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
                 let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
                 let midRimC = null;     // carried far-side rim pixel index (colour base)
@@ -9800,6 +9955,25 @@ function buildBackgroundLayer() {
                 }
                     }
                 }
+                // A43 NEAR-EDGE EROSION: the plate's identity copy of near
+                // content retreats behind its own cliffs. The FG mesh carries
+                // every near silhouette; the plate is a REVEAL backstop, and
+                // reveals show the far side — but the plate's tessellation is
+                // not torn like the FG's, so its copy of a near surface
+                // extended 1-2px past the torn FG edge and rendered as
+                // nearer-than-everything slivers strung along silhouettes
+                // (measured 21/255 on the 1920px reference). Within E px of a
+                // plate cliff the plate takes the window minimum (the far
+                // side); flat regions and near interiors are untouched.
+                {
+                    const E = Math.max(3, Math.round(3 * pw / 1200));
+                    const pmin = bgSlide2D(plugDepth, pw, ph, E, true);
+                    let nEro = 0;
+                    for (let i = 0; i < PN; i++) {
+                        if (plugDepth[i] - pmin[i] > fgTearStep) { plugDepth[i] = pmin[i]; nEro++; }
+                    }
+                    if (nEro) console.log('[RUNG-PLUG] near-edge erosion: ' + nEro + 'px of plate near content retreated behind its cliffs (E=' + E + ')');
+                }
                 // The plug array is top-row-first (like an <img>). The FG mesh's own
                 // displacementMap is an image/canvas THREE.Texture (flipY=true), and
                 // this BG mesh reuses the FG geometry/UVs — so the plug must present
@@ -9987,6 +10161,7 @@ function buildBackgroundLayer() {
                         const idMap = (vw === pw && vh === ph);   // [PERF] 1 vertex/texel: ti === vi
                         const tiv = new Int32Array(3), dv = new Float32Array(3);
                         let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0;
+                        dropM = new Uint8Array(PN);
                         // [PERF] flat masks instead of per-vertex closure calls / float math
                         const ribMask = new Uint8Array(PN);
                         if (thinM) for (let i = 0; i < PN; i++) if (thinM[i]) ribMask[i] = 1;
@@ -10067,6 +10242,7 @@ function buildBackgroundLayer() {
                                 else keptUnbacked++;   // no sheet holds this cliff's far side: rubber (rare once the under-sheet exists)
                             }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
+                            else { dropM[tiv[0]] = 1; dropM[tiv[1]] = 1; dropM[tiv[2]] = 1; }
                         }
                         g.setIndex(new THREE.BufferAttribute(out.subarray(0, n), 1));
                         _mark('tear-loop');
@@ -10337,6 +10513,12 @@ function buildBackgroundLayer() {
                                 prev = dv; if (k5 === 4) base = dv; if (k5 === 8) back = dv;
                             }
                             let e = ok ? base + ((base - back) / 4) * (dist + 4) : baseD;
+                            // A43: rise bounded by the no-cliff cone. The slope
+                            // comes from an 8px sample; amplified over a 100px+
+                            // extension it is noise, not surface — runaway rises
+                            // rendered as nearer-than-everything strip patches.
+                            const riseCap = baseD + (0.0025 * 851 / pw) * (dist + 4);
+                            if (e > riseCap) e = riseCap;
                             if (e > baseD) e = Math.min(e, Math.max(baseD, depth[i] - STEP7));
                             return Math.max(0, Math.min(1, e));
                         };
@@ -10448,6 +10630,57 @@ function buildBackgroundLayer() {
                         bgMPIStripExport = { pw, ph, slotO, slotD, slotC, depth };
                         console.log('[MPI] per-layer plates (live, v2 additive): ' + claimed7 + 'px claimed, ' + kept7 + 'px kept after prune (' + (Date.now()-t7) + 'ms)');
                 _mark('layer-strips');
+                    }
+                    // A43 BACKSTOP CONTRACT: no backstop texel (plate or strip)
+                    // may carry NEAR content that no surviving FG backs. The FG
+                    // pre-tear DROPS triangles (cliffs, halo edges, soft cores);
+                    // backstop copies of that dropped content then render with
+                    // nothing in front of them and poke past the torn edge as
+                    // nearer-than-everything slivers (measured 21/255 on the
+                    // 1920px reference). Enforcement is by measurement, not by
+                    // per-class theory, so it covers every current and future
+                    // drop class:
+                    //  - PLATE: near content (above the local floor by a tear
+                    //    step) must have surviving FG at similar depth within
+                    //    4px — its own intact identity, or the torn edge's kept
+                    //    rows. Otherwise it FLATTENS to the local floor (the
+                    //    despeckle philosophy: same colour, floor parallax).
+                    //  - STRIPS: a continuation sheet exists to be revealed
+                    //    from BEHIND a nearer occluder; a strip texel with no
+                    //    strictly-nearer surviving FG within parallax reach is
+                    //    an orphan standing in the open and is dropped.
+                    if (dropM) {
+                        const surv = new Float32Array(PN);
+                        for (let i = 0; i < PN; i++) surv[i] = dropM[i] ? 0 : dispDepth[i];
+                        const survN = bgSlide2D(surv, pw, ph, 4, false);
+                        const floorC = floorField || bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
+                        let nPlateFix = 0, nStripFix = 0;
+                        for (let i = 0; i < PN; i++) {
+                            if (plugDepth[i] <= floorC[i] + fgTearStep) continue;
+                            if (survN[i] < plugDepth[i] - fgTearStep) { plugDepth[i] = floorC[i]; nPlateFix++; }
+                        }
+                        if (_stripO && _stripD) {
+                            const RPar = Math.max(12, (bgBandMaxGrowPx | 0) * 2);
+                            const survW = bgSlide2D(surv, pw, ph, RPar, false);
+                            for (let s = 0; s < 2; s++) {
+                                const O = _stripO[s], SD = _stripD[s];
+                                for (let i = 0; i < PN; i++) {
+                                    if (!O[i]) continue;
+                                    if (SD[i] > floorC[i] + fgTearStep && survW[i] < SD[i] + fgTearStep) { O[i] = 0; nStripFix++; }
+                                }
+                            }
+                        }
+                        if (nPlateFix) {
+                            for (let y = 0; y < ph; y++) {
+                                const s = y*pw, d = (ph-1-y)*pw;
+                                for (let x = 0; x < pw; x++) plugFlipped[d+x] = plugDepth[s+x];
+                            }
+                            plugDT.needsUpdate = true;
+                        }
+                        if (nPlateFix + nStripFix) console.log('[RUNG-PLUG] backstop contract: ' + nPlateFix + 'px plate flattened to floor, ' + nStripFix + 'px orphan strip dropped');
+                        // refs for the post-build render sweep (bgBackstopSweep)
+                        window._bsRefs = { plugDepth, plugFlipped, plugDT, floorC, pw, ph };
+                _mark('backstop-contract');
                     }
                     // debug capture (harness probes): which path coloured each pixel
                     const dbgFB = (typeof window !== 'undefined' && window._dbgFillCapture) ? new Uint8Array(PN) : null;
@@ -11003,6 +11236,9 @@ function buildBackgroundLayer() {
                             bgExtGeom = new THREE.PlaneGeometry(gW, gH, segW, segH);
                             // stash for the SD outpaint bundle (top-row-first, extended res)
                             bgExtendExport = { mx, my, pw, ph, EPW, EPH, depth: extDepth, fill: extFill, mask: extMask };
+                            // the backstop sweep must fix the texture the mesh
+                            // actually samples — under extension that is eplugDT
+                            if (window._bsRefs) window._bsRefs.ext = { eplug, eplugDT, extDepth, EPW, EPH, mx, my };
                             _mark('scene-extension');
                         console.log('[RUNG-PLUG] scene extension: +' + mx + 'x' + my + 'px margin -> ' +
                                 EPW + 'x' + EPH + ' (' + (Date.now()-tX) + 'ms)');
@@ -11187,6 +11423,8 @@ function buildBackgroundLayer() {
                     sm2.uniforms.displacementBias.value = (sm2.uniforms.displacementBias.value || 0) - 0.0025;
                     const smesh = new THREE.Mesh(sg, sm2);
                     smesh.userData.slot = s7;   // per-layer SD reimport targets slot textures by this id
+                    // refs for the post-build render sweep (bgBackstopSweep)
+                    smesh.userData._bs = { dT: dT2, fT: fT2, mD: mD2, mF: mF2, O, Dd, frontD, PW, PH };
                     smesh.position.copy(L.mesh.position);
                     smesh.rotation.copy(L.mesh.rotation);
                     smesh.scale.copy(L.mesh.scale);
@@ -11199,6 +11437,12 @@ function buildBackgroundLayer() {
         }
 
         _mark('meshes');
+        // A43: closed-loop backstop verification — render the actual depth
+        // passes at extreme poses and fix any backstop texel that beats the
+        // FG on screen (classes the static contracts cannot see: parallax
+        // separation, tessellation mismatch).
+        if (!window._bsNoSweep) bgBackstopSweep();
+        _mark('backstop-sweep');
         console.log('[PERF] build ' + (Date.now() - _pt0) + 'ms | ' + _perf.join(' | '));
         console.log('[BG-LAYER] built: band + plug depth + baked color, mesh added behind layer 0');
         return true;
