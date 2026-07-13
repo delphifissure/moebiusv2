@@ -7334,11 +7334,31 @@ function applyLiveBake(L) {
             const RB = Math.max(2, Math.round(2 * SR));   // ribbon tap (wire width)
             const lum = new Float32Array(N);
             for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
+            // A44 LOCAL CONTRAST SCALE: on a LOW-KEY painting (the troll
+            // reference: 68% of pixels under the ink cap) a stroke sits on
+            // a dark surround and its absolute contrast is compressed — the
+            // classifier saw 2,180 stroke px in an entire inked painting
+            // and the outline shipped at BG depth untouched. The relative
+            // contrast is still there: scale the gates by the local dynamic
+            // range. Bright regions (range >= 0.5) keep the tuned gates
+            // EXACTLY (cN = 1); compressed regions amplify up to 2.8x. The
+            // window must span stroke + surround, so it scales with stroke
+            // width. The ink cap relaxes to 0.45 only where the scale is
+            // active — a "stroke" must still be absolutely darker than
+            // mid-gray anywhere.
+            const RW = Math.max(12, Math.round(12 * SR));
+            const mnW = bgSlide2D(lum, w, h, RW, true);
+            const mxW = bgSlide2D(lum, w, h, RW, false);
+            const cNf = new Float32Array(N);
+            for (let i = 0; i < N; i++) {
+                const rng = mxW[i] - mnW[i];
+                cNf[i] = (rng >= 0.5 || rng <= 0.18) ? 1 : Math.min(2.8, 0.5 / rng);
+            }
             const stroke = new Uint8Array(N);
             let nStroke = 0;
             for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-                const i = y*w+x, lc = lum[i];
-                if (lc > 0.30) continue;   // true ink, not painterly darks
+                const i = y*w+x, lc = lum[i], cN = cNf[i];
+                if (lc > (cN > 1 ? 0.45 : 0.30)) continue;   // true ink, not painterly darks
                 let bxL = 0, bxR = 0, byU = 0, byD = 0;
                 for (let o = 2; o <= R3; o++) {
                     if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
@@ -7349,8 +7369,8 @@ function applyLiveBake(L) {
                 // ASYMMETRIC gate: some contrast on BOTH sides (keeps
                 // dark-region rims out — their interior side is flat) and
                 // strong contrast on AT LEAST one (the stroke is real).
-                const thinX = (Math.min(bxL, bxR) - lc > 0.08) && (Math.max(bxL, bxR) - lc > 0.25);
-                const thinY = (Math.min(byU, byD) - lc > 0.08) && (Math.max(byU, byD) - lc > 0.25);
+                const thinX = ((Math.min(bxL, bxR) - lc) * cN > 0.08) && ((Math.max(bxL, bxR) - lc) * cN > 0.25);
+                const thinY = ((Math.min(byU, byD) - lc) * cN > 0.08) && ((Math.max(byU, byD) - lc) * cN > 0.25);
                 if (thinX || thinY) { stroke[i] = 1; nStroke++; }
             }
             L._strokeMask = null; L._inkAdopted = null;   // no stale masks on rebuilds
@@ -7403,9 +7423,9 @@ function applyLiveBake(L) {
                 const ribbon = new Uint8Array(N);
                 for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                     const i = y*w+x; if (!stroke[i]) continue;
-                    const lc = lum[i];
-                    const rx = x-RB >= 0 && x+RB < w && Math.min(lum[i-RB], lum[i+RB]) - lc > 0.08 && Math.max(lum[i-RB], lum[i+RB]) - lc > 0.25;
-                    const ry = y-RB >= 0 && y+RB < h && Math.min(lum[i-RB*w], lum[i+RB*w]) - lc > 0.08 && Math.max(lum[i-RB*w], lum[i+RB*w]) - lc > 0.25;
+                    const lc = lum[i], cN = cNf[i];
+                    const rx = x-RB >= 0 && x+RB < w && (Math.min(lum[i-RB], lum[i+RB]) - lc) * cN > 0.08 && (Math.max(lum[i-RB], lum[i+RB]) - lc) * cN > 0.25;
+                    const ry = y-RB >= 0 && y+RB < h && (Math.min(lum[i-RB*w], lum[i+RB*w]) - lc) * cN > 0.08 && (Math.max(lum[i-RB*w], lum[i+RB*w]) - lc) * cN > 0.25;
                     if (rx || ry) ribbon[i] = 1;
                 }
                 const HOPS = 2;
@@ -8613,6 +8633,57 @@ function buildBackgroundLayer() {
             const disocc = new Uint8Array(PNq);
             let nD = 0;
             for (let i = 0; i < PNq; i++) if (dQ[i] - plateQ[i] > 0.02) { disocc[i] = 1; nD++; }
+            // A44 CLIFF GATE: a departure region is a DISOCCLUSION only if
+            // a depth DISCONTINUITY borders it. An attached steep ramp —
+            // ground rising to the frame bottom, a dune face — departs the
+            // cone exactly the same way, but it is a continuous surface: no
+            // head pose reveals anything behind it (and the FG never tears
+            // there — tears need a cliff — so the plate is never shown).
+            // Flagging it told the user the open floor "needs inpainting".
+            // Keep only departure components connected to a genuine cliff.
+            // Quantitative form: a cliff of step DELTA depresses the cone
+            // for exactly DELTA/s px before the envelope recovers, so each
+            // cliff funds a BUDGET of DELTA/s px of surrounding mask; the
+            // max-plus chamfer (the exact dual of the cone's min-plus
+            // sweep) propagates budget - distance, and departure texels no
+            // cliff can fund are attached-ramp relief, not disocclusion.
+            // (A plain connectivity flood leaks: one rock edge keeps a
+            // whole floor-sized departure blob.)
+            {
+                const bud = new Float32Array(PNq);
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                    const i = y*pw+x;
+                    let s2 = 0;
+                    if (x < pw-1) { const a = Math.abs(dQ[i+1] - dQ[i]);  if (a > s2) s2 = a; }
+                    if (y < ph-1) { const a = Math.abs(dQ[i+pw] - dQ[i]); if (a > s2) s2 = a; }
+                    if (s2 > fgTearStep) { const b = s2 / sCone; if (b > bud[i]) bud[i] = b;
+                        if (x < pw-1 && b > bud[i+1]) bud[i+1] = b;
+                        if (y < ph-1 && b > bud[i+pw]) bud[i+pw] = b; }
+                }
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                    const i = y*pw+x; let v = bud[i];
+                    if (x > 0 && bud[i-1] - 1 > v) v = bud[i-1] - 1;
+                    if (y > 0) {
+                        if (bud[i-pw] - 1 > v) v = bud[i-pw] - 1;
+                        if (x > 0 && bud[i-pw-1] - 1.41421356 > v) v = bud[i-pw-1] - 1.41421356;
+                        if (x < pw-1 && bud[i-pw+1] - 1.41421356 > v) v = bud[i-pw+1] - 1.41421356;
+                    }
+                    bud[i] = v;
+                }
+                for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                    const i = y*pw+x; let v = bud[i];
+                    if (x < pw-1 && bud[i+1] - 1 > v) v = bud[i+1] - 1;
+                    if (y < ph-1) {
+                        if (bud[i+pw] - 1 > v) v = bud[i+pw] - 1;
+                        if (x < pw-1 && bud[i+pw+1] - 1.41421356 > v) v = bud[i+pw+1] - 1.41421356;
+                        if (x > 0 && bud[i+pw-1] - 1.41421356 > v) v = bud[i+pw-1] - 1.41421356;
+                    }
+                    bud[i] = v;
+                }
+                let nRamp = 0;
+                for (let i = 0; i < PNq; i++) if (disocc[i] && bud[i] <= 0) { disocc[i] = 0; nRamp++; }
+                if (nRamp) { nD -= nRamp; console.log('[QUICK-BAKE] cliff gate: ' + nRamp + 'px of attached-ramp departure dropped from the SD mask'); }
+            }
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
