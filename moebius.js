@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.5-a52 | quick = baked realtime (FG intact); v2 boundary refinement', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.6-a53 | no pixel lost: cliff tear + per-pixel cap cards', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.5-a52 | quick = baked realtime (FG intact); v2 boundary refinement';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.6-a53 | no pixel lost: cliff tear + per-pixel cap cards';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -6363,6 +6363,7 @@ function exportSDBundle() {
 //      BG layer is already there, at plug depth, with baked color.
 // ============================================================================
 let bgLayerMesh = null;
+let bgCardMesh = null;   // A53: per-pixel cap cards for texels orphaned by the cliff tear (quick mode)
 // Directional plug data stashed at BG-build for the SD-export bundle (native res,
 // top-row-first): the exact gap mask + completed BG depth + coarse fill the
 // diffusion stage should consume. { band:Uint8, plug:Float32, fill:Uint8(RGB), pw, ph }
@@ -9120,57 +9121,97 @@ function buildBackgroundLayer() {
             if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; L.mesh.visible = true; }
             if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
             if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
-            // A52: BAKED REALTIME. The contract for quick mode is the
-            // realtime inpainting, frozen: the FG mesh stays INTACT (every
-            // stroke and small figure renders, exactly like the realtime
-            // path the user prefers), the per-fragment discards + stretch
-            // net open the same holes realtime opens, and the plate is the
-            // pre-baked fill behind them. The A39 geometric pre-tear
-            // deleted geometry the realtime look never deletes (party
-            // strokes, small figures — every 1-3px stroke is all-cliff).
-            // Off by default; window._qbPreTear = true re-enables for A/B.
+            // A53: THE PIXEL IS CONTENT, THE CLIFF IS THE ARTIFACT. The
+            // user's contract: not one source pixel may be lost — what
+            // gets made transparent (and inpainted by the plate) is the
+            // DISPLACEMENT CLIFF itself, never the pixel that causes it.
+            // On a vertex-per-texel grid those were the same operation: a
+            // 1px stroke has no interior triangles, so tearing its cliffs
+            // deleted the stroke (a39-a51's central tension). Decoupled:
+            // (1) tear EVERY cliff-spanning triangle — no membranes, no
+            // taffy, the plate backs the gap; (2) every texel orphaned by
+            // the tear gets its own flat CAP CARD at its own depth — the
+            // pixel rides the parallax exactly where the estimator put it.
+            // window._qbNoPreTear = true reverts to the intact-mesh mode.
             {
                 const g = L.mesh.geometry;
                 if (g && g.index) {
                     if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                    if (!window._qbPreTear) {
+                    if (window._qbNoPreTear) {
                         if (g.index.array.length !== g.userData._fullIndex.length)
                             g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
-                        console.log('[QUICK-BAKE] FG intact (baked-realtime contract; pre-tear off)');
+                        console.log('[QUICK-BAKE] FG intact (pre-tear disabled by flag)');
                     } else {
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
                     const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1;
                     if (vw > 1 && vh > 1) {
-                        // A51: LIFTED INK RIDES THE TEAR. A lifted stroke is a
-                        // cliff pair, so the blanket cliff test tore every
-                        // adopted outline OUT of the FG mesh — the ink didn't
-                        // move to its occluder, it was deleted from the world
-                        // (the a50 solid plate then showed clean wash where
-                        // the line work used to be). Triangles touching
-                        // adopted ink are exempt; the rubber they keep at the
-                        // stroke's far side is cut per-fragment by the
-                        // stretch net under parallax, over the opaque plate.
-                        const ia = (L._inkAdopted && L._inkAdoptedW === pw && L._inkAdoptedH === ph) ? L._inkAdopted : null;
                         const outI = new srcI.constructor(srcI.length);
                         const sxT = (pw - 1) / (vw - 1), syT = (ph - 1) / (vh - 1);
-                        let nI = 0, droppedT = 0, keptInk = 0;
+                        const tiOf = (vi) => Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
+                        const inFull = new Uint8Array(PNq), cov = new Uint8Array(PNq);
+                        let nI = 0, droppedT = 0;
                         for (let t = 0; t < srcI.length; t += 3) {
-                            let mn = 2, mx = -1, onInk = false;
-                            for (let k = 0; k < 3; k++) {
-                                const vi = srcI[t + k];
-                                const ti = Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
-                                const dv = dQ[ti];
-                                if (dv < mn) mn = dv;
-                                if (dv > mx) mx = dv;
-                                if (ia && ia[ti]) onInk = true;
-                            }
-                            if (mx - mn > fgTearStep && !onInk) { droppedT++; continue; }
-                            if (mx - mn > fgTearStep) keptInk++;
+                            const t0i = tiOf(srcI[t]), t1i = tiOf(srcI[t+1]), t2i = tiOf(srcI[t+2]);
+                            inFull[t0i] = 1; inFull[t1i] = 1; inFull[t2i] = 1;
+                            const d0 = dQ[t0i], d1 = dQ[t1i], d2 = dQ[t2i];
+                            let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
+                            let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
+                            if (mx - mn > fgTearStep) { droppedT++; continue; }
+                            cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
                         g.setIndex(new THREE.BufferAttribute(outI.subarray(0, nI), 1));
-                        console.log('[QUICK-BAKE] FG pre-torn: ' + droppedT + ' cliff triangles dropped of ' + (srcI.length / 3) + (keptInk ? ' (' + keptInk + ' kept on adopted ink)' : ''));
+                        // ---- CAP CARDS: no pixel left behind ----
+                        let nOrph = 0;
+                        for (let i = 0; i < PNq; i++) if (inFull[i] && !cov[i]) nOrph++;
+                        if (nOrph) {
+                            const pW = gp.width, pH = gp.height;
+                            const pos = new Float32Array(nOrph * 12), uvs = new Float32Array(nOrph * 8);
+                            const idxC = new Uint32Array(nOrph * 6);
+                            let vp = 0, vu = 0, vix = 0, vb = 0;
+                            for (let i = 0; i < PNq; i++) {
+                                if (!inFull[i] || cov[i]) continue;
+                                const tx = i % pw, ty = (i / pw) | 0;
+                                const x0 = (tx / pw - 0.5) * pW, x1 = ((tx + 1) / pw - 0.5) * pW;
+                                const y0 = (0.5 - ty / ph) * pH, y1 = (0.5 - (ty + 1) / ph) * pH;
+                                // UVs inset toward the texel centre: all four
+                                // corners sample the SAME texel, so the card is
+                                // flat at the pixel's own depth and paints the
+                                // pixel's own colour — a rigid splat, no rubber.
+                                const uc = (tx + 0.5) / pw, vcv = 1 - (ty + 0.5) / ph;
+                                const ex = 0.2 / pw, ey = 0.2 / ph;
+                                pos[vp++] = x0; pos[vp++] = y0; pos[vp++] = 0; uvs[vu++] = uc - ex; uvs[vu++] = vcv + ey;
+                                pos[vp++] = x1; pos[vp++] = y0; pos[vp++] = 0; uvs[vu++] = uc + ex; uvs[vu++] = vcv + ey;
+                                pos[vp++] = x0; pos[vp++] = y1; pos[vp++] = 0; uvs[vu++] = uc - ex; uvs[vu++] = vcv - ey;
+                                pos[vp++] = x1; pos[vp++] = y1; pos[vp++] = 0; uvs[vu++] = uc + ex; uvs[vu++] = vcv - ey;
+                                idxC[vix++] = vb; idxC[vix++] = vb + 2; idxC[vix++] = vb + 1;
+                                idxC[vix++] = vb + 1; idxC[vix++] = vb + 2; idxC[vix++] = vb + 3;
+                                vb += 4;
+                            }
+                            const gC = new THREE.BufferGeometry();
+                            gC.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                            gC.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                            gC.setIndex(new THREE.BufferAttribute(idxC, 1));
+                            const matC = L.mesh.material.clone();
+                            matC.side = THREE.DoubleSide;
+                            if (matC.uniforms.u_useBandCut) { matC.uniforms.u_useBandCut.value = false; matC.uniforms.u_bandMask.value = null; }
+                            if (matC.uniforms.u_bandCutAll) matC.uniforms.u_bandCutAll.value = false;
+                            for (const gk of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                                              'u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle']) {
+                                if (matC.uniforms[gk]) matC.uniforms[gk].value = false;
+                            }
+                            if (matC.uniforms.u_cutSharp) matC.uniforms.u_cutSharp.value = false;
+                            if (matC.uniforms.u_useEdgeMask) matC.uniforms.u_useEdgeMask.value = false;
+                            bgCardMesh = new THREE.Mesh(gC, matC);
+                            bgCardMesh.position.copy(L.mesh.position);
+                            bgCardMesh.rotation.copy(L.mesh.rotation);
+                            bgCardMesh.scale.copy(L.mesh.scale);
+                            bgCardMesh.renderOrder = L.mesh.renderOrder || 0;
+                            scene.add(bgCardMesh);
+                        }
+                        console.log('[QUICK-BAKE] cliff tear: ' + droppedT + ' spanning triangles dropped of ' + (srcI.length / 3) +
+                                    '; ' + nOrph + ' orphaned pixels re-shipped as cap cards (no pixel lost)');
                     }
                     }
                 }
@@ -9477,6 +9518,7 @@ function buildBackgroundLayer() {
             if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
             bgLayerMesh = null;
         }
+        if (bgCardMesh) { scene.remove(bgCardMesh); bgCardMesh.geometry.dispose(); bgCardMesh.material.dispose(); bgCardMesh = null; }
         const mat = L.mesh.material.clone();
         mat.uniforms.map.value = bgColorTarget.texture;
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
