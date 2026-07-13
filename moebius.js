@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.0-a46 | seed-width ink lift + footing cap + backstop sweep', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.1-a48 | quick wash rejects classifier ink', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.0-a46 | seed-width ink lift + footing cap + backstop sweep';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.1-a48 | quick wash rejects classifier ink';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -8526,12 +8526,15 @@ function buildBackgroundLayer() {
             });
             bgColorSeedMaterial = new THREE.ShaderMaterial({
                 uniforms: { tColor: { value: null }, tSrcDepth: { value: null }, tBgDepth: { value: null },
+                            tInk: { value: null }, u_useInk: { value: false },
                             u_texel: { value: new THREE.Vector2() } },
                 vertexShader: vs,
                 fragmentShader: `
                     uniform sampler2D tColor;
                     uniform sampler2D tSrcDepth;
                     uniform sampler2D tBgDepth;
+                    uniform sampler2D tInk;      // CPU stroke-classifier mask (resolution-scaled taps)
+                    uniform bool u_useInk;
                     uniform vec2 u_texel;
                     varying vec2 vUv;
                     void main() {
@@ -8565,9 +8568,15 @@ function buildBackgroundLayer() {
                         // lands at BACKGROUND depth in estimated depth maps,
                         // so no plug-adjacency test can exclude it — the
                         // stroke itself is "background" as far as depth is
-                        // concerned, and it wallpapers into the wash. A
-                        // stroke is a strong local luma minimum; the wash
-                        // refills from its lighter surroundings.
+                        // concerned, and it wallpapers into the wash.
+                        // A48: prefer the CPU classifier's mask when bound —
+                        // its taps scale with the stroke width, while the
+                        // inline probes below sit at FIXED 2.5/5px offsets and
+                        // land INSIDE wide ink at 1920+ (measured: the whole
+                        // outline seeded the wash and baked into the plate).
+                        if (!invalid && u_useInk) {
+                            if (texture2D(tInk, vUv).r > 0.5) invalid = true;
+                        }
                         if (!invalid) {
                             vec3 cc = texture2D(tColor, vUv).rgb;
                             float lc = dot(cc, vec3(0.299, 0.587, 0.114));
@@ -8718,12 +8727,35 @@ function buildBackgroundLayer() {
             maskDT.needsUpdate = true; maskDT.flipY = false;
             maskDT.minFilter = THREE.NearestFilter; maskDT.magFilter = THREE.NearestFilter;
             if ('colorSpace' in maskDT) maskDT.colorSpace = THREE.NoColorSpace;
+            // A48: the wash rejects CLASSIFIER ink, not the fixed-offset luma
+            // probe (whose 2.5/5px taps land inside wide ink at 1920+ — the
+            // outline seeded the wash and baked into the quick plate).
+            // Mask = stroke classifier + 1px fringe, rows flipped like every
+            // DataTexture the quad samples.
+            let inkDT = null;
+            if (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
+                const sm = L._strokeMask;
+                const dil = new Uint8Array(PNq);
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                    const i = y*pw+x;
+                    if (!sm[i] &&
+                        !(x > 0 && sm[i-1]) && !(x < pw-1 && sm[i+1]) &&
+                        !(y > 0 && sm[i-pw]) && !(y < ph-1 && sm[i+pw])) continue;
+                    dil[(ph-1-y)*pw+x] = 255;
+                }
+                inkDT = new THREE.DataTexture(dil, pw, ph, THREE.RedFormat, THREE.UnsignedByteType);
+                inkDT.needsUpdate = true; inkDT.flipY = false;
+                inkDT.minFilter = THREE.NearestFilter; inkDT.magFilter = THREE.NearestFilter;
+                if ('colorSpace' in inkDT) inkDT.colorSpace = THREE.NoColorSpace;
+            }
             // colour wash: the existing one-shot pull-push against the plate depth
             if (pullPyramidTargets.length >= 2 && pullMaterial && pushMaterial) {
                 postProcessQuad.material = bgColorSeedMaterial;
                 bgColorSeedMaterial.uniforms.tColor.value = L.textures.color;
                 bgColorSeedMaterial.uniforms.tSrcDepth.value = L.textures.depth;
                 bgColorSeedMaterial.uniforms.tBgDepth.value = plateDT;
+                bgColorSeedMaterial.uniforms.tInk.value = inkDT;
+                bgColorSeedMaterial.uniforms.u_useInk.value = !!inkDT;
                 bgColorSeedMaterial.uniforms.u_texel.value.copy(texel);
                 renderer.setRenderTarget(pullPyramidTargets[0]);
                 renderer.setViewport(0, 0, pullPyramidTargets[0].width, pullPyramidTargets[0].height);
@@ -9024,6 +9056,7 @@ function buildBackgroundLayer() {
             bgColorSeedMaterial.uniforms.tColor.value = L.textures.color;
             bgColorSeedMaterial.uniforms.tSrcDepth.value = L.textures.depth;
             bgColorSeedMaterial.uniforms.tBgDepth.value = bgDepthTarget.texture;
+            bgColorSeedMaterial.uniforms.u_useInk.value = false;   // quick-path binding must not leak here
             bgColorSeedMaterial.uniforms.u_texel.value.copy(texel);
             renderer.setRenderTarget(pullPyramidTargets[0]);
             renderer.setViewport(0, 0, pullPyramidTargets[0].width, pullPyramidTargets[0].height);
