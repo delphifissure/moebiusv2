@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.6-a53 | no pixel lost: cliff tear + per-pixel cap cards', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.6-a53 | no pixel lost: cliff tear + per-pixel cap cards';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -8867,27 +8867,46 @@ function buildBackgroundLayer() {
                     if (x < pw-1 && plateQ[i+1]  + sCone < v) v = plateQ[i+1]  + sCone;
                     if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
                     plateQ[i] = v; } }
-            // A52 FLOOR SNAP — the party class. Small standing components
-            // whose WHOLE body sits within a whisker of the cone envelope
-            // are estimator noise on attached content (the caravan/party:
-            // ~0.03 proud of the dune). In a bake that noise is fatal:
-            // realtime discards the noisy region and re-fills it every
-            // frame, but a baked scene must RENDER it — the micro-depths
-            // fan into a striation comb under parallax. Re-seat them ON
-            // the envelope in the SHIPPED depth: the figure rides its
-            // ground layer rigidly (outlined at the depth of its layer),
-            // the SD mask stops flagging it, and the wash keeps its ink —
-            // it now IS plate content. The cone floor is slope-tolerant,
-            // so smooth ramps never enter the band; tall content exceeds
-            // the band and frame-scale relief exceeds the area cap.
+            // A54 RIGIDIFY — connectivity is a spatial regularizer, and a
+            // bake that disconnects (tears + cards) loses it: over the
+            // party the estimator's depth is shattered, and per-pixel
+            // honesty renders CONFETTI (a53, measured against the source
+            // by the user). One object is one surface: every SMALL
+            // standing component (proud of the envelope, area-capped)
+            // takes its MEDIAN depth across its whole body — a rigid
+            // decal at its true standoff. No internal cliffs remain, so
+            // nothing tears inside a figure; its silhouette tears against
+            // the plate and its cap-card ring rides WITH it. The glider
+            // keeps flying (median preserves standoff — this is not a
+            // ground snap); big content (astronaut, mountain rings)
+            // exceeds the cap and keeps its native 3D.
             {
-                const bandS = new Uint8Array(PNq);
-                for (let i = 0; i < PNq; i++) { const a = dQ[i] - plateQ[i]; if (a > 0.008 && a <= 0.075) bandS[i] = 1; }
+                let bandS = new Uint8Array(PNq);
+                for (let i = 0; i < PNq; i++) { if (dQ[i] - plateQ[i] > 0.02) bandS[i] = 1; }
+                // MORPHOLOGICAL CLOSING: the estimator shatters a figure
+                // into interleaved standing/ground flecks, so raw
+                // components are dozens of slivers with dozens of medians
+                // — still confetti. Close the mask (dilate+erode) so one
+                // figure fuses into ONE component, ground flecks inside
+                // it included: the whole object takes one standoff.
+                const KC = Math.max(2, Math.round(3 * pw / 1200));
+                for (let p = 0; p < KC; p++) {
+                    const nb = bandS.slice();
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                        if (!bandS[i] && (bandS[i-1] || bandS[i+1] || bandS[i-pw] || bandS[i+pw])) nb[i] = 1; }
+                    bandS = nb;
+                }
+                for (let p = 0; p < KC; p++) {
+                    const nb = bandS.slice();
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                        if (bandS[i] && (!bandS[i-1] || !bandS[i+1] || !bandS[i-pw] || !bandS[i+pw])) nb[i] = 0; }
+                    bandS = nb;
+                }
                 const seenS = new Uint8Array(PNq);
                 const qSnap = new Int32Array(PNq);
-                const ACs = Math.max(600, Math.round(PNq * 0.004));
+                const ACs = Math.max(600, Math.round(PNq * 0.01));
                 const membS = new Int32Array(ACs + 1);
-                let nSnap = 0, nCompSnap = 0;
+                let nRig = 0, nCompRig = 0;
                 for (let s0 = 0; s0 < PNq; s0++) {
                     if (!bandS[s0] || seenS[s0]) continue;
                     let qh = 0, qt = 0, nm = 0;
@@ -8902,13 +8921,25 @@ function buildBackgroundLayer() {
                         if (y > 0    && bandS[i-pw] && !seenS[i-pw]) { seenS[i-pw] = 1; qSnap[qt++] = i-pw; }
                         if (y < ph-1 && bandS[i+pw] && !seenS[i+pw]) { seenS[i+pw] = 1; qSnap[qt++] = i+pw; }
                     }
-                    if (nm > ACs) continue;
-                    for (let m2 = 0; m2 < nm; m2++) { const i = membS[m2]; dQ[i] = plateQ[i]; }
-                    nSnap += nm; nCompSnap++;
+                    if (nm > ACs || nm < 4) continue;
+                    // median of the STANDING subset: interior ground
+                    // flecks join the object at ITS standoff, not the
+                    // object dragged halfway to the ground
+                    const ds = new Float32Array(nm);
+                    let nStand = 0;
+                    for (let m2 = 0; m2 < nm; m2++) { const i = membS[m2];
+                        if (dQ[i] - plateQ[i] > 0.02) ds[nStand++] = dQ[i]; }
+                    if (!nStand) continue;
+                    const dsub = ds.subarray(0, nStand);
+                    dsub.sort();
+                    const med = dsub[nStand >> 1];
+                    for (let m2 = 0; m2 < nm; m2++) { const i = membS[m2];
+                        dQ[i] = med > plateQ[i] ? med : plateQ[i]; }
+                    nRig += nm; nCompRig++;
                 }
-                if (nSnap) {
+                if (nRig) {
                     dqDirty = true;
-                    console.log('[QUICK-BAKE] floor snap: ' + nSnap + 'px in ' + nCompSnap + ' small standing components re-seated on the envelope');
+                    console.log('[QUICK-BAKE] rigidify: ' + nRig + 'px in ' + nCompRig + ' small standing components set to their median standoff');
                 }
             }
             // ship the cleaned depth: the FG mesh must render what the
