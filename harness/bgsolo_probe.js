@@ -10,7 +10,7 @@ const fs = require('fs');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const OUT = process.argv[3] || 'bgsolo.png';
 const SRC = process.argv[4] || null;
-const QUICK = process.argv[5] === 'quick';
+const QUICK = process.argv[5] === 'rt' ? 'rt' : process.argv[5] === 'quick';
 const FGON = process.argv[6] === 'fgon';
 if (process.argv[2] === 'star') {
   fs.copyFileSync('../starwatcher_color.png', 'defaultImgColor.png');
@@ -38,7 +38,8 @@ if (process.argv[2] === 'star') {
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
   const shot = await page.evaluate(async ({ QUICK, FGON }) => {
-    if (QUICK) { bgQuickBake = true; buildBackgroundLayer(); }
+    if (QUICK === 'rt') { /* realtime reference: no bake, multipass inpainting */ }
+    else if (QUICK) { bgQuickBake = true; buildBackgroundLayer(); }
     else {
       bgMPIFullPlanes = false; bgMPIMode = true; bgPlugMode = 'directional'; bgValidMode = 'auto';
       buildBackgroundLayer();
