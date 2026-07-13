@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.12.0-bandcut | band-gated FG stretch cut + directional plug + smooth margin', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.0-a46 | seed-width ink lift + footing cap + backstop sweep', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.12.0-bandcut | band-gated FG stretch cut + directional plug + smooth margin';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.0-a46 | seed-width ink lift + footing cap + backstop sweep';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7329,7 +7329,11 @@ function applyLiveBake(L) {
             // assets keep the tuned behaviour byte-identical.
             const SR = window._srNoScale ? 1 : Math.max(1, w / 1200);
             const R1 = 2;                                 // hug / propagation radius (estimator offset)
-            const R2 = 3;                                 // seed radius (estimator offset)
+            // seed radius: the search for nearer content must cross the
+            // STROKE'S OWN WIDTH (5-8px at 1920) plus the estimator offset —
+            // measured: at R2=3 the reference figure's outline had no seeds
+            // at all (solid red adopt-map) while its ink was classified
+            const R2 = Math.max(3, Math.round(3 * SR));
             const R3 = Math.max(4, Math.round(4 * SR));   // classifier max cross tap (stroke width)
             const lum = new Float32Array(N);
             for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
@@ -7514,7 +7518,7 @@ function applyLiveBake(L) {
                         if (!darkM[s] || comp2[s]) continue;
                         let bh = 0, bt = 0; bfs2[bt++] = s; comp2[s] = 1;
                         const members = [];
-                        let adoptD2 = 0, tooBig = false, dMx2 = 0;
+                        let adoptD2 = 0, tooBig = false, dMx2 = 0, restD = 0;
                         let bx0 = w, bx1 = 0, by0 = h, by1 = 0;
                         let cx0 = w, cx1 = -1, cy0 = h, cy1 = -1;   // bbox of ink-contact members (adopted OR stroke-classified)
                         let blobLum = 0, ringLum = 0, ringCnt = 0;
@@ -7526,6 +7530,17 @@ function applyLiveBake(L) {
                             if (y < by0) by0 = y; if (y > by1) by1 = y;
                             blobLum += lum[i];
                             if (D[i] > dMx2) dMx2 = D[i];
+                            // FOOTING: the nearest content directly beneath the
+                            // blob bounds how high it may lift ("a blob may not
+                            // exceed what it rests on") — a caravan figure rests
+                            // on its ground, an ornament rests on its staff
+                            for (let dy2 = 1; dy2 <= 2; dy2++) {
+                                if (y + dy2 >= h) break;
+                                const jb = i + dy2 * w;
+                                if (darkM[jb]) continue;   // still inside the blob
+                                if (D[jb] > restD) restD = D[jb];
+                                break;
+                            }
                             if (x > 0    && !darkM[i-1]  && !stroke[i-1])  { ringLum += lum[i-1];  ringCnt++; }
                             if (x < w-1  && !darkM[i+1]  && !stroke[i+1])  { ringLum += lum[i+1];  ringCnt++; }
                             if (y > 0    && !darkM[i-w]  && !stroke[i-w])  { ringLum += lum[i-w];  ringCnt++; }
@@ -7561,6 +7576,13 @@ function applyLiveBake(L) {
                             });
                         }
                         if (tooBig || !adoptD2 || cx1 < 0) continue;
+                        // FOOTING CAP: lifting a grounded blob past its own
+                        // footing scatters coherent groups across depth (the
+                        // measured caravan smear: whole figures flying to the
+                        // dune-lip anchor). Resting on near content (ornament
+                        // on staff) leaves the cap inert.
+                        if (restD > 0 && adoptD2 > restD + 2 * GAP) adoptD2 = restD + 2 * GAP;
+                        if (adoptD2 <= 0) continue;
                         // WHOLE-BLOB-FAR: stuck ink sits ENTIRELY at background
                         // depth (that is the defect being repaired). A blob
                         // whose members already reach the adopt depth straddles
