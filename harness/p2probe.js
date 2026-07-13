@@ -33,10 +33,9 @@ if (process.argv[2] === 'synT') {
   });
   console.log('grid', res.w + 'x' + res.h, '| candidates(n>8):', res.cand.length);
   for (const c of res.cand) {
-    const [bx0, by0, bx1, by1] = c.bbox, [ix0, iy0, ix1, iy1] = c.ink;
-    const spanNew = (iy0 < by0 && iy1 > by1) || (ix0 < bx0 && ix1 > bx1);
-    const gap = c.adoptD2 - c.d[1] > 0.05 || c.adoptD2 - c.d[0] > 0.05;
-    console.log(JSON.stringify(c), 'spanNew=' + spanNew, 'ring>=0.15:' + (c.ring >= 0.15), 'wouldLiftDepth:' + gap);
+    const [bx0, by0, bx1, by1] = c.bbox, [cx0, cy0, cx1, cy1] = c.contact;
+    const spanOK = (cy0 <= by0 + 2 && cy1 >= by1 - 2) || (cx0 <= bx0 + 2 && cx1 >= bx1 - 2);
+    console.log(JSON.stringify(c), 'spanOK=' + spanOK, 'ring>=0.15:' + (c.ring >= 0.15), 'farOK:' + (c.adoptD2 - c.dMax > 0.05));
   }
   console.log(logs.join('\n') || '(no logs)');
   await browser.close(); srv.kill();

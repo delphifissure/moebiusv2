@@ -7331,34 +7331,13 @@ function applyLiveBake(L) {
             const R1 = 2;                                 // hug / propagation radius (estimator offset)
             const R2 = 3;                                 // seed radius (estimator offset)
             const R3 = Math.max(4, Math.round(4 * SR));   // classifier max cross tap (stroke width)
-            const RB = Math.max(2, Math.round(2 * SR));   // ribbon tap (wire width)
             const lum = new Float32Array(N);
             for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
-            // A44 LOCAL CONTRAST SCALE: on a LOW-KEY painting (the troll
-            // reference: 68% of pixels under the ink cap) a stroke sits on
-            // a dark surround and its absolute contrast is compressed — the
-            // classifier saw 2,180 stroke px in an entire inked painting
-            // and the outline shipped at BG depth untouched. The relative
-            // contrast is still there: scale the gates by the local dynamic
-            // range. Bright regions (range >= 0.5) keep the tuned gates
-            // EXACTLY (cN = 1); compressed regions amplify up to 2.8x. The
-            // window must span stroke + surround, so it scales with stroke
-            // width. The ink cap relaxes to 0.45 only where the scale is
-            // active — a "stroke" must still be absolutely darker than
-            // mid-gray anywhere.
-            const RW = Math.max(12, Math.round(12 * SR));
-            const mnW = bgSlide2D(lum, w, h, RW, true);
-            const mxW = bgSlide2D(lum, w, h, RW, false);
-            const cNf = new Float32Array(N);
-            for (let i = 0; i < N; i++) {
-                const rng = mxW[i] - mnW[i];
-                cNf[i] = (rng >= 0.5 || rng <= 0.18) ? 1 : Math.min(2.8, 0.5 / rng);
-            }
             const stroke = new Uint8Array(N);
             let nStroke = 0;
             for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-                const i = y*w+x, lc = lum[i], cN = cNf[i];
-                if (lc > (cN > 1 ? 0.45 : 0.30)) continue;   // true ink, not painterly darks
+                const i = y*w+x, lc = lum[i];
+                if (lc > 0.30) continue;   // true ink, not painterly darks
                 let bxL = 0, bxR = 0, byU = 0, byD = 0;
                 for (let o = 2; o <= R3; o++) {
                     if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
@@ -7367,10 +7346,15 @@ function applyLiveBake(L) {
                     if (y+o < h)  { const v = lum[i+o*w]; if (v > byD) byD = v; }
                 }
                 // ASYMMETRIC gate: some contrast on BOTH sides (keeps
-                // dark-region rims out — their interior side is flat) and
+                // dark-region rims out - their interior side is flat) and
                 // strong contrast on AT LEAST one (the stroke is real).
-                const thinX = ((Math.min(bxL, bxR) - lc) * cN > 0.08) && ((Math.max(bxL, bxR) - lc) * cN > 0.25);
-                const thinY = ((Math.min(byU, byD) - lc) * cN > 0.08) && ((Math.max(byU, byD) - lc) * cN > 0.25);
+                // A45: the A44 local-contrast scale is REVERTED - it widened
+                // classification 10x on real paintings and fed the flood
+                // with mis-liftable ink (caravan smear, whole-frame lifts).
+                // Dark-on-dark ink is out of reach for a luma classifier;
+                // that class waits for depth-side evidence, not looser gates.
+                const thinX = (Math.min(bxL, bxR) - lc > 0.08) && (Math.max(bxL, bxR) - lc > 0.25);
+                const thinY = (Math.min(byU, byD) - lc > 0.08) && (Math.max(byU, byD) - lc > 0.25);
                 if (thinX || thinY) { stroke[i] = 1; nStroke++; }
             }
             L._strokeMask = null; L._inkAdopted = null;   // no stale masks on rebuilds
@@ -7420,14 +7404,6 @@ function applyLiveBake(L) {
                     }
                     M2[i] = m;
                 }
-                const ribbon = new Uint8Array(N);
-                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-                    const i = y*w+x; if (!stroke[i]) continue;
-                    const lc = lum[i], cN = cNf[i];
-                    const rx = x-RB >= 0 && x+RB < w && (Math.min(lum[i-RB], lum[i+RB]) - lc) * cN > 0.08 && (Math.max(lum[i-RB], lum[i+RB]) - lc) * cN > 0.25;
-                    const ry = y-RB >= 0 && y+RB < h && (Math.min(lum[i-RB*w], lum[i+RB*w]) - lc) * cN > 0.08 && (Math.max(lum[i-RB*w], lum[i+RB*w]) - lc) * cN > 0.25;
-                    if (rx || ry) ribbon[i] = 1;
-                }
                 const HOPS = 2;
                 const budget = new Uint8Array(N);
                 const queue = [];
@@ -7443,7 +7419,14 @@ function applyLiveBake(L) {
                         const j = yy*w+xx;
                         if (!stroke[j] || a <= D[j] + GAP) continue;
                         const hug = M2[j] >= a - 0.08;
-                        const nb = hug ? HOPS : (ribbon[j] ? budget[i] : budget[i] - 1);
+                        // A45: the ribbon end-to-end carry is REVERTED. It was
+                        // added for the staff, but a HORIZON LINE is also a thin
+                        // ribbon touching a near figure - the wire rule carried
+                        // the figure depth across the whole frame (measured on
+                        // the reference asset: the horizon lifted to the figure).
+                        // An appendage and scenery are indistinguishable to a
+                        // wire rule; adoption stays hug-bounded.
+                        const nb = hug ? HOPS : budget[i] - 1;
                         if (nb <= 0) continue;
                         if (a > adopt[j] + 1e-4 || (a > adopt[j] - 1e-4 && nb > budget[j])) {
                             adopt[j] = a; budget[j] = nb; queue.push(j);
@@ -7516,7 +7499,11 @@ function applyLiveBake(L) {
                 if (repaired && !window._srNoP2) {
                     const darkM = new Uint8Array(N);
                     const p2M = new Uint8Array(N);   // phase-2 lifted texels (continuation seeds ONLY from these)
-                    for (let i = 0; i < N; i++) if (lum[i] < 0.30 && !adoptedM[i]) darkM[i] = 1;
+                    // stuck ink sits ON its local floor; dark ink already
+                    // standing above the floor rides a real near object (a
+                    // native staff) and must not merge into far blobs
+                    const dFloorP2 = bgSlide2D(D, w, h, 4, true);
+                    for (let i = 0; i < N; i++) if (lum[i] < 0.30 && !adoptedM[i] && D[i] <= dFloorP2[i] + GAP) darkM[i] = 1;
                     const comp2 = new Uint8Array(N);
                     const bfs2 = new Int32Array(N);
                     const RM2 = Math.max(1, Math.round(SR));          // blob connectivity radius
@@ -7549,8 +7536,17 @@ function applyLiveBake(L) {
                                 const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                                 const j = yy*w+xx;
                                 if (Math.abs(dx) <= RM2 && Math.abs(dy) <= RM2 && darkM[j] && !comp2[j]) { comp2[j] = 1; bfs2[bt++] = j; }
-                                if (adoptedM[j]) { touchesInk = true; if (D[j] > adoptD2) adoptD2 = D[j]; }
-                                else if (stroke[j]) touchesInk = true;   // span evidence: classified ink counts (a blob orphans its own continuation)
+                                // ANCHOR ink only: lifted ink OR natively-near
+                                // ink (a real staff the estimator caught). The old
+                                // "span evidence" branch counted a stroke's own
+                                // same-depth neighbours as contact, so the contact
+                                // bbox always equalled the blob bbox and the
+                                // through-test was VACUOUS - a horizon line
+                                // touching one lifted outline lifted whole (the
+                                // measured whole-frame horizon lift).
+                                if (adoptedM[j] || (stroke[j] && D[j] > D[i] + GAP)) {
+                                    touchesInk = true; if (D[j] > adoptD2) adoptD2 = D[j];
+                                }
                             }
                             if (touchesInk) {
                                 if (x < cx0) cx0 = x; if (x > cx1) cx1 = x;
@@ -7580,8 +7576,13 @@ function applyLiveBake(L) {
                         // (staff through ornament), not merely brush one edge
                         // (outline beside a footprint) — the contact bbox must
                         // reach BOTH extremes of the blob on some axis.
-                        const spanOK = (cy0 <= by0 + 2 && cy1 >= by1 - 2) ||
-                                       (cx0 <= bx0 + 2 && cx1 >= bx1 - 2);
+                        // A45: anchor ink must reach BOTH extremes of the blob
+                        // on an axis with REAL extent — a 2px-tall horizon line
+                        // "spans" its own thickness trivially, so a degenerate
+                        // axis never counts.
+                        const TOL2 = 2 * Math.max(1, Math.round(SR));
+                        const spanOK = ((by1 - by0 > 3 * TOL2) && cy0 <= by0 + TOL2 && cy1 >= by1 - TOL2) ||
+                                       ((bx1 - bx0 > 3 * TOL2) && cx0 <= bx0 + TOL2 && cx1 >= bx1 - TOL2);
                         if (!spanOK) continue;
                         for (const i of members) {
                             if (adoptD2 > D[i] + GAP) {
