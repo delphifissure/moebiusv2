@@ -7317,6 +7317,21 @@ function applyLiveBake(L) {
         // anywhere along their run are left untouched.
         {
             const N = w * h;
+            // STROKE SCALE (A42): constants split by SEMANTICS. Stroke
+            // WIDTH tracks source resolution (the same brush at 4K covers
+            // 3x the pixels), so width-semantic knobs — classifier cross
+            // taps, ribbon tap, thick-blob connectivity and area cap —
+            // scale with w/1200. The hug/seed/propagation radii encode the
+            // ESTIMATOR's cliff-to-stroke offset, which does NOT scale
+            // with resolution; scaling them let ink adopt across gaps it
+            // never hugs (measured: 21 -> 90/255 plate protrusion at the
+            // glider on the 1920px reference). Clamped at 1: 851-1200px
+            // assets keep the tuned behaviour byte-identical.
+            const SR = window._srNoScale ? 1 : Math.max(1, w / 1200);
+            const R1 = 2;                                 // hug / propagation radius (estimator offset)
+            const R2 = 3;                                 // seed radius (estimator offset)
+            const R3 = Math.max(4, Math.round(4 * SR));   // classifier max cross tap (stroke width)
+            const RB = Math.max(2, Math.round(2 * SR));   // ribbon tap (wire width)
             const lum = new Float32Array(N);
             for (let i = 0; i < N; i++) lum[i] = (0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2]) / 255;
             const stroke = new Uint8Array(N);
@@ -7325,7 +7340,7 @@ function applyLiveBake(L) {
                 const i = y*w+x, lc = lum[i];
                 if (lc > 0.30) continue;   // true ink, not painterly darks
                 let bxL = 0, bxR = 0, byU = 0, byD = 0;
-                for (let o = 2; o <= 4; o++) {
+                for (let o = 2; o <= R3; o++) {
                     if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
                     if (x+o < w)  { const v = lum[i+o];   if (v > bxR) bxR = v; }
                     if (y-o >= 0) { const v = lum[i-o*w]; if (v > byU) byU = v; }
@@ -7338,6 +7353,7 @@ function applyLiveBake(L) {
                 const thinY = (Math.min(byU, byD) - lc > 0.08) && (Math.max(byU, byD) - lc > 0.25);
                 if (thinX || thinY) { stroke[i] = 1; nStroke++; }
             }
+            L._strokeMask = null; L._inkAdopted = null;   // no stale masks on rebuilds
             if (nStroke) {
                 const GAP = 0.05;
                 const D = out.sharpened;
@@ -7348,7 +7364,7 @@ function applyLiveBake(L) {
                 for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                     const i = y*w+x; if (!stroke[i]) continue;
                     let best = 0;
-                    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+                    for (let dy = -R2; dy <= R2; dy++) for (let dx = -R2; dx <= R2; dx++) {
                         if (!dx && !dy) continue;
                         const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                         const j = yy*w+xx;
@@ -7372,11 +7388,11 @@ function applyLiveBake(L) {
                 // which carry adoption end-to-end like a wire. A wide dark
                 // blob (caravan figure, 5px+) has no ribbon texels and drains
                 // the budget within ~6px of its ridge contact.
-                const M2 = new Float32Array(N);   // max non-stroke depth within r<=2 (the hug field)
+                const M2 = new Float32Array(N);   // max non-stroke depth within the hug radius
                 for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                     const i = y*w+x; if (!stroke[i]) continue;
                     let m = 0;
-                    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                    for (let dy = -R1; dy <= R1; dy++) for (let dx = -R1; dx <= R1; dx++) {
                         if (!dx && !dy) continue;
                         const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                         const j = yy*w+xx;
@@ -7388,8 +7404,8 @@ function applyLiveBake(L) {
                 for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                     const i = y*w+x; if (!stroke[i]) continue;
                     const lc = lum[i];
-                    const rx = x-2 >= 0 && x+2 < w && Math.min(lum[i-2], lum[i+2]) - lc > 0.08 && Math.max(lum[i-2], lum[i+2]) - lc > 0.25;
-                    const ry = y-2 >= 0 && y+2 < h && Math.min(lum[i-2*w], lum[i+2*w]) - lc > 0.08 && Math.max(lum[i-2*w], lum[i+2*w]) - lc > 0.25;
+                    const rx = x-RB >= 0 && x+RB < w && Math.min(lum[i-RB], lum[i+RB]) - lc > 0.08 && Math.max(lum[i-RB], lum[i+RB]) - lc > 0.25;
+                    const ry = y-RB >= 0 && y+RB < h && Math.min(lum[i-RB*w], lum[i+RB*w]) - lc > 0.08 && Math.max(lum[i-RB*w], lum[i+RB*w]) - lc > 0.25;
                     if (rx || ry) ribbon[i] = 1;
                 }
                 const HOPS = 2;
@@ -7401,7 +7417,7 @@ function applyLiveBake(L) {
                 let head = 0;
                 while (head < queue.length) {
                     const i = queue[head++]; const x = i%w, y = (i/w)|0; const a = adopt[i];
-                    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                    for (let dy = -R1; dy <= R1; dy++) for (let dx = -R1; dx <= R1; dx++) {
                         if (!dx && !dy) continue;
                         const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                         const j = yy*w+xx;
@@ -7439,7 +7455,8 @@ function applyLiveBake(L) {
                 // OUTER edge.
                 if (repaired && !window._srNoGC) {
                     let closed = 0;
-                    for (let pass = 0; pass < 2; pass++) {
+                    const gcPasses = 2;   // channel width = estimator offset, resolution-independent   // channel width scales with stroke width
+                    for (let pass = 0; pass < gcPasses; pass++) {
                         const lifts = [];
                         for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
                             const i = y*w+x;
@@ -7449,7 +7466,7 @@ function applyLiveBake(L) {
                             else if (du > D[i] + GAP && dd2 > D[i] + GAP) v = Math.min(du, dd2);
                             if (!v) continue;
                             let nearAdopt = false;
-                            for (let dy = -2; dy <= 2 && !nearAdopt; dy++) for (let dx = -2; dx <= 2; dx++) {
+                            for (let dy = -R1; dy <= R1 && !nearAdopt; dy++) for (let dx = -R1; dx <= R1; dx++) {
                                 const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                                 if (adoptedM[yy*w+xx]) { nearAdopt = true; break; }
                             }
@@ -7482,6 +7499,8 @@ function applyLiveBake(L) {
                     for (let i = 0; i < N; i++) if (lum[i] < 0.30 && !adoptedM[i]) darkM[i] = 1;
                     const comp2 = new Uint8Array(N);
                     const bfs2 = new Int32Array(N);
+                    const RM2 = Math.max(1, Math.round(SR));          // blob connectivity radius
+                    const AC2 = Math.round(4000 * SR * SR);           // area cap scales with px density
                     let lifted2 = 0;
                     const p2Cand = window._srCapture ? [] : null;
                     for (let s = 0; s < N; s++) {
@@ -7494,7 +7513,7 @@ function applyLiveBake(L) {
                         let blobLum = 0, ringLum = 0, ringCnt = 0;
                         while (bh < bt) {
                             const i = bfs2[bh++]; members.push(i);
-                            if (members.length > 4000) tooBig = true;
+                            if (members.length > AC2) tooBig = true;
                             const x = i%w, y = (i/w)|0;
                             if (x < bx0) bx0 = x; if (x > bx1) bx1 = x;
                             if (y < by0) by0 = y; if (y > by1) by1 = y;
@@ -7505,11 +7524,11 @@ function applyLiveBake(L) {
                             if (y > 0    && !darkM[i-w]  && !stroke[i-w])  { ringLum += lum[i-w];  ringCnt++; }
                             if (y < h-1  && !darkM[i+w]  && !stroke[i+w])  { ringLum += lum[i+w];  ringCnt++; }
                             let touchesInk = false;
-                            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                            for (let dy = -R1; dy <= R1; dy++) for (let dx = -R1; dx <= R1; dx++) {
                                 if (!dx && !dy) continue;
                                 const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                                 const j = yy*w+xx;
-                                if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && darkM[j] && !comp2[j]) { comp2[j] = 1; bfs2[bt++] = j; }
+                                if (Math.abs(dx) <= RM2 && Math.abs(dy) <= RM2 && darkM[j] && !comp2[j]) { comp2[j] = 1; bfs2[bt++] = j; }
                                 if (adoptedM[j]) { touchesInk = true; if (D[j] > adoptD2) adoptD2 = D[j]; }
                                 else if (stroke[j]) touchesInk = true;   // span evidence: classified ink counts (a blob orphans its own continuation)
                             }
@@ -7565,7 +7584,7 @@ function applyLiveBake(L) {
                         for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
                             const i = y*w+x; if (!stroke[i] || adoptedM[i]) continue;
                             let best3 = 0;
-                            for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+                            for (let dy = -R2; dy <= R2; dy++) for (let dx = -R2; dx <= R2; dx++) {
                                 if (!dx && !dy) continue;
                                 const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                                 const j = yy*w+xx;
@@ -7576,7 +7595,7 @@ function applyLiveBake(L) {
                         let h3 = 0, cont = 0;
                         while (h3 < q3.length) {
                             const i = q3[h3++]; const x = i%w, y = (i/w)|0; const a3 = adopt[i];
-                            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                            for (let dy = -R1; dy <= R1; dy++) for (let dx = -R1; dx <= R1; dx++) {
                                 if (!dx && !dy) continue;
                                 const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
                                 const j = yy*w+xx;
@@ -7591,6 +7610,10 @@ function applyLiveBake(L) {
                         if (cont) console.log('[STROKE-REPAIR] continuation: ' + cont + 'px of orphaned ink re-anchored through lifted blobs');
                     }
                 }
+                // the plate build consumes this too: lifted ink joins the
+                // standing-content set even when its ride is too small/low
+                // for the floor sweep (A42)
+                L._inkAdopted = adoptedM; L._inkAdoptedW = w; L._inkAdoptedH = h;
             }
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
@@ -9539,6 +9562,21 @@ function buildBackgroundLayer() {
                         }
                         console.log('[RUNG-PLUG] standing-content mask: ' + qt + 'px (' + nSeed + ' cliff-seeded)');
                     }
+                    // A42: LIFTED-INK ISLANDS join the standing set. Ink the
+                    // repair anchored to an occluder is FG-class content even
+                    // when its ride is too small or too low for the floor
+                    // sweep (camp objects, sleds, small figures): left in the
+                    // plate it survives as a near-depth squiggle that the
+                    // cone clamp cannot touch (it reads as valid content).
+                    // standM membership hands it to the completion flood /
+                    // floor rind: the plate depth completes under it and the
+                    // fill recolours it — SD sees a clean plate.
+                    if (L._inkAdopted && L._inkAdoptedW === pw && L._inkAdoptedH === ph) {
+                        const ia = L._inkAdopted;
+                        let nInk = 0;
+                        for (let i = 0; i < PN; i++) if (ia[i] && !standM[i] && !band[i]) { standM[i] = 1; nInk++; }
+                        if (nInk) console.log('[RUNG-PLUG] standing-content mask: +' + nInk + 'px lifted-ink islands');
+                    }
                     // UNIFIED COMPLETION FLOOD, nearest-rim-first (review v5).
                     // First-come BFS let FAR-rim fronts (torso->sky/plain) walk
                     // down through low-contrast ground contacts and claim the
@@ -10427,9 +10465,12 @@ function buildBackgroundLayer() {
                     // content and stays.
                     if (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
                         const sm = L._strokeMask;
+                        // reach scales with stroke width (tuned at ~1200px sources)
+                        const scrubReach = Math.max(4, Math.round(4 * pw / 1200));
+                        const fringePasses = Math.max(1, Math.round(pw / 1200));
                         let rem = new Uint8Array(PN);
                         for (let i = 0; i < PN; i++) rem[i] = (band[i] || (underMask && underMask[i])) ? 1 : 0;
-                        for (let p = 0; p < 4; p++) {
+                        for (let p = 0; p < scrubReach; p++) {
                             const nr = rem.slice();
                             for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
                                 if (!rem[i] && (rem[i-1] || rem[i+1] || rem[i-pw] || rem[i+pw])) nr[i] = 1; }
@@ -10437,7 +10478,7 @@ function buildBackgroundLayer() {
                         }
                         let ink = new Uint8Array(PN);
                         for (let i = 0; i < PN; i++) if (sm[i]) ink[i] = 1;
-                        { // dark anti-aliased fringe rides along (1px, still dark)
+                        for (let p = 0; p < fringePasses; p++) { // dark anti-aliased fringe rides along
                             const nf = ink.slice();
                             for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
                                 if (!ink[i] && (ink[i-1] || ink[i+1] || ink[i-pw] || ink[i+pw]) &&
