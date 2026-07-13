@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.1-a48 | quick wash rejects classifier ink', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.2-a49 | wash-only aggressive ink mask', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.1-a48 | quick wash rejects classifier ink';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.2-a49 | wash-only aggressive ink mask';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7362,6 +7362,40 @@ function applyLiveBake(L) {
                 if (thinX || thinY) { stroke[i] = 1; nStroke++; }
             }
             L._strokeMask = null; L._inkAdopted = null;   // no stale masks on rebuilds
+            L._washInkMask = null;
+            // A49 WASH-ONLY INK MASK: the wash rejects ink far more
+            // aggressively than adoption may. A false positive here just
+            // means "fill this pixel from its neighbours" (slightly more
+            // blur) — it can never protrude — so the local-contrast scale
+            // reverted for LIFTING in A45 is safe for REJECTION: dark-on-
+            // dark outlines (the troll) get scrubbed from the wash even
+            // though no depth evidence exists to lift them.
+            {
+                const RWk = Math.max(12, Math.round(12 * SR));
+                const mnK = bgSlide2D(lum, w, h, RWk, true);
+                const mxK = bgSlide2D(lum, w, h, RWk, false);
+                const wMask = new Uint8Array(N);
+                let nW = 0;
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const i = y*w+x, lc = lum[i];
+                    if (stroke[i]) { wMask[i] = 1; nW++; continue; }
+                    const rng = mxK[i] - mnK[i];
+                    const cN = (rng >= 0.5 || rng <= 0.18) ? 1 : Math.min(2.8, 0.5 / rng);
+                    if (cN <= 1 || lc > 0.45) continue;
+                    let bxL = 0, bxR = 0, byU = 0, byD = 0;
+                    for (let o = 2; o <= R3; o++) {
+                        if (x-o >= 0) { const v = lum[i-o];   if (v > bxL) bxL = v; }
+                        if (x+o < w)  { const v = lum[i+o];   if (v > bxR) bxR = v; }
+                        if (y-o >= 0) { const v = lum[i-o*w]; if (v > byU) byU = v; }
+                        if (y+o < h)  { const v = lum[i+o*w]; if (v > byD) byD = v; }
+                    }
+                    const thinX = ((Math.min(bxL, bxR) - lc) * cN > 0.08) && ((Math.max(bxL, bxR) - lc) * cN > 0.25);
+                    const thinY = ((Math.min(byU, byD) - lc) * cN > 0.08) && ((Math.max(byU, byD) - lc) * cN > 0.25);
+                    if (thinX || thinY) { wMask[i] = 1; nW++; }
+                }
+                L._washInkMask = wMask; L._washInkW = w; L._washInkH = h;
+                if (nW) console.log('[STROKE-REPAIR] wash-ink mask: ' + nW + 'px (rejection-only; adoption unaffected)');
+            }
             if (nStroke) {
                 const GAP = 0.05;
                 const D = out.sharpened;
@@ -7764,6 +7798,60 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         const v = dV[i];
         let k2 = 1; while (k2 < KV && v >= cutV[k2]) k2++;
         texLV[i] = k2; sumDk[k2] += v; cntDk[k2]++;
+    }
+    // A49 FOOTING MERGE: quantile bins are per-texel, so a SMALL standing
+    // component 0.03 nearer than the ground it stands on jumps a whole
+    // inter-layer parallax gap whenever a cut lands between them (the
+    // walking party pushed onto the dune layer). A small component whose
+    // depth is within a whisker of its FOOTING (the bin directly below
+    // its bottom edge) rides the footing's layer. Big content (the
+    // figure, the mountain) is excluded by the area cap; genuinely
+    // floating content (birds over sky) is excluded by the depth gate.
+    {
+        const compSeen = new Uint8Array(PN);
+        const qV2 = new Int32Array(PN);
+        const memb = new Int32Array(PN);
+        const ACv = Math.max(400, Math.round(PN * 0.002));
+        let nMerged = 0, nComp = 0;
+        for (let s = 0; s < PN; s++) {
+            if (compSeen[s] || texLV[s] === 0) continue;
+            const k = texLV[s];
+            let qh = 0, qt = 0, nm = 0, sumD = 0;
+            qV2[qt++] = s; compSeen[s] = 1;
+            const below = new Map();   // footing bin -> [count, sumDepth]
+            let tooBigC = false;
+            while (qh < qt) {
+                const i = qV2[qh++];
+                memb[nm++] = i; sumD += dV[i];
+                if (nm > ACv) { tooBigC = true; }
+                const x = i % pw, y = (i / pw) | 0;
+                if (x > 0    && !compSeen[i-1]  && texLV[i-1]  === k) { compSeen[i-1]  = 1; qV2[qt++] = i-1; }
+                if (x < pw-1 && !compSeen[i+1]  && texLV[i+1]  === k) { compSeen[i+1]  = 1; qV2[qt++] = i+1; }
+                if (y > 0    && !compSeen[i-pw] && texLV[i-pw] === k) { compSeen[i-pw] = 1; qV2[qt++] = i-pw; }
+                if (y < ph-1 && !compSeen[i+pw] && texLV[i+pw] === k) { compSeen[i+pw] = 1; qV2[qt++] = i+pw; }
+                if (y < ph-1 && texLV[i+pw] !== k && texLV[i+pw] > 0 && texLV[i+pw] < k) {
+                    const kb = texLV[i+pw];
+                    const e = below.get(kb) || [0, 0];
+                    e[0]++; e[1] += dV[i+pw];
+                    below.set(kb, e);
+                }
+                if (tooBigC && qh >= qt) break;
+            }
+            nComp++;
+            if (tooBigC || !below.size) continue;
+            let kb = 0, bc = 0, bd = 0;
+            for (const [kk, e] of below) if (e[0] > bc) { kb = kk; bc = e[0]; bd = e[1] / e[0]; }
+            const meanC = sumD / nm;
+            if (meanC - bd >= 0.12) continue;   // decisively nearer: it really floats
+            for (let m2 = 0; m2 < nm; m2++) {
+                const i = memb[m2];
+                sumDk[k] -= dV[i]; cntDk[k]--;
+                sumDk[kb] += dV[i]; cntDk[kb]++;
+                texLV[i] = kb;
+            }
+            nMerged += nm;
+        }
+        if (nMerged) console.log('[MPI-V2] footing merge: ' + nMerged + 'px of small standing content re-seated on its ground layer');
     }
     const meanDV = [];
     for (let k2 = 1; k2 <= KV; k2++) meanDV.push(cntDk[k2] ? sumDk[k2]/cntDk[k2] : (cutV[k2-1]+cutV[k2])/2);
@@ -8733,8 +8821,10 @@ function buildBackgroundLayer() {
             // Mask = stroke classifier + 1px fringe, rows flipped like every
             // DataTexture the quad samples.
             let inkDT = null;
-            if (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
-                const sm = L._strokeMask;
+            const washSrc = (L._washInkMask && L._washInkW === pw && L._washInkH === ph) ? L._washInkMask
+                          : (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) ? L._strokeMask : null;
+            if (washSrc) {
+                const sm = washSrc;
                 const dil = new Uint8Array(PNq);
                 for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                     const i = y*pw+x;
