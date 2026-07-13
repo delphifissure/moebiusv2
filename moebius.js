@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.3-a50 | v1 scrub uses wash-ink mask; live sheet buffers', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.4-a51 | ink rides its layer: tear exemption + depth-scoped wash rejection', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.3-a50 | v1 scrub uses wash-ink mask; live sheet buffers';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.4-a51 | ink rides its layer: tear exemption + depth-scoped wash rejection';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -8876,8 +8876,30 @@ function buildBackgroundLayer() {
                 // scales with source width so the refill sources beyond the
                 // stroke system, and the texture goes out LINEAR so the
                 // shader can gate on coverage instead of centre-hit.
+                // A51: INK FOLLOWS ITS LAYER. Rejecting every detected
+                // stroke deleted the WORLD's line work from the plate —
+                // horizon lines, desert plants, far-camp ink live AT plate
+                // depth and have no other surface to render from in a
+                // reveal. Reject only ink that belongs to NEARER-than-plate
+                // content (lifted strokes are themselves nearer; unlifted
+                // plastered outlines hug a nearer body within a stroke-
+                // scaled reach). Ink at plate depth, away from any nearer
+                // content, is plate CONTENT and stays crisp.
+                const RN = Math.max(4, Math.round(4 * pw / 1200));
+                let nearM = new Uint8Array(PNq);
+                for (let i = 0; i < PNq; i++) if (dQ[i] - plateQ[i] > 0.02) nearM[i] = 1;
+                for (let p = 0; p < RN; p++) {
+                    const nb = nearM.slice();
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x;
+                        if (nearM[i]) continue;
+                        if ((x > 0 && nearM[i-1]) || (x < pw-1 && nearM[i+1]) ||
+                            (y > 0 && nearM[i-pw]) || (y < ph-1 && nearM[i+pw])) nb[i] = 1;
+                    }
+                    nearM = nb;
+                }
                 let base = new Uint8Array(PNq);
-                for (let i = 0; i < PNq; i++) if (sm[i]) base[i] = 1;
+                for (let i = 0; i < PNq; i++) if (sm[i] && nearM[i]) base[i] = 1;
                 const RD = Math.max(1, Math.round(pw / 1200));
                 for (let p = 0; p < RD; p++) {
                     const nb = base.slice();
@@ -8963,23 +8985,35 @@ function buildBackgroundLayer() {
                     const gp = g.parameters || {};
                     const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1;
                     if (vw > 1 && vh > 1) {
+                        // A51: LIFTED INK RIDES THE TEAR. A lifted stroke is a
+                        // cliff pair, so the blanket cliff test tore every
+                        // adopted outline OUT of the FG mesh — the ink didn't
+                        // move to its occluder, it was deleted from the world
+                        // (the a50 solid plate then showed clean wash where
+                        // the line work used to be). Triangles touching
+                        // adopted ink are exempt; the rubber they keep at the
+                        // stroke's far side is cut per-fragment by the
+                        // stretch net under parallax, over the opaque plate.
+                        const ia = (L._inkAdopted && L._inkAdoptedW === pw && L._inkAdoptedH === ph) ? L._inkAdopted : null;
                         const outI = new srcI.constructor(srcI.length);
                         const sxT = (pw - 1) / (vw - 1), syT = (ph - 1) / (vh - 1);
-                        let nI = 0, droppedT = 0;
+                        let nI = 0, droppedT = 0, keptInk = 0;
                         for (let t = 0; t < srcI.length; t += 3) {
-                            let mn = 2, mx = -1;
+                            let mn = 2, mx = -1, onInk = false;
                             for (let k = 0; k < 3; k++) {
                                 const vi = srcI[t + k];
                                 const ti = Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
                                 const dv = dQ[ti];
                                 if (dv < mn) mn = dv;
                                 if (dv > mx) mx = dv;
+                                if (ia && ia[ti]) onInk = true;
                             }
-                            if (mx - mn > fgTearStep) { droppedT++; continue; }
+                            if (mx - mn > fgTearStep && !onInk) { droppedT++; continue; }
+                            if (mx - mn > fgTearStep) keptInk++;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
                         g.setIndex(new THREE.BufferAttribute(outI.subarray(0, nI), 1));
-                        console.log('[QUICK-BAKE] FG pre-torn: ' + droppedT + ' cliff triangles dropped of ' + (srcI.length / 3));
+                        console.log('[QUICK-BAKE] FG pre-torn: ' + droppedT + ' cliff triangles dropped of ' + (srcI.length / 3) + (keptInk ? ' (' + keptInk + ' kept on adopted ink)' : ''));
                     }
                 }
             }
@@ -10450,7 +10484,7 @@ function buildBackgroundLayer() {
                         const sx = (pw - 1) / Math.max(1, vw - 1), sy = (ph - 1) / Math.max(1, vh - 1);
                         const idMap = (vw === pw && vh === ph);   // [PERF] 1 vertex/texel: ti === vi
                         const tiv = new Int32Array(3), dv = new Float32Array(3);
-                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0;
+                        let n = 0, dropped = 0, keptThin = 0, keptUnbacked = 0, droppedHalo = 0, droppedCore = 0, droppedMid = 0, keptInk = 0;
                         dropM = new Uint8Array(PN);
                         // [PERF] flat masks instead of per-vertex closure calls / float math
                         const ribMask = new Uint8Array(PN);
@@ -10460,6 +10494,14 @@ function buildBackgroundLayer() {
                         for (let i = 0; i < PN; i++) if (cliffCore[i] &&
                             (Math.abs(plugDepth[i] - cliffFar[i]) <= 2*fgTearStep ||
                              (midBand && midBand[i] && Math.abs(midDepthV[i] - cliffFar[i]) <= 2*fgTearStep))) coreOKMask[i] = 1;
+                        // A51: adopted ink is exempt from every drop rule. A
+                        // lifted stroke is a cliff pair and 1-3px wide — every
+                        // one of its triangles is "boundary", so the ribbon
+                        // rules tore the whole stroke out of the mesh and the
+                        // line work vanished from the world instead of riding
+                        // its occluder. The rubber it keeps at the stroke's
+                        // far side is the stretch net's per-fragment job.
+                        const iaV = (L._inkAdopted && L._inkAdoptedW === pw && L._inkAdoptedH === ph) ? L._inkAdopted : null;
                         for (let t = 0; t < src.length; t += 3) {
                             let mn = 2, mx = -1, nRib = 0, coreOK = false, thinVeto = false, midOK = false;
                             let dmn = 2, dmx = -1, mnTi = -1;
@@ -10531,6 +10573,7 @@ function buildBackgroundLayer() {
                                 else if (bgTearAllRubber) { dropped++; keep = false; }  // A35: mismatched reveal beats a smear — the plate is opaque
                                 else keptUnbacked++;   // no sheet holds this cliff's far side: rubber (rare once the under-sheet exists)
                             }
+                            if (!keep && iaV && (iaV[tiv[0]] || iaV[tiv[1]] || iaV[tiv[2]])) { keep = true; keptInk++; }
                             if (keep) { out[n++] = src[t]; out[n++] = src[t+1]; out[n++] = src[t+2]; }
                             else { dropM[tiv[0]] = 1; dropM[tiv[1]] = 1; dropM[tiv[2]] = 1; }
                         }
@@ -10539,7 +10582,7 @@ function buildBackgroundLayer() {
                         console.log('[RUNG-PLUG] FG pre-torn (far-side match): ' + dropped +
                             ' dropped, ' + droppedHalo + ' halo-edge, ' + droppedCore + ' soft-core, ' + droppedMid + ' under-sheet, ' +
                             keptThin + ' thin-feature kept, ' + keptUnbacked +
-                            ' far-mismatch kept, of ' + (src.length / 3));
+                            ' far-mismatch kept, ' + keptInk + ' kept on adopted ink, of ' + (src.length / 3));
 
                         // ---- MPI SLICE 1: depth-layer partition of the torn FG ----
                         // cleanup from a previous build — UNCONDITIONAL, so a

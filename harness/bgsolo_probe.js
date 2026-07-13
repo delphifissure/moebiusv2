@@ -2,7 +2,8 @@
 // every FG source mesh (the app's "foreground off" toggle), renders at a
 // parallax pose, saves the canvas. Run live vs m_prefix.js to A/B the
 // plate ink scrub. argv[2]='star'|'troll', argv[3]=out png, argv[4]=SRC
-// variant ('' = live moebius.js), argv[5]='quick' for quick bake.
+// variant ('' = live moebius.js), argv[5]='quick' for quick bake,
+// argv[6]='fgon' to keep the FG visible (composed view).
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -10,6 +11,7 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
 const OUT = process.argv[3] || 'bgsolo.png';
 const SRC = process.argv[4] || null;
 const QUICK = process.argv[5] === 'quick';
+const FGON = process.argv[6] === 'fgon';
 if (process.argv[2] === 'star') {
   fs.copyFileSync('../starwatcher_color.png', 'defaultImgColor.png');
   fs.copyFileSync('../starwatcher_depth.png', 'defaultImgDepth.png');
@@ -35,21 +37,21 @@ if (process.argv[2] === 'star') {
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 2000));
   }
-  const shot = await page.evaluate(async (QUICK) => {
+  const shot = await page.evaluate(async ({ QUICK, FGON }) => {
     if (QUICK) { bgQuickBake = true; buildBackgroundLayer(); }
     else {
       bgMPIFullPlanes = false; bgMPIMode = true; bgPlugMode = 'directional'; bgValidMode = 'auto';
       buildBackgroundLayer();
     }
     // "foreground off / bg only": hide every source layer mesh
-    for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = false;
+    if (!FGON) for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = false;
     isSweeping = true;
     await new Promise(r2 => { let n = 0; const tick = () => {
       camera.position.x = 0.064; camera.position.y = 0.065; camera.position.z = 0.2;
       n++; n < 8 ? requestAnimationFrame(tick) : r2(); }; requestAnimationFrame(tick); });
     render();
     return renderer.domElement.toDataURL('image/png');
-  }, QUICK);
+  }, { QUICK, FGON });
   fs.writeFileSync(OUT, Buffer.from(shot.split(',')[1], 'base64'));
   console.log('wrote', OUT);
   await browser.close(); srv.kill();
