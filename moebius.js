@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7235,6 +7235,10 @@ function applyLiveBake(L) {
         const t0 = Date.now();
         L._rawDepth = depth.slice(); L._rawDepthW = w; L._rawDepthH = h; // pre-bake depth for tear decisions
         const out = MoebiusEdgeBake.bakeEdges(depth, cpx, w, h, {});
+        // A55 DIAGNOSTIC: bypass all bake sharpening — display the RAW soft
+        // estimator depth (what realtime uses). Tests whether the bake's
+        // sharpening/ramp-collapse is what shatters small figures.
+        if (window._rawPass) { out.sharpened.set(depth); console.log('[BAKE] RAW passthrough (sharpening bypassed)'); }
         // NEAR-PROTECTION CLAMP (review, v2): the colour-guided weighted
         // median leaks FAR depth into dark/thin NEAR features (staff shaft
         // perforated, hood interior blacked out — far-depth holes inside the
@@ -7243,7 +7247,7 @@ function applyLiveBake(L) {
         // boxMax(raw, 2px) - 0.02) may never end up farther than raw. Ramp
         // pixels (raw below the local max) may snap either way — that is the
         // bake\'s legitimate job.
-        {
+        if (!window._rawPass) {
             const N = w * h, r2 = 2;
             const tmpM = new Float32Array(N), bmax = new Float32Array(N);
             for (let y = 0; y < h; y++) { const row = y * w;
@@ -7729,6 +7733,122 @@ function applyLiveBake(L) {
                 // for the floor sweep (A42)
                 L._inkAdopted = adoptedM; L._inkAdoptedW = w; L._inkAdoptedH = h;
             }
+        }
+        // ===== A55 SEAT-ON-FLOOR: the mis-estimated-figure fix =====
+        // Monocular depth estimators read a small, detailed figure as NEAR
+        // (detail is a proximity cue), so a cluster of mid-ground people
+        // standing on ground at depth ~0.12 arrives at ~0.27 with pixels
+        // smeared 0.09..0.61 (measured on the star party). Baked, that
+        // near-spike-over-far-ground shears into the absurd deep fan the
+        // user flagged; realtime hides it only because its connected mesh
+        // is a spatial low-pass. A standing figure's TRUE depth is the
+        // GROUND it stands on — which we measure reliably. So: seat every
+        // SMALL standing component on its local ground floor, discarding
+        // the hallucinated near value. Runs at the SHARED source, so v1,
+        // quick and v2 all consume corrected depth (v2 then bins the party
+        // into its ground plane; v1's tear sees no cliff). Big genuinely-
+        // near content (the astronaut, mountains) exceeds the area cap and
+        // keeps its native 3D. window._noSeatFloor disables for A/B.
+        // ===== A56 INK-ISLAND SEAT (the party fix, measured) =====
+        // The estimator floats small mid-ground figures to near-depth
+        // (the star party: 0.27 over 0.12 ground, spread 0.52), and NO
+        // depth-domain test can isolate them — the standing mask chains
+        // the party to the mountain into one frame-spanning blob, and
+        // floor/lift do not separate the party from the near hero
+        // (measured a55). But this is INK art: Moebius outlines every
+        // form, and the ink is independent of the broken depth. Segment
+        // by ink instead: label non-ink cells, call the two largest
+        // (desert + sky) the background, and connected-component
+        // everything else into figure ISLANDS. The astronaut is one
+        // 1.4M-px island (kept); each party figure is a ~30k-px island
+        // (seated on its ground floor). This fixes the party at the
+        // SHARED source, so v1, quick and v2 all consume corrected depth.
+        // window._noInkSeat disables for A/B.
+        if (!window._noInkSeat && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
+            const S = out.sharpened, N = w * h;
+            // slope-tolerant cone-erosion floor (ground beneath content)
+            const sCone = 0.0015 * 1920 / w;
+            const floor = S.slice();
+            for (let y = 0; y < h; y++) { const row = y*w;
+                for (let x = 0; x < w; x++) { const i = row+x; let v = floor[i];
+                    if (x > 0 && floor[i-1] + sCone < v) v = floor[i-1] + sCone;
+                    if (y > 0 && floor[i-w] + sCone < v) v = floor[i-w] + sCone;
+                    floor[i] = v; } }
+            for (let y = h-1; y >= 0; y--) { const row = y*w;
+                for (let x = w-1; x >= 0; x--) { const i = row+x; let v = floor[i];
+                    if (x < w-1 && floor[i+1] + sCone < v) v = floor[i+1] + sCone;
+                    if (y < h-1 && floor[i+w] + sCone < v) v = floor[i+w] + sCone;
+                    floor[i] = v; } }
+            // INK = classifier strokes ∪ near-black luma, dilated 1px to
+            // seal hairline gaps in the outline so a figure stays enclosed.
+            let ink = new Uint8Array(N);
+            for (let i = 0; i < N; i++) {
+                if (L._strokeMask[i]) { ink[i] = 1; continue; }
+                const lum = 0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2];
+                if (lum < 55) ink[i] = 1;
+            }
+            { const nb = ink.slice();
+              for (let y = 1; y < h-1; y++) for (let x = 1; x < w-1; x++) { const i = y*w+x;
+                  if (!ink[i] && (ink[i-1]||ink[i+1]||ink[i-w]||ink[i+w])) nb[i] = 1; }
+              ink = nb; }
+            // label non-ink cells; the two largest are desert + sky
+            const lab = new Int32Array(N).fill(-1);
+            const q = new Int32Array(N); const csz = [];
+            let nl = 0;
+            for (let s = 0; s < N; s++) { if (ink[s] || lab[s] >= 0) continue;
+                let qt = 0, qh = 0; q[qt++] = s; lab[s] = nl; let n = 0;
+                while (qh < qt) { const i = q[qh++]; n++; const x = i % w, y = (i/w)|0;
+                    if (x > 0   && !ink[i-1] && lab[i-1] < 0) { lab[i-1]=nl; q[qt++]=i-1; }
+                    if (x < w-1 && !ink[i+1] && lab[i+1] < 0) { lab[i+1]=nl; q[qt++]=i+1; }
+                    if (y > 0   && !ink[i-w] && lab[i-w] < 0) { lab[i-w]=nl; q[qt++]=i-w; }
+                    if (y < h-1 && !ink[i+w] && lab[i+w] < 0) { lab[i+w]=nl; q[qt++]=i+w; } }
+                csz.push(n); nl++; }
+            let g0 = -1, g1 = -1, s0v = -1, s1v = -1;
+            for (let c = 0; c < nl; c++) { if (csz[c] > s0v) { s1v = s0v; g1 = g0; s0v = csz[c]; g0 = c; }
+                else if (csz[c] > s1v) { s1v = csz[c]; g1 = c; } }
+            // figureMask = ink ∪ (a cell that is NOT one of the two big ones)
+            const fig = new Uint8Array(N);
+            for (let i = 0; i < N; i++) { if (ink[i]) fig[i] = 1;
+                else { const l = lab[i]; if (l !== g0 && l !== g1) fig[i] = 1; } }
+            // islands = 8-connected components of figureMask (a figure's
+            // interior detail-cells + its outline fuse into one island)
+            const isl = new Int32Array(N).fill(-1);
+            const CAP = Math.round(N * 0.02);   // >> a party figure, << the astronaut/mountain island
+            const MIN = 64;
+            let nSeat = 0, nIsl = 0, nKeep = 0, biggest = 0;
+            const mem = new Int32Array(N);
+            for (let s = 0; s < N; s++) { if (!fig[s] || isl[s] >= 0) continue;
+                let qt = 0, qh = 0; q[qt++] = s; isl[s] = nIsl; let n = 0, liftSum = 0;
+                let x0 = w, x1 = 0, y0 = h, y1 = 0;
+                while (qh < qt) { const i = q[qh++]; mem[n++] = i; liftSum += (S[i] - floor[i]);
+                    const x = i % w, y = (i/w)|0;
+                    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx; if (fig[j] && isl[j] < 0) { isl[j] = nIsl; q[qt++] = j; } } }
+                nIsl++;
+                if (n > biggest) biggest = n;
+                const meanLift = liftSum / n;
+                if (n < MIN) continue;
+                if (n > CAP) { nKeep++; continue; }             // astronaut, mountain, crystals: keep native
+                // GATE 1 — genuinely proud: a real mislocated figure floats
+                // FAR above its ground (party 0.25); thin scenery ink lying
+                // ON a surface (a horizon line) is only ~0.06 proud and must
+                // stay put. GATE 2 — compact: a figure fills a fair fraction
+                // of its bbox; a thin LINE/wisp (horizon, a wire) fills
+                // almost none, so area/bbox rejects it. Both needed: the
+                // party passes (proud AND compact), scenery lines fail.
+                if (meanLift <= 0.10) continue;
+                const bboxA = (x1 - x0 + 1) * (y1 - y0 + 1);
+                if (n < 0.12 * bboxA) continue;                  // thin line / wisp, not a filled figure
+                // seat the whole figure on its local ground floor — one
+                // coherent flat decal, no spread, no shear, ink kept.
+                for (let m = 0; m < n; m++) { const i = mem[m]; S[i] = floor[i]; }
+                nSeat += n;
+            }
+            if (nSeat || nKeep) console.log('[INK-SEAT] ' + nSeat + 'px of small ink-bounded figure islands seated on ground floor; ' +
+                nKeep + ' large islands kept native (biggest ' + biggest + 'px, cap ' + CAP + ')');
+            L._seatedFloor = true;
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
@@ -8880,7 +9000,7 @@ function buildBackgroundLayer() {
             // keeps flying (median preserves standoff — this is not a
             // ground snap); big content (astronaut, mountain rings)
             // exceeds the cap and keeps its native 3D.
-            {
+            if (window._enableRigidify && !L._seatedFloor) {
                 let bandS = new Uint8Array(PNq);
                 for (let i = 0; i < PNq; i++) { if (dQ[i] - plateQ[i] > 0.02) bandS[i] = 1; }
                 // MORPHOLOGICAL CLOSING: the estimator shatters a figure
@@ -9163,15 +9283,24 @@ function buildBackgroundLayer() {
             // taffy, the plate backs the gap; (2) every texel orphaned by
             // the tear gets its own flat CAP CARD at its own depth — the
             // pixel rides the parallax exactly where the estimator put it.
-            // window._qbNoPreTear = true reverts to the intact-mesh mode.
+            // A56 DECISION: the pre-tear is the DEFAULT again. a55 turned it
+            // off because it shattered the party (a small figure at broken
+            // depth is all-cliff, so tearing its cliffs deletes it); but
+            // that reintroduced the astronaut/staff SILHOUETTE tunnelling
+            // the tear exists to cut. Now that the ink-island seat (a56)
+            // flattens the party onto its ground BEFORE this runs, the party
+            // has no internal cliffs left to shatter — the tear passes over
+            // it — while the hero's genuine silhouette cliffs are cut and no
+            // longer taffy into the background. Best of both. Intact mesh is
+            // opt-in via window._qbNoTear.
             {
                 const g = L.mesh.geometry;
                 if (g && g.index) {
                     if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                    if (window._qbNoPreTear) {
+                    if (window._qbNoTear) {
                         if (g.index.array.length !== g.userData._fullIndex.length)
                             g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
-                        console.log('[QUICK-BAKE] FG intact (pre-tear disabled by flag)');
+                        console.log('[QUICK-BAKE] FG intact connected mesh (pre-tear disabled by flag)');
                     } else {
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
@@ -14770,6 +14899,16 @@ function render() {
             (typeof bgLayerMesh !== 'undefined' && !!bgLayerMesh) ||
             (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes && mpiFullMeshes.length > 0);
         const armUI = (id) => !bakedScene && (document.getElementById(id)?.checked || false);
+        // A55 diagnostic: force the realtime depth-gradient discard ON even
+        // in a baked scene, to test whether it (plus the opaque plate
+        // behind) is what makes realtime's party look acceptable.
+        if (window._qbForceDiscards && bakedScene) {
+            setAllLayerUniforms('u_useDepthGrad', true);
+            setAllLayerUniforms('u_useSobel', false); setAllLayerUniforms('u_useLuma', false);
+            setAllLayerUniforms('u_useChroma', false); setAllLayerUniforms('u_useCrease', false);
+            setAllLayerUniforms('u_useCurvature', false); setAllLayerUniforms('u_useUVStretch', false);
+            setAllLayerUniforms('u_useGrazingAngle', false); setAllLayerUniforms('u_useEdgeMask', false);
+        } else {
         setAllLayerUniforms('u_useDepthGrad', armUI('useDepthGradCheck'));
         setAllLayerUniforms('u_useSobel', armUI('useSobelCheck'));
         setAllLayerUniforms('u_useLuma', armUI('useLumaCheck'));
@@ -14779,6 +14918,7 @@ function render() {
         setAllLayerUniforms('u_useUVStretch', armUI('useUVStretchCheck'));
         setAllLayerUniforms('u_useGrazingAngle', armUI('useGrazingAngleCheck'));
         setAllLayerUniforms('u_useEdgeMask', false);
+        }
 
         renderer.setRenderTarget(null);
         renderer.clear();
