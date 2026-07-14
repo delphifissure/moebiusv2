@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.8-a55 | quick = connected mesh (baked realtime); seat/tear opt-in', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.8-a55 | quick = connected mesh (baked realtime); seat/tear opt-in';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7235,6 +7235,10 @@ function applyLiveBake(L) {
         const t0 = Date.now();
         L._rawDepth = depth.slice(); L._rawDepthW = w; L._rawDepthH = h; // pre-bake depth for tear decisions
         const out = MoebiusEdgeBake.bakeEdges(depth, cpx, w, h, {});
+        // A55 DIAGNOSTIC: bypass all bake sharpening — display the RAW soft
+        // estimator depth (what realtime uses). Tests whether the bake's
+        // sharpening/ramp-collapse is what shatters small figures.
+        if (window._rawPass) { out.sharpened.set(depth); console.log('[BAKE] RAW passthrough (sharpening bypassed)'); }
         // NEAR-PROTECTION CLAMP (review, v2): the colour-guided weighted
         // median leaks FAR depth into dark/thin NEAR features (staff shaft
         // perforated, hood interior blacked out — far-depth holes inside the
@@ -7243,7 +7247,7 @@ function applyLiveBake(L) {
         // boxMax(raw, 2px) - 0.02) may never end up farther than raw. Ramp
         // pixels (raw below the local max) may snap either way — that is the
         // bake\'s legitimate job.
-        {
+        if (!window._rawPass) {
             const N = w * h, r2 = 2;
             const tmpM = new Float32Array(N), bmax = new Float32Array(N);
             for (let y = 0; y < h; y++) { const row = y * w;
@@ -7729,6 +7733,112 @@ function applyLiveBake(L) {
                 // for the floor sweep (A42)
                 L._inkAdopted = adoptedM; L._inkAdoptedW = w; L._inkAdoptedH = h;
             }
+        }
+        // ===== A55 SEAT-ON-FLOOR: the mis-estimated-figure fix =====
+        // Monocular depth estimators read a small, detailed figure as NEAR
+        // (detail is a proximity cue), so a cluster of mid-ground people
+        // standing on ground at depth ~0.12 arrives at ~0.27 with pixels
+        // smeared 0.09..0.61 (measured on the star party). Baked, that
+        // near-spike-over-far-ground shears into the absurd deep fan the
+        // user flagged; realtime hides it only because its connected mesh
+        // is a spatial low-pass. A standing figure's TRUE depth is the
+        // GROUND it stands on — which we measure reliably. So: seat every
+        // SMALL standing component on its local ground floor, discarding
+        // the hallucinated near value. Runs at the SHARED source, so v1,
+        // quick and v2 all consume corrected depth (v2 then bins the party
+        // into its ground plane; v1's tear sees no cliff). Big genuinely-
+        // near content (the astronaut, mountains) exceeds the area cap and
+        // keeps its native 3D. window._noSeatFloor disables for A/B.
+        // A55: seat-on-floor is OPT-IN (window._enableSeat). Measurement
+        // proved it cannot isolate the mislocated party — the party is
+        // trapped inside a single frame-spanning standing blob (24% of the
+        // frame; connectivity chains it to the mountain), so no component
+        // gate reaches it, and floor/lift do not separate it from the
+        // legitimately-near astronaut. Left in, gated, for assets where
+        // small standing content IS separable.
+        if (window._enableSeat) {
+            const S = out.sharpened, N = w * h;
+            // CONE-EROSION floor: a slope-tolerant min-plus chamfer floods
+            // far/low (ground) values inward with a per-px slope budget, so
+            // it reaches UNDER content of any width (a fixed-radius min
+            // cannot — it stays trapped inside a wide figure and reports
+            // the figure's own depth as the floor, the bug that left the
+            // party un-flagged). Slope ~4x the ground's own ramp: the
+            // desert never registers as proud of itself, a figure does.
+            const sCone = 0.0015 * 1920 / w;
+            const floor = S.slice();
+            for (let y = 0; y < h; y++) { const row = y*w;
+                for (let x = 0; x < w; x++) { const i = row+x; let v = floor[i];
+                    if (x > 0 && floor[i-1] + sCone < v) v = floor[i-1] + sCone;
+                    if (y > 0 && floor[i-w] + sCone < v) v = floor[i-w] + sCone;
+                    floor[i] = v; } }
+            for (let y = h-1; y >= 0; y--) { const row = y*w;
+                for (let x = w-1; x >= 0; x--) { const i = row+x; let v = floor[i];
+                    if (x < w-1 && floor[i+1] + sCone < v) v = floor[i+1] + sCone;
+                    if (y < h-1 && floor[i+w] + sCone < v) v = floor[i+w] + sCone;
+                    floor[i] = v; } }
+            // standing = proud of the local ground by more than the ground's
+            // own gentle ramp residual (measured ground std ~0.03)
+            const STAND = 0.05;
+            const stand = new Uint8Array(N);
+            for (let i = 0; i < N; i++) if (S[i] - floor[i] > STAND) stand[i] = 1;
+            // FILL ENCLOSED HOLES: the estimator shatters a figure so some
+            // interior pixels dip below STAND; any non-standing pixel that
+            // cannot reach the frame border through non-standing space is
+            // INSIDE a figure and joins it, so the whole body seats (not a
+            // lace of only-the-proud-pixels).
+            {
+                const outside = new Uint8Array(N);
+                const bq = new Int32Array(N); let bt = 0;
+                for (let x = 0; x < w; x++) { const a = x, b = (h-1)*w+x;
+                    if (!stand[a] && !outside[a]) { outside[a]=1; bq[bt++]=a; }
+                    if (!stand[b] && !outside[b]) { outside[b]=1; bq[bt++]=b; } }
+                for (let y = 0; y < h; y++) { const a = y*w, b = y*w+w-1;
+                    if (!stand[a] && !outside[a]) { outside[a]=1; bq[bt++]=a; }
+                    if (!stand[b] && !outside[b]) { outside[b]=1; bq[bt++]=b; } }
+                let bh = 0;
+                while (bh < bt) { const i = bq[bh++]; const x = i % w, y = (i/w)|0;
+                    if (x > 0   && !stand[i-1] && !outside[i-1]) { outside[i-1]=1; bq[bt++]=i-1; }
+                    if (x < w-1 && !stand[i+1] && !outside[i+1]) { outside[i+1]=1; bq[bt++]=i+1; }
+                    if (y > 0   && !stand[i-w] && !outside[i-w]) { outside[i-w]=1; bq[bt++]=i-w; }
+                    if (y < h-1 && !stand[i+w] && !outside[i+w]) { outside[i+w]=1; bq[bt++]=i+w; }
+                }
+                for (let i = 0; i < N; i++) if (!stand[i] && !outside[i]) stand[i] = 1;
+            }
+            // connected components (4-neigh), NO morphological closing (it
+            // fused the whole frame into one blob in a54); a figure's own
+            // interior ground-flecks are included by the flood since they
+            // sit inside the standing ring.
+            const seen = new Uint8Array(N);
+            const stack = new Int32Array(N);
+            const CAP = Math.round(N * 0.02);   // > any party member/cluster, << the astronaut
+            const MIN = 24;
+            let nSeat = 0, nComp = 0, nSkipBig = 0, biggest = 0;
+            for (let s0 = 0; s0 < N; s0++) {
+                if (!stand[s0] || seen[s0]) continue;
+                let sp = 0, nm = 0; stack[sp++] = s0; seen[s0] = 1;
+                const members = [];
+                while (sp > 0) {
+                    const i = stack[--sp]; members.push(i); nm++;
+                    const x = i % w, y = (i / w) | 0;
+                    if (x > 0   && stand[i-1] && !seen[i-1]) { seen[i-1]=1; stack[sp++]=i-1; }
+                    if (x < w-1 && stand[i+1] && !seen[i+1]) { seen[i+1]=1; stack[sp++]=i+1; }
+                    if (y > 0   && stand[i-w] && !seen[i-w]) { seen[i-w]=1; stack[sp++]=i-w; }
+                    if (y < h-1 && stand[i+w] && !seen[i+w]) { seen[i+w]=1; stack[sp++]=i+w; }
+                }
+                if (nm > biggest) biggest = nm;
+                if (nm < MIN) continue;
+                if (nm > CAP) { nSkipBig++; continue; }   // genuine near object: keep native depth
+                // seat the whole component (figure body + interior flecks)
+                // on its local ground floor — a flat decal that rides the
+                // ground plane, coherent, no protrusion, no shear.
+                for (const i of members) S[i] = floor[i];
+                nSeat += nm; nComp++;
+            }
+            if (nSeat || nSkipBig) console.log('[SEAT-FLOOR] ' + nSeat + 'px in ' + nComp +
+                ' small standing components seated on their ground floor; ' + nSkipBig +
+                ' large components kept native (biggest ' + biggest + 'px, cap ' + CAP + ')');
+            L._seatedFloor = true;
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
@@ -8880,7 +8990,7 @@ function buildBackgroundLayer() {
             // keeps flying (median preserves standoff — this is not a
             // ground snap); big content (astronaut, mountain rings)
             // exceeds the cap and keeps its native 3D.
-            {
+            if (window._enableRigidify && !L._seatedFloor) {
                 let bandS = new Uint8Array(PNq);
                 for (let i = 0; i < PNq; i++) { if (dQ[i] - plateQ[i] > 0.02) bandS[i] = 1; }
                 // MORPHOLOGICAL CLOSING: the estimator shatters a figure
@@ -9163,15 +9273,23 @@ function buildBackgroundLayer() {
             // taffy, the plate backs the gap; (2) every texel orphaned by
             // the tear gets its own flat CAP CARD at its own depth — the
             // pixel rides the parallax exactly where the estimator put it.
-            // window._qbNoPreTear = true reverts to the intact-mesh mode.
+            // A55 DECISION (measured): realtime looks good on the party
+            // because its mesh is CONNECTED — the connected grid is a
+            // spatial low-pass that turns the estimator's depth noise into
+            // an invisible bump instead of a shattered fan. The a53
+            // tear+cap-cards default DISCONNECTED it, and every 1-3px-cliff
+            // figure shattered into cards at its (noisy) per-pixel depth.
+            // So the DEFAULT reverts to the intact connected mesh (= baked
+            // realtime); tear+cards is opt-in via window._qbPreTear for the
+            // rare asset where geometry tearing is genuinely wanted.
             {
                 const g = L.mesh.geometry;
                 if (g && g.index) {
                     if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                    if (window._qbNoPreTear) {
+                    if (!window._qbPreTear) {
                         if (g.index.array.length !== g.userData._fullIndex.length)
                             g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
-                        console.log('[QUICK-BAKE] FG intact (pre-tear disabled by flag)');
+                        console.log('[QUICK-BAKE] FG intact connected mesh (baked-realtime default)');
                     } else {
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
@@ -14770,6 +14888,16 @@ function render() {
             (typeof bgLayerMesh !== 'undefined' && !!bgLayerMesh) ||
             (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes && mpiFullMeshes.length > 0);
         const armUI = (id) => !bakedScene && (document.getElementById(id)?.checked || false);
+        // A55 diagnostic: force the realtime depth-gradient discard ON even
+        // in a baked scene, to test whether it (plus the opaque plate
+        // behind) is what makes realtime's party look acceptable.
+        if (window._qbForceDiscards && bakedScene) {
+            setAllLayerUniforms('u_useDepthGrad', true);
+            setAllLayerUniforms('u_useSobel', false); setAllLayerUniforms('u_useLuma', false);
+            setAllLayerUniforms('u_useChroma', false); setAllLayerUniforms('u_useCrease', false);
+            setAllLayerUniforms('u_useCurvature', false); setAllLayerUniforms('u_useUVStretch', false);
+            setAllLayerUniforms('u_useGrazingAngle', false); setAllLayerUniforms('u_useEdgeMask', false);
+        } else {
         setAllLayerUniforms('u_useDepthGrad', armUI('useDepthGradCheck'));
         setAllLayerUniforms('u_useSobel', armUI('useSobelCheck'));
         setAllLayerUniforms('u_useLuma', armUI('useLumaCheck'));
@@ -14779,6 +14907,7 @@ function render() {
         setAllLayerUniforms('u_useUVStretch', armUI('useUVStretchCheck'));
         setAllLayerUniforms('u_useGrazingAngle', armUI('useGrazingAngleCheck'));
         setAllLayerUniforms('u_useEdgeMask', false);
+        }
 
         renderer.setRenderTarget(null);
         renderer.clear();
