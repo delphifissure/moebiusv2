@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.8-a55 | quick = connected mesh (baked realtime); seat/tear opt-in', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.8-a55 | quick = connected mesh (baked realtime); seat/tear opt-in';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7749,22 +7749,24 @@ function applyLiveBake(L) {
         // into its ground plane; v1's tear sees no cliff). Big genuinely-
         // near content (the astronaut, mountains) exceeds the area cap and
         // keeps its native 3D. window._noSeatFloor disables for A/B.
-        // A55: seat-on-floor is OPT-IN (window._enableSeat). Measurement
-        // proved it cannot isolate the mislocated party — the party is
-        // trapped inside a single frame-spanning standing blob (24% of the
-        // frame; connectivity chains it to the mountain), so no component
-        // gate reaches it, and floor/lift do not separate it from the
-        // legitimately-near astronaut. Left in, gated, for assets where
-        // small standing content IS separable.
-        if (window._enableSeat) {
+        // ===== A56 INK-ISLAND SEAT (the party fix, measured) =====
+        // The estimator floats small mid-ground figures to near-depth
+        // (the star party: 0.27 over 0.12 ground, spread 0.52), and NO
+        // depth-domain test can isolate them — the standing mask chains
+        // the party to the mountain into one frame-spanning blob, and
+        // floor/lift do not separate the party from the near hero
+        // (measured a55). But this is INK art: Moebius outlines every
+        // form, and the ink is independent of the broken depth. Segment
+        // by ink instead: label non-ink cells, call the two largest
+        // (desert + sky) the background, and connected-component
+        // everything else into figure ISLANDS. The astronaut is one
+        // 1.4M-px island (kept); each party figure is a ~30k-px island
+        // (seated on its ground floor). This fixes the party at the
+        // SHARED source, so v1, quick and v2 all consume corrected depth.
+        // window._noInkSeat disables for A/B.
+        if (!window._noInkSeat && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
             const S = out.sharpened, N = w * h;
-            // CONE-EROSION floor: a slope-tolerant min-plus chamfer floods
-            // far/low (ground) values inward with a per-px slope budget, so
-            // it reaches UNDER content of any width (a fixed-radius min
-            // cannot — it stays trapped inside a wide figure and reports
-            // the figure's own depth as the floor, the bug that left the
-            // party un-flagged). Slope ~4x the ground's own ramp: the
-            // desert never registers as proud of itself, a figure does.
+            // slope-tolerant cone-erosion floor (ground beneath content)
             const sCone = 0.0015 * 1920 / w;
             const floor = S.slice();
             for (let y = 0; y < h; y++) { const row = y*w;
@@ -7777,67 +7779,75 @@ function applyLiveBake(L) {
                     if (x < w-1 && floor[i+1] + sCone < v) v = floor[i+1] + sCone;
                     if (y < h-1 && floor[i+w] + sCone < v) v = floor[i+w] + sCone;
                     floor[i] = v; } }
-            // standing = proud of the local ground by more than the ground's
-            // own gentle ramp residual (measured ground std ~0.03)
-            const STAND = 0.05;
-            const stand = new Uint8Array(N);
-            for (let i = 0; i < N; i++) if (S[i] - floor[i] > STAND) stand[i] = 1;
-            // FILL ENCLOSED HOLES: the estimator shatters a figure so some
-            // interior pixels dip below STAND; any non-standing pixel that
-            // cannot reach the frame border through non-standing space is
-            // INSIDE a figure and joins it, so the whole body seats (not a
-            // lace of only-the-proud-pixels).
-            {
-                const outside = new Uint8Array(N);
-                const bq = new Int32Array(N); let bt = 0;
-                for (let x = 0; x < w; x++) { const a = x, b = (h-1)*w+x;
-                    if (!stand[a] && !outside[a]) { outside[a]=1; bq[bt++]=a; }
-                    if (!stand[b] && !outside[b]) { outside[b]=1; bq[bt++]=b; } }
-                for (let y = 0; y < h; y++) { const a = y*w, b = y*w+w-1;
-                    if (!stand[a] && !outside[a]) { outside[a]=1; bq[bt++]=a; }
-                    if (!stand[b] && !outside[b]) { outside[b]=1; bq[bt++]=b; } }
-                let bh = 0;
-                while (bh < bt) { const i = bq[bh++]; const x = i % w, y = (i/w)|0;
-                    if (x > 0   && !stand[i-1] && !outside[i-1]) { outside[i-1]=1; bq[bt++]=i-1; }
-                    if (x < w-1 && !stand[i+1] && !outside[i+1]) { outside[i+1]=1; bq[bt++]=i+1; }
-                    if (y > 0   && !stand[i-w] && !outside[i-w]) { outside[i-w]=1; bq[bt++]=i-w; }
-                    if (y < h-1 && !stand[i+w] && !outside[i+w]) { outside[i+w]=1; bq[bt++]=i+w; }
-                }
-                for (let i = 0; i < N; i++) if (!stand[i] && !outside[i]) stand[i] = 1;
+            // INK = classifier strokes ∪ near-black luma, dilated 1px to
+            // seal hairline gaps in the outline so a figure stays enclosed.
+            let ink = new Uint8Array(N);
+            for (let i = 0; i < N; i++) {
+                if (L._strokeMask[i]) { ink[i] = 1; continue; }
+                const lum = 0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2];
+                if (lum < 55) ink[i] = 1;
             }
-            // connected components (4-neigh), NO morphological closing (it
-            // fused the whole frame into one blob in a54); a figure's own
-            // interior ground-flecks are included by the flood since they
-            // sit inside the standing ring.
-            const seen = new Uint8Array(N);
-            const stack = new Int32Array(N);
-            const CAP = Math.round(N * 0.02);   // > any party member/cluster, << the astronaut
-            const MIN = 24;
-            let nSeat = 0, nComp = 0, nSkipBig = 0, biggest = 0;
-            for (let s0 = 0; s0 < N; s0++) {
-                if (!stand[s0] || seen[s0]) continue;
-                let sp = 0, nm = 0; stack[sp++] = s0; seen[s0] = 1;
-                const members = [];
-                while (sp > 0) {
-                    const i = stack[--sp]; members.push(i); nm++;
-                    const x = i % w, y = (i / w) | 0;
-                    if (x > 0   && stand[i-1] && !seen[i-1]) { seen[i-1]=1; stack[sp++]=i-1; }
-                    if (x < w-1 && stand[i+1] && !seen[i+1]) { seen[i+1]=1; stack[sp++]=i+1; }
-                    if (y > 0   && stand[i-w] && !seen[i-w]) { seen[i-w]=1; stack[sp++]=i-w; }
-                    if (y < h-1 && stand[i+w] && !seen[i+w]) { seen[i+w]=1; stack[sp++]=i+w; }
-                }
-                if (nm > biggest) biggest = nm;
-                if (nm < MIN) continue;
-                if (nm > CAP) { nSkipBig++; continue; }   // genuine near object: keep native depth
-                // seat the whole component (figure body + interior flecks)
-                // on its local ground floor — a flat decal that rides the
-                // ground plane, coherent, no protrusion, no shear.
-                for (const i of members) S[i] = floor[i];
-                nSeat += nm; nComp++;
+            { const nb = ink.slice();
+              for (let y = 1; y < h-1; y++) for (let x = 1; x < w-1; x++) { const i = y*w+x;
+                  if (!ink[i] && (ink[i-1]||ink[i+1]||ink[i-w]||ink[i+w])) nb[i] = 1; }
+              ink = nb; }
+            // label non-ink cells; the two largest are desert + sky
+            const lab = new Int32Array(N).fill(-1);
+            const q = new Int32Array(N); const csz = [];
+            let nl = 0;
+            for (let s = 0; s < N; s++) { if (ink[s] || lab[s] >= 0) continue;
+                let qt = 0, qh = 0; q[qt++] = s; lab[s] = nl; let n = 0;
+                while (qh < qt) { const i = q[qh++]; n++; const x = i % w, y = (i/w)|0;
+                    if (x > 0   && !ink[i-1] && lab[i-1] < 0) { lab[i-1]=nl; q[qt++]=i-1; }
+                    if (x < w-1 && !ink[i+1] && lab[i+1] < 0) { lab[i+1]=nl; q[qt++]=i+1; }
+                    if (y > 0   && !ink[i-w] && lab[i-w] < 0) { lab[i-w]=nl; q[qt++]=i-w; }
+                    if (y < h-1 && !ink[i+w] && lab[i+w] < 0) { lab[i+w]=nl; q[qt++]=i+w; } }
+                csz.push(n); nl++; }
+            let g0 = -1, g1 = -1, s0v = -1, s1v = -1;
+            for (let c = 0; c < nl; c++) { if (csz[c] > s0v) { s1v = s0v; g1 = g0; s0v = csz[c]; g0 = c; }
+                else if (csz[c] > s1v) { s1v = csz[c]; g1 = c; } }
+            // figureMask = ink ∪ (a cell that is NOT one of the two big ones)
+            const fig = new Uint8Array(N);
+            for (let i = 0; i < N; i++) { if (ink[i]) fig[i] = 1;
+                else { const l = lab[i]; if (l !== g0 && l !== g1) fig[i] = 1; } }
+            // islands = 8-connected components of figureMask (a figure's
+            // interior detail-cells + its outline fuse into one island)
+            const isl = new Int32Array(N).fill(-1);
+            const CAP = Math.round(N * 0.02);   // >> a party figure, << the astronaut/mountain island
+            const MIN = 64;
+            let nSeat = 0, nIsl = 0, nKeep = 0, biggest = 0;
+            const mem = new Int32Array(N);
+            for (let s = 0; s < N; s++) { if (!fig[s] || isl[s] >= 0) continue;
+                let qt = 0, qh = 0; q[qt++] = s; isl[s] = nIsl; let n = 0, liftSum = 0;
+                let x0 = w, x1 = 0, y0 = h, y1 = 0;
+                while (qh < qt) { const i = q[qh++]; mem[n++] = i; liftSum += (S[i] - floor[i]);
+                    const x = i % w, y = (i/w)|0;
+                    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue;
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
+                        const j = yy*w+xx; if (fig[j] && isl[j] < 0) { isl[j] = nIsl; q[qt++] = j; } } }
+                nIsl++;
+                if (n > biggest) biggest = n;
+                const meanLift = liftSum / n;
+                if (n < MIN) continue;
+                if (n > CAP) { nKeep++; continue; }             // astronaut, mountain, crystals: keep native
+                // GATE 1 — genuinely proud: a real mislocated figure floats
+                // FAR above its ground (party 0.25); thin scenery ink lying
+                // ON a surface (a horizon line) is only ~0.06 proud and must
+                // stay put. GATE 2 — compact: a figure fills a fair fraction
+                // of its bbox; a thin LINE/wisp (horizon, a wire) fills
+                // almost none, so area/bbox rejects it. Both needed: the
+                // party passes (proud AND compact), scenery lines fail.
+                if (meanLift <= 0.10) continue;
+                const bboxA = (x1 - x0 + 1) * (y1 - y0 + 1);
+                if (n < 0.12 * bboxA) continue;                  // thin line / wisp, not a filled figure
+                // seat the whole figure on its local ground floor — one
+                // coherent flat decal, no spread, no shear, ink kept.
+                for (let m = 0; m < n; m++) { const i = mem[m]; S[i] = floor[i]; }
+                nSeat += n;
             }
-            if (nSeat || nSkipBig) console.log('[SEAT-FLOOR] ' + nSeat + 'px in ' + nComp +
-                ' small standing components seated on their ground floor; ' + nSkipBig +
-                ' large components kept native (biggest ' + biggest + 'px, cap ' + CAP + ')');
+            if (nSeat || nKeep) console.log('[INK-SEAT] ' + nSeat + 'px of small ink-bounded figure islands seated on ground floor; ' +
+                nKeep + ' large islands kept native (biggest ' + biggest + 'px, cap ' + CAP + ')');
             L._seatedFloor = true;
         }
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
