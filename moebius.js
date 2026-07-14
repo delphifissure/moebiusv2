@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.10-a57b | ink-island seat: figures stand as proud cards (disocclude), not floor decals', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.11-a57c | + deform-grid debug panel (FG red / BG-plug green)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,9 +5804,10 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.10-a57b | ink-island seat: figures stand as proud cards (disocclude), not floor decals';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.11-a57c | + deform-grid debug panel (FG red / BG-plug green)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
+let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
 
 function exportDebugContactSheet() {
     try {
@@ -5980,6 +5981,64 @@ function exportDebugContactSheet() {
             _depthPassIncludeBG = false;
             addPanel('live depth incl. BG (plug in place)', depthTex, null, 2);
             renderNormalizedDepthPass(); // restore FG-only depth for consistency
+        }
+        // DEFORM GRID (FG red / BG-plug green): each mesh keeps its REAL
+        // deforming vertex shader (so the surface warps exactly as it does
+        // live) but its fragment is swapped for a depth-tinted grid. Depth
+        // test is ON, BG drawn first, so red = FG wins, and GREEN visible
+        // anywhere = the BG plug (in a hole, OR extruding in FRONT of the FG
+        // = tunneling). The grid lines make the deformation legible. A plain
+        // MeshBasicMaterial can't be used — it ignores the displacement map
+        // and would draw the flat undeformed plane.
+        if (scene && camera) {
+            const gridFrag = (col) => 'precision highp float;\nvarying vec2 vUv;\nvarying float vNormalizedDepth;\n' +
+                'void main(){\n' +
+                '  vec2 g = abs(fract(vUv * vec2(64.0, 36.0)) - 0.5);\n' +
+                '  float line = step(0.44, max(g.x, g.y));\n' +
+                '  float d = clamp(vNormalizedDepth, 0.0, 1.0);\n' +
+                '  vec3 base = vec3(' + col + ') * (0.10 + 0.55 * d);\n' +
+                '  vec3 c = (line > 0.5) ? vec3(' + col + ') : base;\n' +
+                '  gl_FragColor = vec4(c, 1.0);\n}';
+            // Collect FG (media meshes) and BG (plug + cap cards) explicitly
+            // and FORCE them visible for this pass — the inpainting composite
+            // path keeps the FG mesh hidden (it renders through ping-pong
+            // targets), so a visible-only traversal would miss it and the grid
+            // would be all-green.
+            const swap = [], vis = [];
+            const wantMeshes = [];
+            if (typeof mediaLayers !== 'undefined') for (const Lx of mediaLayers) if (Lx && Lx.mesh) wantMeshes.push([Lx.mesh, false]);
+            if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) wantMeshes.push([bgLayerMesh, true]);
+            if (typeof bgCardMesh !== 'undefined' && bgCardMesh) wantMeshes.push([bgCardMesh, false]);
+            for (const [o, isBG] of wantMeshes) {
+                if (!o.material || !o.material.uniforms) continue;
+                vis.push([o, o.visible]); o.visible = true;
+                const wm = o.material.clone();
+                wm.fragmentShader = gridFrag(isBG ? '0.15, 1.0, 0.42' : '1.0, 0.24, 0.30');
+                wm.transparent = false; wm.depthTest = true; wm.depthWrite = true;
+                wm.wireframe = false; wm.needsUpdate = true;
+                swap.push([o, o.material, wm]);
+                o.material = wm;
+            }
+            const prevRT = renderer.getRenderTarget();
+            const prevCC = new THREE.Color(); renderer.getClearColor(prevCC);
+            const prevCA = renderer.getClearAlpha();
+            renderer.setRenderTarget(_dbgExportTarget);
+            renderer.setViewport(0, 0, panelW, panelH);
+            renderer.setClearColor(new THREE.Color(0, 0, 0), 1.0);
+            renderer.clear();
+            renderer.render(scene, camera);
+            const wbuf = new Uint8Array(panelW * panelH * 4);
+            renderer.readRenderTargetPixels(_dbgExportTarget, 0, 0, panelW, panelH, wbuf);
+            const wflip = new Uint8ClampedArray(panelW * panelH * 4);
+            const wrow = panelW * 4;
+            for (let y = 0; y < panelH; y++) wflip.set(wbuf.subarray(y * wrow, (y + 1) * wrow), (panelH - 1 - y) * wrow);
+            const wc = document.createElement('canvas'); wc.width = panelW; wc.height = panelH;
+            wc.getContext('2d').putImageData(new ImageData(wflip, panelW, panelH), 0, 0);
+            for (const [o, m, wm] of swap) { o.material = m; wm.dispose(); }
+            for (const [o, v] of vis) o.visible = v;
+            renderer.setRenderTarget(prevRT);
+            renderer.setClearColor(prevCC, prevCA);
+            panels.push({ label: 'deform grid (FG red / BG-plug green = hole or extrusion)', canvas: wc });
         }
         if (colorTex)             addPanel('scene color (pre-inpaint)', colorTex, null, 0);
         if (typeof bgColorTarget !== 'undefined' && bgColorTarget)
