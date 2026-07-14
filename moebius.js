@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.10-a57b | ink-island seat: figures stand as proud cards (disocclude), not floor decals', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.9-a56 | ink-island seat: figures segmented by outline, seated on ground';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.10-a57b | ink-island seat: figures stand as proud cards (disocclude), not floor decals';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -7841,9 +7841,30 @@ function applyLiveBake(L) {
                 if (meanLift <= 0.10) continue;
                 const bboxA = (x1 - x0 + 1) * (y1 - y0 + 1);
                 if (n < 0.12 * bboxA) continue;                  // thin line / wisp, not a filled figure
-                // seat the whole figure on its local ground floor — one
-                // coherent flat decal, no spread, no shear, ink kept.
-                for (let m = 0; m < n; m++) { const i = mem[m]; S[i] = floor[i]; }
+                // A57b: seat as a STANDING card, not a floor decal. a56
+                // flattened every pixel to floor[i] — glued to the ground
+                // plane behind it, zero relief, so it could no longer
+                // parallax or disocclude (the user: the party is "plastered
+                // to the background, no inpainting behind it"). Instead seat
+                // the whole figure at ONE flat depth lifted proud of its
+                // ground: a fronto-parallel card that parallaxes as a rigid
+                // unit (coherent, kills the shatter, keeps the ink) and tears
+                // at its silhouette to reveal ground behind it. The lift is
+                // the figure's OWN mean proud (meanLift, already measured and
+                // gated > 0.10) — estimator-honest and self-calibrated per
+                // figure, no constant. A pure feet-to-head geometric
+                // billboard over-lifted (star protrusion 6→12) because a tall
+                // island's head relief = height × floor-slope can exceed the
+                // FG depth there; meanLift is bounded by what the estimator
+                // itself assigned, so the card never protrudes past the FG.
+                let mFloor = 0; for (let m = 0; m < n; m++) mFloor += floor[mem[m]];
+                mFloor /= n;
+                const cardDepth = mFloor + meanLift;
+                const flatToFloor = !!window._seatFloorFlat;   // A/B opt-in: a56 floor decal
+                for (let m = 0; m < n; m++) { const i = mem[m]; S[i] = flatToFloor ? floor[i] : cardDepth; }
+                if (window._seatDbg) console.log('[SEAT-DBG] n=' + n + ' bbox=' + (x1-x0+1) + 'x' + (y1-y0+1) +
+                    ' cardDepth=' + cardDepth.toFixed(3) + ' meanFloor=' + mFloor.toFixed(3) +
+                    ' lift=' + meanLift.toFixed(3));
                 nSeat += n;
             }
             if (nSeat || nKeep) console.log('[INK-SEAT] ' + nSeat + 'px of small ink-bounded figure islands seated on ground floor; ' +
