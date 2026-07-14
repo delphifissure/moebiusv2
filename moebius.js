@@ -9283,23 +9283,24 @@ function buildBackgroundLayer() {
             // taffy, the plate backs the gap; (2) every texel orphaned by
             // the tear gets its own flat CAP CARD at its own depth — the
             // pixel rides the parallax exactly where the estimator put it.
-            // A55 DECISION (measured): realtime looks good on the party
-            // because its mesh is CONNECTED — the connected grid is a
-            // spatial low-pass that turns the estimator's depth noise into
-            // an invisible bump instead of a shattered fan. The a53
-            // tear+cap-cards default DISCONNECTED it, and every 1-3px-cliff
-            // figure shattered into cards at its (noisy) per-pixel depth.
-            // So the DEFAULT reverts to the intact connected mesh (= baked
-            // realtime); tear+cards is opt-in via window._qbPreTear for the
-            // rare asset where geometry tearing is genuinely wanted.
+            // A56 DECISION: the pre-tear is the DEFAULT again. a55 turned it
+            // off because it shattered the party (a small figure at broken
+            // depth is all-cliff, so tearing its cliffs deletes it); but
+            // that reintroduced the astronaut/staff SILHOUETTE tunnelling
+            // the tear exists to cut. Now that the ink-island seat (a56)
+            // flattens the party onto its ground BEFORE this runs, the party
+            // has no internal cliffs left to shatter — the tear passes over
+            // it — while the hero's genuine silhouette cliffs are cut and no
+            // longer taffy into the background. Best of both. Intact mesh is
+            // opt-in via window._qbNoTear.
             {
                 const g = L.mesh.geometry;
                 if (g && g.index) {
                     if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
-                    if (!window._qbPreTear) {
+                    if (window._qbNoTear) {
                         if (g.index.array.length !== g.userData._fullIndex.length)
                             g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
-                        console.log('[QUICK-BAKE] FG intact connected mesh (baked-realtime default)');
+                        console.log('[QUICK-BAKE] FG intact connected mesh (pre-tear disabled by flag)');
                     } else {
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
