@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.4-a51 | ink rides its layer: tear exemption + depth-scoped wash rejection', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5804,7 +5804,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.4-a51 | ink rides its layer: tear exemption + depth-scoped wash rejection';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.7-a54 | rigidify small standing components (one object = one surface)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 
@@ -6363,6 +6363,7 @@ function exportSDBundle() {
 //      BG layer is already there, at plug depth, with baked color.
 // ============================================================================
 let bgLayerMesh = null;
+let bgCardMesh = null;   // A53: per-pixel cap cards for texels orphaned by the cliff tear (quick mode)
 // Directional plug data stashed at BG-build for the SD-export bundle (native res,
 // top-row-first): the exact gap mask + completed BG depth + coarse fill the
 // diffusion stage should consume. { band:Uint8, plug:Float32, fill:Uint8(RGB), pw, ph }
@@ -7889,6 +7890,38 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         }
         if (nMerged) console.log('[MPI-V2] footing merge: ' + nMerged + 'px of small standing content re-seated on its ground layer');
     }
+    // A52 BOUNDARY REFINEMENT (farther-only): the quantile cuts slice
+    // straight through standing content, so a figure's edge px land in the
+    // NEARER bin of an adjacent pair — the party px glued onto the dune
+    // layer that shear away under parallax. Any px whose own depth reads
+    // closer to a FARTHER neighbouring bin's mean than to its own bin's
+    // re-seats on that farther bin. Farther-only: the pass can pull
+    // content back onto its body, never push it forward (A49 invariant).
+    {
+        let nRef = 0;
+        const meanB = new Float32Array(KV + 1);
+        for (let pass = 0; pass < 3; pass++) {
+            for (let k2 = 1; k2 <= KV; k2++) meanB[k2] = cntDk[k2] ? sumDk[k2]/cntDk[k2] : (cutV[k2-1]+cutV[k2])/2;
+            let moved = 0;
+            for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                const i = y*pw+x, k = texLV[i];
+                if (k <= 0) continue;
+                let best = k, bErr = Math.abs(dV[i] - meanB[k]) - 0.005;
+                if (x > 0)    { const k2 = texLV[i-1];  if (k2 > 0 && k2 !== k && meanB[k2] < meanB[k]) { const e = Math.abs(dV[i]-meanB[k2]); if (e < bErr) { bErr = e; best = k2; } } }
+                if (x < pw-1) { const k2 = texLV[i+1];  if (k2 > 0 && k2 !== k && meanB[k2] < meanB[k]) { const e = Math.abs(dV[i]-meanB[k2]); if (e < bErr) { bErr = e; best = k2; } } }
+                if (y > 0)    { const k2 = texLV[i-pw]; if (k2 > 0 && k2 !== k && meanB[k2] < meanB[k]) { const e = Math.abs(dV[i]-meanB[k2]); if (e < bErr) { bErr = e; best = k2; } } }
+                if (y < ph-1) { const k2 = texLV[i+pw]; if (k2 > 0 && k2 !== k && meanB[k2] < meanB[k]) { const e = Math.abs(dV[i]-meanB[k2]); if (e < bErr) { bErr = e; best = k2; } } }
+                if (best !== k) {
+                    sumDk[k] -= dV[i]; cntDk[k]--;
+                    sumDk[best] += dV[i]; cntDk[best]++;
+                    texLV[i] = best; moved++;
+                }
+            }
+            nRef += moved;
+            if (!moved) break;
+        }
+        if (nRef) console.log('[MPI-V2] boundary refinement: ' + nRef + 'px re-seated on the farther bin their own depth matches');
+    }
     const meanDV = [];
     for (let k2 = 1; k2 <= KV; k2++) meanDV.push(cntDk[k2] ? sumDk[k2]/cntDk[k2] : (cutV[k2-1]+cutV[k2])/2);
 
@@ -8748,6 +8781,55 @@ function buildBackgroundLayer() {
             const PNq = pw * ph;
             const dQ = new Float32Array(PNq);
             for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+            // A52 DESPECKLE — the comb source. Depth estimators fragment
+            // SMALL figures into interleaved 1-2px flecks of figure depth
+            // and ground depth (measured on the star party: the raw map
+            // itself is speckled). Realtime heals this every frame — its
+            // discards + fill repaint the speckle from neighbours. A bake
+            // RENDERS it: each fleck is an unstretched sliver at its own
+            // depth, and under parallax they fan into the striation comb
+            // (no fragment test can cut them — they are not stretched).
+            // Median-snap: a px whose 4-neighbours mostly disagree with it
+            // is a fleck and takes its 3x3 median. Continuous thin strokes
+            // (the staff) keep >=2 along-stroke agreeing neighbours and
+            // are untouched; real silhouette steps are majority-coherent
+            // on both sides and unaffected.
+            let dqDirty = false;
+            {
+                const TOLd = 0.02;
+                let nFleck = 0;
+                const w25 = new Float32Array(25);
+                for (let pass = 0; pass < 2; pass++) {
+                    let moved = 0;
+                    const src = dQ.slice();
+                    for (let y = 2; y < ph - 2; y++) for (let x = 2; x < pw - 2; x++) {
+                        const i = y*pw+x, d0 = src[i];
+                        // cheap mixed-zone gate: 3x3 range
+                        let mn3 = d0, mx3 = d0;
+                        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                            const v = src[i + dy*pw + dx];
+                            if (v < mn3) mn3 = v; if (v > mx3) mx3 = v;
+                        }
+                        if (mx3 - mn3 <= 0.06) continue;
+                        // minority test in 5x5: filaments (1px wide, any
+                        // length) are minority; >=3px-wide structures keep
+                        // a majority on their own side and survive
+                        let own = 0, n25 = 0;
+                        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                            const v = src[i + dy*pw + dx];
+                            w25[n25++] = v;
+                            if (Math.abs(v - d0) <= TOLd) own++;
+                        }
+                        if (own >= 8) continue;
+                        w25.sort();
+                        dQ[i] = w25[12];
+                        moved++;
+                    }
+                    nFleck += moved;
+                    if (!moved) break;
+                }
+                if (nFleck) { dqDirty = true; console.log('[QUICK-BAKE] despeckle: ' + nFleck + 'px of fragmented depth median-snapped'); }
+            }
             const RB = Math.max(8, bgBandMaxGrowPx | 0);
             // FULL-INTERIOR FAR ENVELOPE (A38). A single radius-RB floor
             // cannot floor content wider than 2*RB — a big occluder's
@@ -8785,6 +8867,103 @@ function buildBackgroundLayer() {
                     if (x < pw-1 && plateQ[i+1]  + sCone < v) v = plateQ[i+1]  + sCone;
                     if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
                     plateQ[i] = v; } }
+            // A54 RIGIDIFY — connectivity is a spatial regularizer, and a
+            // bake that disconnects (tears + cards) loses it: over the
+            // party the estimator's depth is shattered, and per-pixel
+            // honesty renders CONFETTI (a53, measured against the source
+            // by the user). One object is one surface: every SMALL
+            // standing component (proud of the envelope, area-capped)
+            // takes its MEDIAN depth across its whole body — a rigid
+            // decal at its true standoff. No internal cliffs remain, so
+            // nothing tears inside a figure; its silhouette tears against
+            // the plate and its cap-card ring rides WITH it. The glider
+            // keeps flying (median preserves standoff — this is not a
+            // ground snap); big content (astronaut, mountain rings)
+            // exceeds the cap and keeps its native 3D.
+            {
+                let bandS = new Uint8Array(PNq);
+                for (let i = 0; i < PNq; i++) { if (dQ[i] - plateQ[i] > 0.02) bandS[i] = 1; }
+                // MORPHOLOGICAL CLOSING: the estimator shatters a figure
+                // into interleaved standing/ground flecks, so raw
+                // components are dozens of slivers with dozens of medians
+                // — still confetti. Close the mask (dilate+erode) so one
+                // figure fuses into ONE component, ground flecks inside
+                // it included: the whole object takes one standoff.
+                const KC = Math.max(2, Math.round(3 * pw / 1200));
+                for (let p = 0; p < KC; p++) {
+                    const nb = bandS.slice();
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                        if (!bandS[i] && (bandS[i-1] || bandS[i+1] || bandS[i-pw] || bandS[i+pw])) nb[i] = 1; }
+                    bandS = nb;
+                }
+                for (let p = 0; p < KC; p++) {
+                    const nb = bandS.slice();
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) { const i = y*pw+x;
+                        if (bandS[i] && (!bandS[i-1] || !bandS[i+1] || !bandS[i-pw] || !bandS[i+pw])) nb[i] = 0; }
+                    bandS = nb;
+                }
+                const seenS = new Uint8Array(PNq);
+                const qSnap = new Int32Array(PNq);
+                const ACs = Math.max(600, Math.round(PNq * 0.01));
+                const membS = new Int32Array(ACs + 1);
+                let nRig = 0, nCompRig = 0;
+                for (let s0 = 0; s0 < PNq; s0++) {
+                    if (!bandS[s0] || seenS[s0]) continue;
+                    let qh = 0, qt = 0, nm = 0;
+                    qSnap[qt++] = s0; seenS[s0] = 1;
+                    while (qh < qt) {
+                        const i = qSnap[qh++];
+                        if (nm <= ACs) membS[nm] = i;
+                        nm++;
+                        const x = i % pw, y = (i / pw) | 0;
+                        if (x > 0    && bandS[i-1]  && !seenS[i-1])  { seenS[i-1]  = 1; qSnap[qt++] = i-1; }
+                        if (x < pw-1 && bandS[i+1]  && !seenS[i+1])  { seenS[i+1]  = 1; qSnap[qt++] = i+1; }
+                        if (y > 0    && bandS[i-pw] && !seenS[i-pw]) { seenS[i-pw] = 1; qSnap[qt++] = i-pw; }
+                        if (y < ph-1 && bandS[i+pw] && !seenS[i+pw]) { seenS[i+pw] = 1; qSnap[qt++] = i+pw; }
+                    }
+                    if (nm > ACs || nm < 4) continue;
+                    // median of the STANDING subset: interior ground
+                    // flecks join the object at ITS standoff, not the
+                    // object dragged halfway to the ground
+                    const ds = new Float32Array(nm);
+                    let nStand = 0;
+                    for (let m2 = 0; m2 < nm; m2++) { const i = membS[m2];
+                        if (dQ[i] - plateQ[i] > 0.02) ds[nStand++] = dQ[i]; }
+                    if (!nStand) continue;
+                    const dsub = ds.subarray(0, nStand);
+                    dsub.sort();
+                    const med = dsub[nStand >> 1];
+                    for (let m2 = 0; m2 < nm; m2++) { const i = membS[m2];
+                        dQ[i] = med > plateQ[i] ? med : plateQ[i]; }
+                    nRig += nm; nCompRig++;
+                }
+                if (nRig) {
+                    dqDirty = true;
+                    console.log('[QUICK-BAKE] rigidify: ' + nRig + 'px in ' + nCompRig + ' small standing components set to their median standoff');
+                }
+            }
+            // ship the cleaned depth: the FG mesh must render what the
+            // plate/SD/wash were computed from. The displayed texture is a
+            // FLOAT DataTexture (rows bottom-up); image2d is only the CPU
+            // copy for drawImage consumers — update BOTH.
+            if (dqDirty) {
+                const dtex = L.textures.depth;
+                if (dtex && dtex.isDataTexture && dtex.image && dtex.image.data &&
+                    dtex.image.width === pw && dtex.image.height === ph) {
+                    const sf2 = dtex.image.data;
+                    for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                        for (let x = 0; x < pw; x++) sf2[d2+x] = dQ[s+x]; }
+                    dtex.needsUpdate = true;
+                }
+                const c2 = dtex && dtex.image2d;
+                if (c2 && c2.getContext) {
+                    const cx2 = c2.getContext('2d');
+                    const id2 = cx2.getImageData(0, 0, pw, ph);
+                    for (let i = 0; i < PNq; i++) { const v = Math.max(0, Math.min(255, Math.round(dQ[i] * 255)));
+                        id2.data[i*4] = v; id2.data[i*4+1] = v; id2.data[i*4+2] = v; }
+                    cx2.putImageData(id2, 0, 0);
+                }
+            }
             if (window._srCapture) window._qbDbg = { plate: plateQ.slice(), d: dQ.slice(), pw, ph };
             // SD MASK (A39): the honest "where diffusion will paint" is
             // exactly where the plate SYNTHESIZES content — wherever the
@@ -8973,47 +9152,98 @@ function buildBackgroundLayer() {
             if (mpiLayers) { for (const Lr of mpiLayers) { scene.remove(Lr.mesh); Lr.mesh.geometry.dispose(); } mpiLayers = null; L.mesh.visible = true; }
             if (mpiMidMesh) { scene.remove(mpiMidMesh); mpiMidMesh.geometry.dispose(); mpiMidMesh.material.dispose(); mpiMidMesh = null; }
             if (mpiStripMeshes) { for (const sm of mpiStripMeshes) { scene.remove(sm); sm.geometry.dispose(); sm.material.dispose(); } mpiStripMeshes = null; }
-            // GEOMETRIC PRE-TEAR (A39): drop every FG triangle spanning a
-            // cliff — the plate backs every reveal, so a hole is always
-            // safe, and geometry cannot leave the 1px rubber filaments the
-            // thresholded fragment net lets through around lifted outlines.
+            // A53: THE PIXEL IS CONTENT, THE CLIFF IS THE ARTIFACT. The
+            // user's contract: not one source pixel may be lost — what
+            // gets made transparent (and inpainted by the plate) is the
+            // DISPLACEMENT CLIFF itself, never the pixel that causes it.
+            // On a vertex-per-texel grid those were the same operation: a
+            // 1px stroke has no interior triangles, so tearing its cliffs
+            // deleted the stroke (a39-a51's central tension). Decoupled:
+            // (1) tear EVERY cliff-spanning triangle — no membranes, no
+            // taffy, the plate backs the gap; (2) every texel orphaned by
+            // the tear gets its own flat CAP CARD at its own depth — the
+            // pixel rides the parallax exactly where the estimator put it.
+            // window._qbNoPreTear = true reverts to the intact-mesh mode.
             {
                 const g = L.mesh.geometry;
                 if (g && g.index) {
                     if (!g.userData._fullIndex) g.userData._fullIndex = g.index.array.slice();
+                    if (window._qbNoPreTear) {
+                        if (g.index.array.length !== g.userData._fullIndex.length)
+                            g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
+                        console.log('[QUICK-BAKE] FG intact (pre-tear disabled by flag)');
+                    } else {
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
                     const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1;
                     if (vw > 1 && vh > 1) {
-                        // A51: LIFTED INK RIDES THE TEAR. A lifted stroke is a
-                        // cliff pair, so the blanket cliff test tore every
-                        // adopted outline OUT of the FG mesh — the ink didn't
-                        // move to its occluder, it was deleted from the world
-                        // (the a50 solid plate then showed clean wash where
-                        // the line work used to be). Triangles touching
-                        // adopted ink are exempt; the rubber they keep at the
-                        // stroke's far side is cut per-fragment by the
-                        // stretch net under parallax, over the opaque plate.
-                        const ia = (L._inkAdopted && L._inkAdoptedW === pw && L._inkAdoptedH === ph) ? L._inkAdopted : null;
                         const outI = new srcI.constructor(srcI.length);
                         const sxT = (pw - 1) / (vw - 1), syT = (ph - 1) / (vh - 1);
-                        let nI = 0, droppedT = 0, keptInk = 0;
+                        const tiOf = (vi) => Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
+                        const inFull = new Uint8Array(PNq), cov = new Uint8Array(PNq);
+                        let nI = 0, droppedT = 0;
                         for (let t = 0; t < srcI.length; t += 3) {
-                            let mn = 2, mx = -1, onInk = false;
-                            for (let k = 0; k < 3; k++) {
-                                const vi = srcI[t + k];
-                                const ti = Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
-                                const dv = dQ[ti];
-                                if (dv < mn) mn = dv;
-                                if (dv > mx) mx = dv;
-                                if (ia && ia[ti]) onInk = true;
-                            }
-                            if (mx - mn > fgTearStep && !onInk) { droppedT++; continue; }
-                            if (mx - mn > fgTearStep) keptInk++;
+                            const t0i = tiOf(srcI[t]), t1i = tiOf(srcI[t+1]), t2i = tiOf(srcI[t+2]);
+                            inFull[t0i] = 1; inFull[t1i] = 1; inFull[t2i] = 1;
+                            const d0 = dQ[t0i], d1 = dQ[t1i], d2 = dQ[t2i];
+                            let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
+                            let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
+                            if (mx - mn > fgTearStep) { droppedT++; continue; }
+                            cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
                         g.setIndex(new THREE.BufferAttribute(outI.subarray(0, nI), 1));
-                        console.log('[QUICK-BAKE] FG pre-torn: ' + droppedT + ' cliff triangles dropped of ' + (srcI.length / 3) + (keptInk ? ' (' + keptInk + ' kept on adopted ink)' : ''));
+                        // ---- CAP CARDS: no pixel left behind ----
+                        let nOrph = 0;
+                        for (let i = 0; i < PNq; i++) if (inFull[i] && !cov[i]) nOrph++;
+                        if (nOrph) {
+                            const pW = gp.width, pH = gp.height;
+                            const pos = new Float32Array(nOrph * 12), uvs = new Float32Array(nOrph * 8);
+                            const idxC = new Uint32Array(nOrph * 6);
+                            let vp = 0, vu = 0, vix = 0, vb = 0;
+                            for (let i = 0; i < PNq; i++) {
+                                if (!inFull[i] || cov[i]) continue;
+                                const tx = i % pw, ty = (i / pw) | 0;
+                                const x0 = (tx / pw - 0.5) * pW, x1 = ((tx + 1) / pw - 0.5) * pW;
+                                const y0 = (0.5 - ty / ph) * pH, y1 = (0.5 - (ty + 1) / ph) * pH;
+                                // UVs inset toward the texel centre: all four
+                                // corners sample the SAME texel, so the card is
+                                // flat at the pixel's own depth and paints the
+                                // pixel's own colour — a rigid splat, no rubber.
+                                const uc = (tx + 0.5) / pw, vcv = 1 - (ty + 0.5) / ph;
+                                const ex = 0.2 / pw, ey = 0.2 / ph;
+                                pos[vp++] = x0; pos[vp++] = y0; pos[vp++] = 0; uvs[vu++] = uc - ex; uvs[vu++] = vcv + ey;
+                                pos[vp++] = x1; pos[vp++] = y0; pos[vp++] = 0; uvs[vu++] = uc + ex; uvs[vu++] = vcv + ey;
+                                pos[vp++] = x0; pos[vp++] = y1; pos[vp++] = 0; uvs[vu++] = uc - ex; uvs[vu++] = vcv - ey;
+                                pos[vp++] = x1; pos[vp++] = y1; pos[vp++] = 0; uvs[vu++] = uc + ex; uvs[vu++] = vcv - ey;
+                                idxC[vix++] = vb; idxC[vix++] = vb + 2; idxC[vix++] = vb + 1;
+                                idxC[vix++] = vb + 1; idxC[vix++] = vb + 2; idxC[vix++] = vb + 3;
+                                vb += 4;
+                            }
+                            const gC = new THREE.BufferGeometry();
+                            gC.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                            gC.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                            gC.setIndex(new THREE.BufferAttribute(idxC, 1));
+                            const matC = L.mesh.material.clone();
+                            matC.side = THREE.DoubleSide;
+                            if (matC.uniforms.u_useBandCut) { matC.uniforms.u_useBandCut.value = false; matC.uniforms.u_bandMask.value = null; }
+                            if (matC.uniforms.u_bandCutAll) matC.uniforms.u_bandCutAll.value = false;
+                            for (const gk of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                                              'u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle']) {
+                                if (matC.uniforms[gk]) matC.uniforms[gk].value = false;
+                            }
+                            if (matC.uniforms.u_cutSharp) matC.uniforms.u_cutSharp.value = false;
+                            if (matC.uniforms.u_useEdgeMask) matC.uniforms.u_useEdgeMask.value = false;
+                            bgCardMesh = new THREE.Mesh(gC, matC);
+                            bgCardMesh.position.copy(L.mesh.position);
+                            bgCardMesh.rotation.copy(L.mesh.rotation);
+                            bgCardMesh.scale.copy(L.mesh.scale);
+                            bgCardMesh.renderOrder = L.mesh.renderOrder || 0;
+                            scene.add(bgCardMesh);
+                        }
+                        console.log('[QUICK-BAKE] cliff tear: ' + droppedT + ' spanning triangles dropped of ' + (srcI.length / 3) +
+                                    '; ' + nOrph + ' orphaned pixels re-shipped as cap cards (no pixel lost)');
+                    }
                     }
                 }
             }
@@ -9047,6 +9277,16 @@ function buildBackgroundLayer() {
             }
             if (matQ.uniforms.u_cutSharp) matQ.uniforms.u_cutSharp.value = false;
             armNet(L.mesh.material.uniforms);
+            // A52: with the FG INTACT (no pre-tear) the stretch net is the
+            // ONLY rubber cut, and the default threshold (cut at ~6x
+            // stretch) was tuned for pre-torn leftovers — 2-6x ribbons
+            // survived as striations around every mid-ground figure (the
+            // near half of a ribbon is mismatch-blind by construction, so
+            // uvRate is the test that must catch it). The plate backs
+            // every reveal, so cutting from ~2x stretch is safe by
+            // construction in baked mode.
+            if (L.mesh.material.uniforms.u_bandCutUvRate)
+                L.mesh.material.uniforms.u_bandCutUvRate.value = 1.0 / Math.max(1, w);
             // A50: the plate must render SOLID, but sharing the FG geometry
             // AFTER the pre-tear inherits every cliff hole — and lifted ink
             // strokes are cliffs (two per stroke), so the plate re-drew the
@@ -9309,6 +9549,7 @@ function buildBackgroundLayer() {
             if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
             bgLayerMesh = null;
         }
+        if (bgCardMesh) { scene.remove(bgCardMesh); bgCardMesh.geometry.dispose(); bgCardMesh.material.dispose(); bgCardMesh = null; }
         const mat = L.mesh.material.clone();
         mat.uniforms.map.value = bgColorTarget.texture;
         // RUNG LIVE PLUG: compute correct plug on CPU from loaded PNGs.
@@ -14514,15 +14755,29 @@ function render() {
     // regardless of the inpainting checkbox. That is the performance
     // contract of the quick bake: realtime look, zero per-frame cost.
     if ((!useInpainting || window._bgQuickBaked) && debugView === 'final' && !(isAccumulatingGaps && !isSweeping)) {
-        
-        setAllLayerUniforms('u_useDepthGrad', document.getElementById('useDepthGradCheck')?.checked || false);
-        setAllLayerUniforms('u_useSobel', document.getElementById('useSobelCheck')?.checked || false);
-        setAllLayerUniforms('u_useLuma', document.getElementById('useLumaCheck')?.checked || false);
-        setAllLayerUniforms('u_useChroma', document.getElementById('useChromaCheck')?.checked || false);
-        setAllLayerUniforms('u_useCrease', document.getElementById('useCreaseCheck')?.checked || false);
-        setAllLayerUniforms('u_useCurvature', document.getElementById('useCurvatureCheck')?.checked || false);
-        setAllLayerUniforms('u_useUVStretch', document.getElementById('useUVStretchCheck')?.checked || false);
-        setAllLayerUniforms('u_useGrazingAngle', document.getElementById('useGrazingAngleCheck')?.checked || false);
+
+        // A52: in a BAKED scene the per-fragment gap generators must stay
+        // OFF. In the realtime path their discards are re-filled every
+        // frame by the inpaint pass (mostly from the figure's own nearby
+        // colours, so dense-depth little figures survive); in a baked
+        // scene there is no per-frame fill — every discard exposes the
+        // world-without-that-content plate, and the party ghosted into
+        // wash. The bakes already force these off at bake time ("geometry
+        // tears / the stretch net are the cut now"); this frame-loop
+        // re-arm was silently overriding that decision. UI arming remains
+        // for the un-baked raw-parallax diagnostic only.
+        const bakedScene = !!window._bgQuickBaked ||
+            (typeof bgLayerMesh !== 'undefined' && !!bgLayerMesh) ||
+            (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes && mpiFullMeshes.length > 0);
+        const armUI = (id) => !bakedScene && (document.getElementById(id)?.checked || false);
+        setAllLayerUniforms('u_useDepthGrad', armUI('useDepthGradCheck'));
+        setAllLayerUniforms('u_useSobel', armUI('useSobelCheck'));
+        setAllLayerUniforms('u_useLuma', armUI('useLumaCheck'));
+        setAllLayerUniforms('u_useChroma', armUI('useChromaCheck'));
+        setAllLayerUniforms('u_useCrease', armUI('useCreaseCheck'));
+        setAllLayerUniforms('u_useCurvature', armUI('useCurvatureCheck'));
+        setAllLayerUniforms('u_useUVStretch', armUI('useUVStretchCheck'));
+        setAllLayerUniforms('u_useGrazingAngle', armUI('useGrazingAngleCheck'));
         setAllLayerUniforms('u_useEdgeMask', false);
 
         renderer.setRenderTarget(null);
