@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.13-a58c | quick-bake plugs: exact SD-region shape + FLUSH background-continuation depth', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.14-a58d | quick-bake plugs: anamorphic projection band (silhouette scaled by occluder-bg depth gap)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5814,7 +5814,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.13-a58c | quick-bake plugs: exact SD-region shape + FLUSH background-continuation depth';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.14-a58d | quick-bake plugs: anamorphic projection band (silhouette scaled by occluder-bg depth gap)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9201,8 +9201,8 @@ function buildBackgroundLayer() {
             // cliff can fund are attached-ramp relief, not disocclusion.
             // (A plain connectivity flood leaks: one rock edge keeps a
             // whole floor-sized departure blob.)
+            const bud = new Float32Array(PNq);
             {
-                const bud = new Float32Array(PNq);
                 for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                     const i = y*pw+x;
                     let s2 = 0;
@@ -9258,21 +9258,27 @@ function buildBackgroundLayer() {
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const i = s+x; if (disocc[i]) plateF[d2+x] = filledD[i*3] / 255; } }
             }
-            // A58 DISOCCLUSION PLUGS: the plate is a SECOND displaced rubber
-            // sheet at the BACKGROUND depth (plateQ = dune->sky continuation
-            // across the occluded silhouette). It renders in EXACTLY the SD
-            // region (disocc) shape — the astronaut-shaped emptiness behind
-            // the astronaut — and is transparent everywhere else. No dilated
-            // band: because the plug is displaced at BG depth, it moves with
-            // the background and its own silhouette fills the reveal as the FG
-            // parallaxes away. A tiny SEAL (default 1px) closes the hairline
-            // mesh crack at the plug/FG boundary without adding visible skirt.
-            // window._bgIslandDilate overrides the seal width.
+            // A58d ANAMORPHIC PLUG REGION. The disocclusion a near occluder
+            // opens on a FARTHER surface is its silhouette PROJECTED onto that
+            // surface — scaled by the occluder->background depth gap: a big
+            // gap (astronaut vs sky) casts a wide disocclusion shadow, a small
+            // gap a narrow one. The plug must be that projected region, not the
+            // raw silhouette (too small — leaves a reveal hole) and not a
+            // uniform dilation (too much where the gap is small). `bud` is
+            // exactly that field: a max-plus chamfer seeded with
+            // depthStep/slope = (near-far)*K at every cliff, i.e. the parallax
+            // REACH scaled by the local depth gap. {bud > 0} is the
+            // anamorphically-projected disocclusion band — a strip around each
+            // silhouette whose WIDTH tracks the depth gap, so it covers both
+            // the wide astronaut edge AND the thin staff (thin feature, but big
+            // gap -> wide band -> its wide reveal is covered).
+            // window._bgIslandDilate replaces bud with a fixed px band.
             const islandF = new Float32Array(PNq);
             {
-                const SEAL = (typeof window._bgIslandDilate === 'number') ? window._bgIslandDilate : 1;
-                let cur = disocc;
-                if (SEAL > 0) {
+                let nIsl = 0;
+                const FIX = (typeof window._bgIslandDilate === 'number') ? window._bgIslandDilate : -1;
+                let cur;
+                if (FIX >= 0) {
                     const dist = new Float32Array(PNq);
                     for (let i = 0; i < PNq; i++) dist[i] = disocc[i] ? 0 : 1e9;
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; let v = dist[i];
@@ -9288,12 +9294,14 @@ function buildBackgroundLayer() {
                         if (x > 0 && y < ph-1 && dist[i+pw-1]+1.41421356 < v) v = dist[i+pw-1]+1.41421356;
                         dist[i] = v; }
                     cur = new Uint8Array(PNq);
-                    for (let i = 0; i < PNq; i++) cur[i] = dist[i] <= SEAL ? 1 : 0;
+                    for (let i = 0; i < PNq; i++) cur[i] = dist[i] <= FIX ? 1 : 0;
+                } else {
+                    cur = new Uint8Array(PNq);
+                    for (let i = 0; i < PNq; i++) cur[i] = (bud[i] > 0 || disocc[i]) ? 1 : 0;
                 }
-                let nIsl = 0;
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const on = cur[s+x]; islandF[d2+x] = on; nIsl += on; } }
-                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px (SD region ' + nD + 'px, seal ' + SEAL + 'px)');
+                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px anamorphic band (SD region ' + nD + 'px' + (FIX>=0?(', fixed '+FIX+'px'):', bud-scaled') + ')');
             }
             const islandDT = new THREE.DataTexture(islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
             islandDT.needsUpdate = true; islandDT.flipY = false;
