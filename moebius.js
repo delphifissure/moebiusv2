@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.12-a58b | quick-bake plate = exact SD-region plugs (silhouette shape, background depth), no dilation', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.13-a58c | quick-bake plugs: exact SD-region shape + FLUSH background-continuation depth', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5814,7 +5814,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.12-a58b | quick-bake plate = exact SD-region plugs (silhouette shape, background depth), no dilation';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.13-a58c | quick-bake plugs: exact SD-region shape + FLUSH background-continuation depth';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9239,6 +9239,25 @@ function buildBackgroundLayer() {
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
+            // A58c FLUSH PLUG DEPTH. plateQ is the cone-erosion FLOOR — it
+            // takes the farther depth, so it sits TOO FAR BACK inside the
+            // silhouette; parallax then pulls a gap open at the boundary
+            // because the plug and the adjacent visible background are not at
+            // the same depth. Instead fill the SD region with the CONTINUATION
+            // of the surrounding visible background (pull-push over the disocc
+            // holes), so the plug is FLUSH with the background at the boundary.
+            // The plug + visible background then form one complete continuous
+            // sheet — the FG slides over it and no gap opens at any offset.
+            // window._plugConeDepth reverts to the old (too-far) cone floor.
+            if (!window._plugConeDepth) {
+                const cpxD = new Uint8Array(PNq*4), valD = new Uint8Array(PNq);
+                for (let i = 0; i < PNq; i++) { if (disocc[i]) continue;
+                    const v = Math.max(0, Math.min(255, Math.round(dQ[i]*255)));
+                    cpxD[i*4] = v; cpxD[i*4+1] = v; cpxD[i*4+2] = v; cpxD[i*4+3] = 255; valD[i] = 1; }
+                const filledD = bgPullPushFill(cpxD, valD, pw, ph);
+                for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) { const i = s+x; if (disocc[i]) plateF[d2+x] = filledD[i*3] / 255; } }
+            }
             // A58 DISOCCLUSION PLUGS: the plate is a SECOND displaced rubber
             // sheet at the BACKGROUND depth (plateQ = dune->sky continuation
             // across the occluded silhouette). It renders in EXACTLY the SD
