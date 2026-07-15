@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.11-a57c | + deform-grid debug panel (FG red / BG-plug green)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.12-a58 | quick-bake plate = hole-only islands (dilated disocclusion band), not a full clone', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -1297,6 +1297,8 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_sdHighlight: { value: false },   // A36: SD-region preview
         u_sdMask: { value: null },
         u_sdMaskTexel: { value: new THREE.Vector2(1/1024, 1/1024) },
+        u_useBgIslands: { value: false },  // A58: quick-bake plate renders ONLY inside the dilated disocclusion band (hole-only islands, not a full clone)
+        u_bgIslandMask: { value: null },
         
         u_useSobel: { value: document.getElementById('useSobelCheck')?.checked || false },
         u_sobelThreshold: { value: parseFloat(document.getElementById('sobelThresholdSlider')?.value) || 0.1 },
@@ -1357,6 +1359,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform bool u_useDepthGrad;   uniform float u_depthGradThreshold;
         uniform bool u_cutSharp; // RUNG cut: certified-asset threshold override (0.008)
         uniform bool u_sdHighlight; uniform sampler2D u_sdMask; uniform vec2 u_sdMaskTexel;
+        uniform bool u_useBgIslands; uniform sampler2D u_bgIslandMask;
         uniform bool u_useSobel;       uniform float u_sobelThreshold;
         uniform bool u_useLuma;        uniform float u_lumaThreshold;
         uniform bool u_useChroma;      uniform float u_chromaThreshold;
@@ -1649,6 +1652,13 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 vec4 originalColor = texture2D(map, vUv);
                 ${alphaDiscardLogicGLSL}
                 if (originalColor.a < 0.01) discard;
+                // A58: quick-bake plate is HOLE-ONLY. Render only inside the
+                // dilated disocclusion band (the "SD regions"); everywhere the
+                // foreground stays intact the plate is unwanted full-clone
+                // backstop, so discard it -> the plate becomes floating islands
+                // that plug exactly the reveals, at the background depth behind
+                // the occluder.
+                if (u_useBgIslands && texture2D(u_bgIslandMask, vUv).r < 0.5) discard;
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
                 ${sdHighlightLogicGLSL}
@@ -5804,7 +5814,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.11-a57c | + deform-grid debug panel (FG red / BG-plug green)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.12-a58 | quick-bake plate = hole-only islands (dilated disocclusion band), not a full clone';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9229,6 +9239,38 @@ function buildBackgroundLayer() {
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
+            // A58 ISLAND BAND: the plate must plug the reveals and nothing
+            // else. A chamfer distance transform from the disocclusion mask,
+            // thresholded at the parallax reach RD, gives the band each cliff
+            // can open as the FG parallaxes; the plate discards outside it, so
+            // it becomes floating islands that fill exactly the holes at the
+            // background depth. RD scales with resolution; window-tunable.
+            const islandF = new Float32Array(PNq);
+            {
+                const RD = (typeof window._bgIslandDilate === 'number') ? window._bgIslandDilate : Math.max(14, Math.round(0.06 * pw));
+                const dist = new Float32Array(PNq);
+                for (let i = 0; i < PNq; i++) dist[i] = disocc[i] ? 0 : 1e9;
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; let v = dist[i];
+                    if (x > 0 && dist[i-1]+1 < v) v = dist[i-1]+1;
+                    if (y > 0 && dist[i-pw]+1 < v) v = dist[i-pw]+1;
+                    if (x > 0 && y > 0 && dist[i-pw-1]+1.41421356 < v) v = dist[i-pw-1]+1.41421356;
+                    if (x < pw-1 && y > 0 && dist[i-pw+1]+1.41421356 < v) v = dist[i-pw+1]+1.41421356;
+                    dist[i] = v; }
+                for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; let v = dist[i];
+                    if (x < pw-1 && dist[i+1]+1 < v) v = dist[i+1]+1;
+                    if (y < ph-1 && dist[i+pw]+1 < v) v = dist[i+pw]+1;
+                    if (x < pw-1 && y < ph-1 && dist[i+pw+1]+1.41421356 < v) v = dist[i+pw+1]+1.41421356;
+                    if (x > 0 && y < ph-1 && dist[i+pw-1]+1.41421356 < v) v = dist[i+pw-1]+1.41421356;
+                    dist[i] = v; }
+                let nIsl = 0;
+                for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) { const on = dist[s+x] <= RD ? 1 : 0; islandF[d2+x] = on; nIsl += on; } }
+                console.log('[QUICK-BAKE] plate islands: ' + nIsl + 'px band (disocc ' + nD + 'px dilated by ' + RD + 'px reach)');
+            }
+            const islandDT = new THREE.DataTexture(islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
+            islandDT.needsUpdate = true; islandDT.flipY = false;
+            islandDT.minFilter = THREE.LinearFilter; islandDT.magFilter = THREE.LinearFilter;
+            if ('colorSpace' in islandDT) islandDT.colorSpace = THREE.NoColorSpace;
             const plateDT = new THREE.DataTexture(plateF, pw, ph, THREE.RedFormat, THREE.FloatType);
             plateDT.needsUpdate = true; plateDT.flipY = false;
             plateDT.minFilter = THREE.LinearFilter; plateDT.magFilter = THREE.LinearFilter;
@@ -9465,6 +9507,13 @@ function buildBackgroundLayer() {
             matQ.uniforms.u_useEdgeMask.value = false;
             matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) - 0.004;
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
+            // A58: the plate is hole-only — render only inside the dilated
+            // disocclusion band (islands), transparent everywhere the FG stays
+            // intact. window._noBgIslands reverts to the solid full clone.
+            if (matQ.uniforms.u_useBgIslands && !window._noBgIslands) {
+                matQ.uniforms.u_useBgIslands.value = true;
+                matQ.uniforms.u_bgIslandMask.value = islandDT;
+            }
             const armNet = (mu) => { if (!mu.u_useBandCut) return;
                 mu.u_useBandCut.value = true;
                 if (mu.u_bandCutAll) mu.u_bandCutAll.value = true;
