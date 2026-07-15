@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.14-a58d | quick-bake plugs: anamorphic projection band (silhouette scaled by occluder-bg depth gap)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5814,7 +5814,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.14-a58d | quick-bake plugs: anamorphic projection band (silhouette scaled by occluder-bg depth gap)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -8152,6 +8152,42 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     const outMeshes = [];
     const EPSd = 1.5/255, RBLUR = 8;
     let totTris = 0;
+    // A58e ANAMORPHIC BACKDROP REACH. The farthest plane must be a HOLE-ONLY
+    // completion — it fills only where a nearer occluder can DISOCCLUDE it,
+    // which is each occluder silhouette PROJECTED onto the backdrop, scaled by
+    // the occluder->backdrop depth gap (big gap = wide band). budV is that
+    // field: a max-plus chamfer seeded with depthStep/slope = (near-far)*K at
+    // every cliff = the parallax reach scaled by the local depth gap. The
+    // backdrop claim is bounded to {budV > 0}; window._noV2Anamorphic reverts
+    // to the old full-frame clone.
+    const budV = new Float32Array(PN);
+    {
+        const sConeV = 0.0015 * 1920 / pw;
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+            const i = y*pw+x; let s2 = 0;
+            if (x < pw-1) { const a = Math.abs(dV[i+1] - dV[i]); if (a > s2) s2 = a; }
+            if (y < ph-1) { const a = Math.abs(dV[i+pw] - dV[i]); if (a > s2) s2 = a; }
+            if (s2 > fgTearStep) { const b = s2 / sConeV; if (b > budV[i]) budV[i] = b;
+                if (x < pw-1 && b > budV[i+1]) budV[i+1] = b;
+                if (y < ph-1 && b > budV[i+pw]) budV[i+pw] = b; }
+        }
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+            const i = y*pw+x; let v = budV[i];
+            if (x > 0 && budV[i-1] - 1 > v) v = budV[i-1] - 1;
+            if (y > 0) { if (budV[i-pw] - 1 > v) v = budV[i-pw] - 1;
+                if (x > 0 && budV[i-pw-1] - 1.41421356 > v) v = budV[i-pw-1] - 1.41421356;
+                if (x < pw-1 && budV[i-pw+1] - 1.41421356 > v) v = budV[i-pw+1] - 1.41421356; }
+            budV[i] = v;
+        }
+        for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+            const i = y*pw+x; let v = budV[i];
+            if (x < pw-1 && budV[i+1] - 1 > v) v = budV[i+1] - 1;
+            if (y < ph-1) { if (budV[i+pw] - 1 > v) v = budV[i+pw] - 1;
+                if (x < pw-1 && budV[i+pw+1] - 1.41421356 > v) v = budV[i+pw+1] - 1.41421356;
+                if (x > 0 && budV[i+pw-1] - 1.41421356 > v) v = budV[i+pw-1] - 1.41421356; }
+            budV[i] = v;
+        }
+    }
     rankOrderV.forEach((k0, rank) => {
         const k = k0 + 1;
         const isFarthest = (rank === 0);
@@ -8200,7 +8236,12 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
             // alpha-0 slivers in its frame margins — the measured left-edge
             // hole bar at cone-edge poses).
             if (isPrimary && k === farKV) {
-                reg[i] = 1; Ff[i] = den > 0 ? num / den : meanDV[k0]; nClaim++;
+                // A58e: hole-only backdrop — claim only inside the anamorphic
+                // reach band, so the sky plane fills disocclusions, not the
+                // whole frame. (The wide margin skirt still handles outpaint.)
+                if (window._noV2Anamorphic || budV[i] > 0) {
+                    reg[i] = 1; Ff[i] = den > 0 ? num / den : meanDV[k0]; nClaim++;
+                }
                 continue;
             }
             if (den <= 0) continue;
