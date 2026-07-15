@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.16-a59a | angle-fade toggle + v2 BG-solo isolates backdrop plug islands', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.16-a59b | v1 plate hole-only anamorphic islands (horizon from FG, taffy cut)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5816,7 +5816,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.16-a59a | angle-fade toggle + v2 BG-solo isolates backdrop plug islands';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.16-a59b | v1 plate hole-only anamorphic islands (horizon from FG, taffy cut)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9898,6 +9898,7 @@ function buildBackgroundLayer() {
         const _mark = (n) => { const t = Date.now(); if (t - _ptPrev > 15) _perf.push(n + ' ' + (t - _ptPrev) + 'ms'); _ptPrev = t; };
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
+        let _islandDT = null; // A59: hole-only anamorphic island mask texture for the v1 plate
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
         let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
         let _stripD = null, _stripC = null, _stripO = null, _stripPW = 0, _stripPH = 0, _stripFrontD = null; // per-layer plates, live (MPI slice 3): two overlap slots
@@ -12166,6 +12167,60 @@ function buildBackgroundLayer() {
                         }
                     }
                 }
+                // A59 HOLE-ONLY ANAMORPHIC ISLANDS FOR THE v1 PLATE. Same
+                // treatment the quick-bake plate got (a58d). The v1 plug was a
+                // FULL clone of the frame at the cone-floor depth: its horizon
+                // sat too far back (misaligned at high angle) and its stretched
+                // rubber ramps streamed as taffy from every occluder to its
+                // disocclusion. Restricting the plate to the anamorphic
+                // disocclusion band fixes BOTH: the horizon + open background
+                // now come from the FG mesh (source depth, correctly aligned)
+                // while the plate shows ONLY where a reveal opens, so there is
+                // no full-clone surface to misalign and no connecting ramp to
+                // smear. disocc = where the plug departs source (the reveal
+                // footprint); bud = the max-plus chamfer that widens it by the
+                // local depth gap (near-far)*K = the parallax reach. Skipped
+                // under scene-extension (oversized geometry has different UVs)
+                // and behind window._noBgIslands.
+                if (plugDepth && depth && !bgExtGeom && !window._noBgIslands) {
+                    const sConeB = 0.0025;
+                    const disB = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (depth[i] - plugDepth[i] > 0.02) disB[i] = 1;
+                    const budB = new Float32Array(PN);
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x; let s2 = 0;
+                        if (x < pw-1) { const a = Math.abs(depth[i+1] - depth[i]);  if (a > s2) s2 = a; }
+                        if (y < ph-1) { const a = Math.abs(depth[i+pw] - depth[i]); if (a > s2) s2 = a; }
+                        if (s2 > fgTearStep) { const b = s2 / sConeB; if (b > budB[i]) budB[i] = b;
+                            if (x < pw-1 && b > budB[i+1]) budB[i+1] = b;
+                            if (y < ph-1 && b > budB[i+pw]) budB[i+pw] = b; }
+                    }
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x; let v = budB[i];
+                        if (x > 0 && budB[i-1] - 1 > v) v = budB[i-1] - 1;
+                        if (y > 0) { if (budB[i-pw] - 1 > v) v = budB[i-pw] - 1;
+                            if (x > 0 && budB[i-pw-1] - 1.41421356 > v) v = budB[i-pw-1] - 1.41421356;
+                            if (x < pw-1 && budB[i-pw+1] - 1.41421356 > v) v = budB[i-pw+1] - 1.41421356; }
+                        budB[i] = v;
+                    }
+                    for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                        const i = y*pw+x; let v = budB[i];
+                        if (x < pw-1 && budB[i+1] - 1 > v) v = budB[i+1] - 1;
+                        if (y < ph-1) { if (budB[i+pw] - 1 > v) v = budB[i+pw] - 1;
+                            if (x < pw-1 && budB[i+pw+1] - 1.41421356 > v) v = budB[i+pw+1] - 1.41421356;
+                            if (x > 0 && budB[i+pw-1] - 1.41421356 > v) v = budB[i+pw-1] - 1.41421356; }
+                        budB[i] = v;
+                    }
+                    const _islandF = new Float32Array(PN);
+                    let nIslV = 0;
+                    for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                        for (let x = 0; x < pw; x++) { const on = (budB[s+x] > 0 || disB[s+x]) ? 1 : 0; _islandF[d2+x] = on; nIslV += on; } }
+                    _islandDT = new THREE.DataTexture(_islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
+                    _islandDT.needsUpdate = true; _islandDT.flipY = false;
+                    _islandDT.minFilter = THREE.LinearFilter; _islandDT.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in _islandDT) _islandDT.colorSpace = THREE.NoColorSpace;
+                    console.log('[RUNG-PLUG] hole-only islands: ' + nIslV + 'px anamorphic band (plate restricted, horizon from FG)');
+                }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
             }
@@ -12176,6 +12231,14 @@ function buildBackgroundLayer() {
         if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
+        // A59: bind the hole-only anamorphic island mask so the plate renders
+        // ONLY inside the disocclusion band (horizon/background come from the FG
+        // mesh at source depth). Native-res mask, so only for the non-extension
+        // plate geometry.
+        if (_islandDT && mat.uniforms.u_useBgIslands) {
+            mat.uniforms.u_useBgIslands.value = true;
+            mat.uniforms.u_bgIslandMask.value = _islandDT;
+        }
         // A35: the plate cuts its own rubber now. Its internal cliffs
         // (mountain-vs-sky continuing under a reveal) used to smear as the
         // one mesh exempt from every net; the stretch heuristics discard
