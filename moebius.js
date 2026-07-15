@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.12-a58 | quick-bake plate = hole-only islands (dilated disocclusion band), not a full clone', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.12-a58b | quick-bake plate = exact SD-region plugs (silhouette shape, background depth), no dilation', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5814,7 +5814,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.12-a58 | quick-bake plate = hole-only islands (dilated disocclusion band), not a full clone';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.12-a58b | quick-bake plate = exact SD-region plugs (silhouette shape, background depth), no dilation';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9239,33 +9239,42 @@ function buildBackgroundLayer() {
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
-            // A58 ISLAND BAND: the plate must plug the reveals and nothing
-            // else. A chamfer distance transform from the disocclusion mask,
-            // thresholded at the parallax reach RD, gives the band each cliff
-            // can open as the FG parallaxes; the plate discards outside it, so
-            // it becomes floating islands that fill exactly the holes at the
-            // background depth. RD scales with resolution; window-tunable.
+            // A58 DISOCCLUSION PLUGS: the plate is a SECOND displaced rubber
+            // sheet at the BACKGROUND depth (plateQ = dune->sky continuation
+            // across the occluded silhouette). It renders in EXACTLY the SD
+            // region (disocc) shape — the astronaut-shaped emptiness behind
+            // the astronaut — and is transparent everywhere else. No dilated
+            // band: because the plug is displaced at BG depth, it moves with
+            // the background and its own silhouette fills the reveal as the FG
+            // parallaxes away. A tiny SEAL (default 1px) closes the hairline
+            // mesh crack at the plug/FG boundary without adding visible skirt.
+            // window._bgIslandDilate overrides the seal width.
             const islandF = new Float32Array(PNq);
             {
-                const RD = (typeof window._bgIslandDilate === 'number') ? window._bgIslandDilate : Math.max(14, Math.round(0.06 * pw));
-                const dist = new Float32Array(PNq);
-                for (let i = 0; i < PNq; i++) dist[i] = disocc[i] ? 0 : 1e9;
-                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; let v = dist[i];
-                    if (x > 0 && dist[i-1]+1 < v) v = dist[i-1]+1;
-                    if (y > 0 && dist[i-pw]+1 < v) v = dist[i-pw]+1;
-                    if (x > 0 && y > 0 && dist[i-pw-1]+1.41421356 < v) v = dist[i-pw-1]+1.41421356;
-                    if (x < pw-1 && y > 0 && dist[i-pw+1]+1.41421356 < v) v = dist[i-pw+1]+1.41421356;
-                    dist[i] = v; }
-                for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; let v = dist[i];
-                    if (x < pw-1 && dist[i+1]+1 < v) v = dist[i+1]+1;
-                    if (y < ph-1 && dist[i+pw]+1 < v) v = dist[i+pw]+1;
-                    if (x < pw-1 && y < ph-1 && dist[i+pw+1]+1.41421356 < v) v = dist[i+pw+1]+1.41421356;
-                    if (x > 0 && y < ph-1 && dist[i+pw-1]+1.41421356 < v) v = dist[i+pw-1]+1.41421356;
-                    dist[i] = v; }
+                const SEAL = (typeof window._bgIslandDilate === 'number') ? window._bgIslandDilate : 1;
+                let cur = disocc;
+                if (SEAL > 0) {
+                    const dist = new Float32Array(PNq);
+                    for (let i = 0; i < PNq; i++) dist[i] = disocc[i] ? 0 : 1e9;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; let v = dist[i];
+                        if (x > 0 && dist[i-1]+1 < v) v = dist[i-1]+1;
+                        if (y > 0 && dist[i-pw]+1 < v) v = dist[i-pw]+1;
+                        if (x > 0 && y > 0 && dist[i-pw-1]+1.41421356 < v) v = dist[i-pw-1]+1.41421356;
+                        if (x < pw-1 && y > 0 && dist[i-pw+1]+1.41421356 < v) v = dist[i-pw+1]+1.41421356;
+                        dist[i] = v; }
+                    for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) { const i = y*pw+x; let v = dist[i];
+                        if (x < pw-1 && dist[i+1]+1 < v) v = dist[i+1]+1;
+                        if (y < ph-1 && dist[i+pw]+1 < v) v = dist[i+pw]+1;
+                        if (x < pw-1 && y < ph-1 && dist[i+pw+1]+1.41421356 < v) v = dist[i+pw+1]+1.41421356;
+                        if (x > 0 && y < ph-1 && dist[i+pw-1]+1.41421356 < v) v = dist[i+pw-1]+1.41421356;
+                        dist[i] = v; }
+                    cur = new Uint8Array(PNq);
+                    for (let i = 0; i < PNq; i++) cur[i] = dist[i] <= SEAL ? 1 : 0;
+                }
                 let nIsl = 0;
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
-                    for (let x = 0; x < pw; x++) { const on = dist[s+x] <= RD ? 1 : 0; islandF[d2+x] = on; nIsl += on; } }
-                console.log('[QUICK-BAKE] plate islands: ' + nIsl + 'px band (disocc ' + nD + 'px dilated by ' + RD + 'px reach)');
+                    for (let x = 0; x < pw; x++) { const on = cur[s+x]; islandF[d2+x] = on; nIsl += on; } }
+                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px (SD region ' + nD + 'px, seal ' + SEAL + 'px)');
             }
             const islandDT = new THREE.DataTexture(islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
             islandDT.needsUpdate = true; islandDT.flipY = false;
