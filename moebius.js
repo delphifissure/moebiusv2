@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.18-a59f | plug uniform desync + bias fixed (Option A default); true ray-reprojection opt-in _rayReproject (Option B)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a60 | ray-reprojection is now DEFAULT (kills extreme-angle taffy); UI toggle + window._rayReproject override', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -50,6 +50,11 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // design statement instead of an artifact.
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 let bgViewFadeEnabled = true;   // main-canvas "Angle fade" toggle (off = test wild angles)
+// A60: true reference-eye ray reprojection is now the DEFAULT (the view-Z push
+// shears depth-gradient surfaces into taffy at extreme angles / distant focal
+// planes). window._rayReproject, if set to a boolean, overrides this for A/B.
+let bgRayReproject = true;
+function _rayReprojectNow() { return (typeof window._rayReproject === 'boolean') ? window._rayReproject : bgRayReproject; }
 // PER-DEVICE FRONT-CAMERA FOV LUT. On top of the virtual-angle cone above,
 // the fade tracks the head's angular position INSIDE the device camera's
 // frame: the last 10 degrees before the head exits the camera FOV fade to
@@ -5845,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.18-a59f | plug uniform desync + bias fixed (Option A default); true ray-reprojection opt-in _rayReproject (Option B)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a60 | ray-reprojection is now DEFAULT (kills extreme-angle taffy); UI toggle + window._rayReproject override';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -12704,6 +12709,10 @@ function _wireDebugSheetControls() {
         bgViewFadeEnabled = e.target.checked;
         updateViewFade();   // apply immediately (clears the overlay when turned off)
     });
+    document.getElementById('rayReprojToggle')?.addEventListener('change', (e) => {
+        bgRayReproject = e.target.checked;
+        delete window._rayReproject;   // UI takes over from any console override
+    });
     const _reachSlider = document.getElementById('fgReachSlider');
     const _reachValue = document.getElementById('fgReachSliderValue');
     if (_reachSlider && _reachValue) {
@@ -13282,7 +13291,7 @@ function updateCameraAndProjection() {
             uniforms.u_splitPeekActive.value = isDraggingSplit;
             uniforms.u_splitPeekValue.value = depthPeekValue;
             uniforms.u_metricScale.value = metricScaleFactor;
-            if (uniforms.u_useRayReproject) uniforms.u_useRayReproject.value = !!window._rayReproject;
+            if (uniforms.u_useRayReproject) uniforms.u_useRayReproject.value = _rayReprojectNow();
             if (uniforms.u_refEye) uniforms.u_refEye.value.set(0, 0, camera.position.z);
 
             // --- NEW: Sync Ghost Mesh Uniforms ---
@@ -13322,7 +13331,7 @@ function updateCameraAndProjection() {
             if (u.u_worldOuterVolumeDepth) u.u_worldOuterVolumeDepth.value = outerVolumeDepth;
             if (u.u_worldInnerVolumeDepth) u.u_worldInnerVolumeDepth.value = innerVolumeDepth;
             if (u.u_metricScale)           u.u_metricScale.value           = metricScaleFactor;
-            if (u.u_useRayReproject)       u.u_useRayReproject.value        = !!window._rayReproject;
+            if (u.u_useRayReproject)       u.u_useRayReproject.value        = _rayReprojectNow();
             if (u.u_refEye)                u.u_refEye.value.set(0, 0, _cz);
         };
         _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
