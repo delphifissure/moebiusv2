@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.17-a59d | ground-continuation depth WIP (opt-in _plugGroundUp); default = pull-push tight plug', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.17-a59e | ground-continuation depth: tearing fixed (horizontal smooth), opt-in _plugGroundUp; default = pull-push tight plug', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5820,7 +5820,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.17-a59d | ground-continuation depth WIP (opt-in _plugGroundUp); default = pull-push tight plug';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.17-a59e | ground-continuation depth: tearing fixed (horizontal smooth), opt-in _plugGroundUp; default = pull-push tight plug';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9316,19 +9316,18 @@ function buildBackgroundLayer() {
             if (window._plugConeDepth) {
                 // plateF stays = plateQ (cone floor)
             } else if (window._plugGroundUp) {
-                // EXPERIMENTAL (a59d, opt-in): ground-continuation. Correct in
-                // principle for the "plug too far back" case, but this column-wise
-                // implementation tears horizontally (each column fills
-                // independently, so adjacent ramps disagree -> the plate mesh
-                // streaks). Needs a 2D-smooth fill with a sharp ground/sky
-                // transition at the occluded horizon before it can be default.
-                // ground recession slope gs = median per-row depth increase of the
-                // visible ground (going DOWN the screen the ground nears, so the
-                // gradient is > 0). Continuing the ground UP from the base at gs
-                // makes it recede at its NATURAL rate and meet the far background
-                // at the occluded horizon (partway up a tall figure), instead of
-                // being stretched near->far over the whole silhouette (which rakes
-                // nearly parallel to the view ray and foreshortens to a sliver).
+                // A59e GROUND-CONTINUATION FLUSH DEPTH (opt-in). The surface behind
+                // a grounded occluder is the GROUND it stands on continuing up to
+                // the occluded horizon, then the far background — NOT the far sky
+                // the pull-push blend grabs (too far back). Two-stage, 2D-smooth:
+                //  (1) per-column, continue the ground UP from the visible bg just
+                //      below each disocc run at the ground's own recession slope gs
+                //      (a gentle rate, so the ramp never rakes parallel to the view
+                //      ray), clamped to the sky above at the horizon;
+                //  (2) smooth the fill HORIZONTALLY within the silhouette so the
+                //      per-column ramps (which start from their own jagged base row)
+                //      agree with their neighbours — this removes the mesh tearing
+                //      that the raw column fill produced.
                 let gs = 0; { const g = [];
                     for (let y = 0; y < ph-1; y++) { const s = y*pw;
                         for (let x = 0; x < pw; x++) { const i = s+x;
@@ -9336,6 +9335,7 @@ function buildBackgroundLayer() {
                             const dd = dQ[i+pw] - dQ[i];
                             if (dd > 0 && dd < fgTearStep) g.push(dd); } }
                     if (g.length) { g.sort((a,b)=>a-b); gs = g[g.length>>1]; } }
+                const plugTD = new Float32Array(PNq);   // top-down plug depth (disocc only)
                 for (let x = 0; x < pw; x++) {
                     let y = ph - 1;
                     while (y >= 0) {
@@ -9345,16 +9345,31 @@ function buildBackgroundLayer() {
                         const aI = (yTop-1 >= 0) ? (yTop-1)*pw+x : -1;
                         const dBase = (bI >= 0 && !disocc[bI]) ? dQ[bI] : plateQ[yBot*pw+x];
                         const dTop  = (aI >= 0 && !disocc[aI]) ? dQ[aI] : plateQ[yTop*pw+x];
-                        // clamp target = the FARTHER of the sky above and the base:
-                        // the ground never recedes past the sky it meets.
-                        const dFar = Math.min(dBase, dTop);
+                        const dFar = Math.min(dBase, dTop);   // ground never recedes past the sky it meets
                         for (let yy = yBot; yy >= yTop; yy--) {
                             let val = dBase - gs * ((yBot+1) - yy);   // ground receding upward
                             if (val < dFar) val = dFar;               // horizon: clamp to sky
-                            plateF[(ph-1-yy)*pw+x] = val;
+                            plugTD[yy*pw+x] = val;
                         }
                     }
                 }
+                // (2) masked horizontal smoothing — average with disocc neighbours
+                // only, so the silhouette boundary is never crossed. Wide effective
+                // radius via many light passes; vertical (ground->sky) structure is
+                // preserved because only the horizontal axis is averaged.
+                const tmpS = new Float32Array(PNq);
+                const SPASS = 24;
+                for (let p = 0; p < SPASS; p++) {
+                    for (let y = 0; y < ph; y++) { const s = y*pw;
+                        for (let x = 0; x < pw; x++) { const i = s+x; if (!disocc[i]) continue;
+                            let sum = plugTD[i], cnt = 1;
+                            if (x > 0 && disocc[i-1]) { sum += plugTD[i-1]; cnt++; }
+                            if (x < pw-1 && disocc[i+1]) { sum += plugTD[i+1]; cnt++; }
+                            tmpS[i] = sum / cnt; } }
+                    for (let i = 0; i < PNq; i++) if (disocc[i]) plugTD[i] = tmpS[i];
+                }
+                for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                    for (let x = 0; x < pw; x++) { const i = s+x; if (disocc[i]) plateF[d2+x] = plugTD[i]; } }
             } else {
                 // DEFAULT (a58c): 2D pull-push continuation of the surrounding
                 // visible background — flush at the silhouette boundary, smooth
