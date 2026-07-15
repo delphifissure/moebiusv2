@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.17-a59e | ground-continuation depth: tearing fixed (horizontal smooth), opt-in _plugGroundUp; default = pull-push tight plug', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.18-a59f | plug uniform desync + bias fixed (Option A default); true ray-reprojection opt-in _rayReproject (Option B)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -1280,6 +1280,8 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_worldOuterVolumeDepth: { value: outerVolumeDepth },
         u_worldInnerVolumeDepth: { value: innerVolumeDepth },
         displacementBias: { value: 0.0 },
+        u_useRayReproject: { value: false },                 // A59f: true anamorphic reprojection (opt-in)
+        u_refEye: { value: new THREE.Vector3(0, 0, 0.2) },   // fixed reference (authoring) eye, world space
         u_textureSize: { value: new THREE.Vector2(1, 1) },
         u_depthPeekActive: { value: depthPeekActive },
         u_depthPeekValue: { value: depthPeekValue },
@@ -1574,6 +1576,8 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_worldOuterVolumeDepth;
         uniform float u_worldInnerVolumeDepth;
         uniform float displacementBias;
+        uniform bool  u_useRayReproject;
+        uniform vec3  u_refEye;
     `;
     
     const viewSpaceDisplacementLogic = `
@@ -1585,8 +1589,29 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             float t = smoothstep(u_portalPlaneDepthNorm, 1.0, vNormalizedDepth);
             displacement = mix(0.0, u_worldInnerVolumeDepth, t);
         }
-        vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
-        viewPosition.z += displacement + displacementBias;
+        float zOff = displacement + displacementBias;
+        vec4 viewPosition;
+        if (u_useRayReproject) {
+            // A59f TRUE REPROJECTION. The legacy path (else) is a fronto-parallel
+            // VIEW-Z push: it keeps each texel at its flat portal-plane XY and only
+            // shoves view-Z, so a revealed surface is NOT placed on its reference
+            // sight ray -> lateral error growing to the frame edges, present even
+            // head-on, and a flat card never rotates. Instead place the texel on the
+            // ray from the fixed reference (authoring) eye through its portal point,
+            // at world depth zOff, in an EYE-INDEPENDENT world frame. The live camera
+            // then reprojects this genuine 3D point with correct parallax from any
+            // position -- the real anamorphic/backward projection.
+            vec3 Pw = (modelMatrix * vec4(position, 1.0)).xyz;   // portal-plane vertex, world
+            float H = u_refEye.z - Pw.z;                          // ref eye -> portal distance
+            if (abs(H) < 1e-4) H = (H < 0.0 ? -1e-4 : 1e-4);
+            vec3 dir = Pw - u_refEye;
+            float s = (H - zOff) / H;                             // so Sw.z == Pw.z + zOff
+            vec3 Sw = u_refEye + dir * s;
+            viewPosition = viewMatrix * vec4(Sw, 1.0);
+        } else {
+            viewPosition = modelViewMatrix * vec4(position, 1.0);
+            viewPosition.z += zOff;
+        }
         vViewPosition = viewPosition.xyz;
         gl_Position = projectionMatrix * viewPosition;
         vClipW = gl_Position.w;
@@ -5820,7 +5845,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.17-a59e | ground-continuation depth: tearing fixed (horizontal smooth), opt-in _plugGroundUp; default = pull-push tight plug';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.18-a59f | plug uniform desync + bias fixed (Option A default); true ray-reprojection opt-in _rayReproject (Option B)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9684,7 +9709,11 @@ function buildBackgroundLayer() {
             matQ.uniforms.map.value = bgColorTarget.texture;
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
-            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) - 0.004;
+            // A59f: the plug is hole-only (renders only where the FG is torn away),
+            // so there is no FG to z-fight — the old -0.004 push-back is unneeded and
+            // was a flat view-Z offset the FG never had (it misregistered the plug vs
+            // the FG). Default to matching the FG (0); window._plugZBias restores it.
+            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) + (window._plugZBias ? -0.004 : 0);
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
             // A58: the plate is hole-only — render only inside the dilated
             // disocclusion band (islands), transparent everywhere the FG stays
@@ -13253,6 +13282,8 @@ function updateCameraAndProjection() {
             uniforms.u_splitPeekActive.value = isDraggingSplit;
             uniforms.u_splitPeekValue.value = depthPeekValue;
             uniforms.u_metricScale.value = metricScaleFactor;
+            if (uniforms.u_useRayReproject) uniforms.u_useRayReproject.value = !!window._rayReproject;
+            if (uniforms.u_refEye) uniforms.u_refEye.value.set(0, 0, camera.position.z);
 
             // --- NEW: Sync Ghost Mesh Uniforms ---
             if (layer.ghostMesh && layer.ghostMesh.material.uniforms) {
@@ -13275,6 +13306,31 @@ function updateCameraAndProjection() {
                 if (gu.videoTexture && uniforms.videoTexture) gu.videoTexture.value = uniforms.videoTexture.value;
             }
         }
+    }
+
+    // --- 3b. A59f: keep the quick-bake PLUG and the v2/MPI completion meshes in
+    // lockstep with the live depth-volume globals + reprojection uniforms. These
+    // meshes are NOT in mediaLayers, so the loop above skips them; their outer/
+    // inner/split froze at bake time and desynced from the FG on any slider change
+    // (the confirmed root cause of the plug misprojection the user reported).
+    {
+        const _cz = camera.position.z;
+        const _syncBG = (m) => {
+            if (!m || !m.material || !m.material.uniforms) return;
+            const u = m.material.uniforms;
+            if (u.u_portalPlaneDepthNorm)  u.u_portalPlaneDepthNorm.value  = currentNormPortalPlane;
+            if (u.u_worldOuterVolumeDepth) u.u_worldOuterVolumeDepth.value = outerVolumeDepth;
+            if (u.u_worldInnerVolumeDepth) u.u_worldInnerVolumeDepth.value = innerVolumeDepth;
+            if (u.u_metricScale)           u.u_metricScale.value           = metricScaleFactor;
+            if (u.u_useRayReproject)       u.u_useRayReproject.value        = !!window._rayReproject;
+            if (u.u_refEye)                u.u_refEye.value.set(0, 0, _cz);
+        };
+        _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
+        _syncBG(typeof bgCardMesh !== 'undefined' ? bgCardMesh : null);
+        _syncBG(typeof mpiMidMesh !== 'undefined' ? mpiMidMesh : null);
+        if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) _syncBG(m);
+        if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) _syncBG(m);
+        if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) _syncBG(Lr && Lr.mesh);
     }
 
     // --- 4. Update Infill Atlas Mesh Uniforms (Legacy/Fallback) ---
