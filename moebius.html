@@ -545,6 +545,7 @@
         <button id="dollyZoomButton" title="Toggle the dolly zoom camera effect.">Dolly Zoom: Off</button>
         <button id="subjectLockToggleButton" title="Toggle camera lock onto the subject's focal plane during dolly zoom.">Subject Lock: On</button>
         <label id="viewFadeToggleLabel" style="display:inline-flex; align-items:center; gap:4px; margin:0 4px;" title="Fade the canvas to black at extreme viewing angles (where the disocclusion budget runs out). Turn OFF to inspect the plug at wild angles."><input type="checkbox" id="viewFadeToggle" checked> Angle fade</label>
+        <label id="rayReprojToggleLabel" style="display:inline-flex; align-items:center; gap:4px; margin:0 4px;" title="True reference-eye reprojection (default): each texel is placed on its authoring-eye sight ray, so depth-gradient surfaces foreshorten correctly instead of shearing into taffy at extreme angles. Turn OFF for the legacy view-Z push (baked depth-pop at rest)."><input type="checkbox" id="rayReprojToggle" checked> Reprojection</label>
 
         <button id="wireframeButton" title="Load a wireframe test scene to visualize depth volumes.">Wireframe</button>
         <button id="showInstructionsButton" title="Show the recommended workflow instructions.">Instructions</button>
