@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.17-a59c | tight silhouette plug @ flush depth (drop bud spill) + shader UV-gate for extension margin', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -49,6 +49,7 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
 // design statement instead of an artifact.
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+let bgViewFadeEnabled = true;   // main-canvas "Angle fade" toggle (off = test wild angles)
 // PER-DEVICE FRONT-CAMERA FOV LUT. On top of the virtual-angle cone above,
 // the fade tracks the head's angular position INSIDE the device camera's
 // frame: the last 10 degrees before the head exits the camera FOV fade to
@@ -76,6 +77,7 @@ function bgDeviceFovProfile() {
 let _viewFadeEl = null;
 function updateViewFade() {
     if (!canvasElement || !camera) return;
+    if (!bgViewFadeEnabled) { if (_viewFadeEl) _viewFadeEl.style.opacity = '0'; return; }
     if (!_viewFadeEl) {
         _viewFadeEl = document.createElement('div');
         _viewFadeEl.style.cssText = 'position:fixed;background:#000;pointer-events:none;opacity:0;z-index:40;transition:none;';
@@ -1658,7 +1660,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // backstop, so discard it -> the plate becomes floating islands
                 // that plug exactly the reveals, at the background depth behind
                 // the occluder.
-                if (u_useBgIslands && texture2D(u_bgIslandMask, vUv).r < 0.5) discard;
+                // A59b: only the in-frame CORE is hole-only. Outside [0,1] is the
+                // scene-extension margin (edge-replicated backdrop) which must stay
+                // visible, so the island discard is gated to vUv in [0,1].
+                if (u_useBgIslands && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0 &&
+                    texture2D(u_bgIslandMask, vUv).r < 0.5) discard;
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
                 ${sdHighlightLogicGLSL}
@@ -5814,7 +5820,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.17-a59c | tight silhouette plug @ flush depth (drop bud spill) + shader UV-gate for extension margin';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9336,13 +9342,29 @@ function buildBackgroundLayer() {
                         dist[i] = v; }
                     cur = new Uint8Array(PNq);
                     for (let i = 0; i < PNq; i++) cur[i] = dist[i] <= FIX ? 1 : 0;
-                } else {
+                } else if (window._bgPlugBand) {
+                    // OPT-IN (legacy a58d): the wide anamorphic band — a 2D
+                    // screen-space approximation of the projection, seeded at the
+                    // cliff and grown by the depth-gap-scaled reach. Superseded by
+                    // the tight footprint below; kept as an escape hatch.
                     cur = new Uint8Array(PNq);
                     for (let i = 0; i < PNq; i++) cur[i] = (bud[i] > 0 || disocc[i]) ? 1 : 0;
+                } else {
+                    // DEFAULT (a59c): the TIGHT silhouette footprint at flush depth.
+                    // The plug is the occluder silhouette; placing it as a mesh at
+                    // the flush background depth and letting the GPU render it IS
+                    // the anamorphic backward projection (perspective divide), so no
+                    // 2D band is needed. With the plug flush and continuous with the
+                    // surrounding visible background, plug + visible-bg form one
+                    // complete surface — parallax shifts them together, so the FG
+                    // sliding over a complete background reveals no hole at any
+                    // angle, and there are NO extraneous pixels beyond the reveal.
+                    cur = new Uint8Array(PNq);
+                    for (let i = 0; i < PNq; i++) cur[i] = disocc[i] ? 1 : 0;
                 }
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const on = cur[s+x]; islandF[d2+x] = on; nIsl += on; } }
-                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px anamorphic band (SD region ' + nD + 'px' + (FIX>=0?(', fixed '+FIX+'px'):', bud-scaled') + ')');
+                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px (SD region ' + nD + 'px, ' + (FIX>=0?('fixed '+FIX+'px'):(window._bgPlugBand?'bud-scaled band':'tight silhouette @ flush depth')) + ')');
             }
             const islandDT = new THREE.DataTexture(islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
             islandDT.needsUpdate = true; islandDT.flipY = false;
@@ -9896,6 +9918,7 @@ function buildBackgroundLayer() {
         const _mark = (n) => { const t = Date.now(); if (t - _ptPrev > 15) _perf.push(n + ' ' + (t - _ptPrev) + 'ms'); _ptPrev = t; };
         let _plugTex = bgDepthTarget.texture;
         let _fillTex = null; // nearest-valid color fill for the plug holes (Law 4)
+        let _islandDT = null; // A59: hole-only anamorphic island mask texture for the v1 plate
         let bgExtGeom = null; // oversized geometry when scene extension is on (else reuse FG geom)
         let _midBand = null, _midDepthV = null, _midRimC = null, _midFillRGB = null, _midPW = 0, _midPH = 0, _midFrontD = null; // under-sheet (MPI slice 2)
         let _stripD = null, _stripC = null, _stripO = null, _stripPW = 0, _stripPH = 0, _stripFrontD = null; // per-layer plates, live (MPI slice 3): two overlap slots
@@ -12164,6 +12187,64 @@ function buildBackgroundLayer() {
                         }
                     }
                 }
+                // A59 HOLE-ONLY ANAMORPHIC ISLANDS FOR THE v1 PLATE. Same
+                // treatment the quick-bake plate got (a58d). The v1 plug was a
+                // FULL clone of the frame at the cone-floor depth: its horizon
+                // sat too far back (misaligned at high angle) and its stretched
+                // rubber ramps streamed as taffy from every occluder to its
+                // disocclusion. Restricting the plate to the anamorphic
+                // disocclusion band fixes BOTH: the horizon + open background
+                // now come from the FG mesh (source depth, correctly aligned)
+                // while the plate shows ONLY where a reveal opens, so there is
+                // no full-clone surface to misalign and no connecting ramp to
+                // smear. disocc = where the plug departs source (the reveal
+                // footprint); bud = the max-plus chamfer that widens it by the
+                // local depth gap (near-far)*K = the parallax reach. Skipped
+                // under scene-extension (oversized geometry has different UVs)
+                // and behind window._noBgIslands.
+                if (plugDepth && depth && !bgExtGeom && !window._noBgIslands) {
+                    const sConeB = 0.0025;
+                    const disB = new Uint8Array(PN);
+                    for (let i = 0; i < PN; i++) if (depth[i] - plugDepth[i] > 0.02) disB[i] = 1;
+                    const budB = new Float32Array(PN);
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x; let s2 = 0;
+                        if (x < pw-1) { const a = Math.abs(depth[i+1] - depth[i]);  if (a > s2) s2 = a; }
+                        if (y < ph-1) { const a = Math.abs(depth[i+pw] - depth[i]); if (a > s2) s2 = a; }
+                        if (s2 > fgTearStep) { const b = s2 / sConeB; if (b > budB[i]) budB[i] = b;
+                            if (x < pw-1 && b > budB[i+1]) budB[i+1] = b;
+                            if (y < ph-1 && b > budB[i+pw]) budB[i+pw] = b; }
+                    }
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        const i = y*pw+x; let v = budB[i];
+                        if (x > 0 && budB[i-1] - 1 > v) v = budB[i-1] - 1;
+                        if (y > 0) { if (budB[i-pw] - 1 > v) v = budB[i-pw] - 1;
+                            if (x > 0 && budB[i-pw-1] - 1.41421356 > v) v = budB[i-pw-1] - 1.41421356;
+                            if (x < pw-1 && budB[i-pw+1] - 1.41421356 > v) v = budB[i-pw+1] - 1.41421356; }
+                        budB[i] = v;
+                    }
+                    for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                        const i = y*pw+x; let v = budB[i];
+                        if (x < pw-1 && budB[i+1] - 1 > v) v = budB[i+1] - 1;
+                        if (y < ph-1) { if (budB[i+pw] - 1 > v) v = budB[i+pw] - 1;
+                            if (x < pw-1 && budB[i+pw+1] - 1.41421356 > v) v = budB[i+pw+1] - 1.41421356;
+                            if (x > 0 && budB[i+pw-1] - 1.41421356 > v) v = budB[i+pw-1] - 1.41421356; }
+                        budB[i] = v;
+                    }
+                    const _islandF = new Float32Array(PN);
+                    let nIslV = 0;
+                    // DEFAULT (a59c): tight silhouette footprint (disocc) at flush
+                    // depth — same as the quick-bake plate. window._bgPlugBand opts
+                    // back into the wide bud band.
+                    const _useBand = !!window._bgPlugBand;
+                    for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
+                        for (let x = 0; x < pw; x++) { const on = (_useBand ? (budB[s+x] > 0 || disB[s+x]) : disB[s+x]) ? 1 : 0; _islandF[d2+x] = on; nIslV += on; } }
+                    _islandDT = new THREE.DataTexture(_islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
+                    _islandDT.needsUpdate = true; _islandDT.flipY = false;
+                    _islandDT.minFilter = THREE.LinearFilter; _islandDT.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in _islandDT) _islandDT.colorSpace = THREE.NoColorSpace;
+                    console.log('[RUNG-PLUG] hole-only islands: ' + nIslV + 'px anamorphic band (plate restricted, horizon from FG)');
+                }
             } catch(e) {
                 console.warn('[RUNG-PLUG] CPU plug failed, using GPU fallback:', e);
             }
@@ -12174,6 +12255,14 @@ function buildBackgroundLayer() {
         if (_fillTex) mat.uniforms.map.value = _fillTex; // nearest-valid color fill in the holes
         mat.uniforms.u_isBackgroundLayer.value = true;
         mat.uniforms.u_useEdgeMask.value = false;
+        // A59: bind the hole-only anamorphic island mask so the plate renders
+        // ONLY inside the disocclusion band (horizon/background come from the FG
+        // mesh at source depth). Native-res mask, so only for the non-extension
+        // plate geometry.
+        if (_islandDT && mat.uniforms.u_useBgIslands) {
+            mat.uniforms.u_useBgIslands.value = true;
+            mat.uniforms.u_bgIslandMask.value = _islandDT;
+        }
         // A35: the plate cuts its own rubber now. Its internal cliffs
         // (mountain-vs-sky continuing under a reveal) used to smear as the
         // one mesh exempt from every net; the stretch heuristics discard
@@ -12480,10 +12569,20 @@ function _wireDebugSheetControls() {
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
         const solo = e.target.checked;
         if (mpiFullMeshes && mpiFullMeshes.length) {
-            // v2: "BG only" hides the primary's NEAREST bin — peek behind the front
-            let maxR = -1;
-            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank > maxR) maxR = m.userData.v2rank;
-            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank === maxR) m.visible = !solo;
+            // v2: "BG solo" isolates the COMPLETION/PLUG. Each layer's farthest
+            // (rank 0) plane is the backdrop, which a58e turned into hole-only
+            // anamorphic islands — it fills ONLY where a nearer occluder can
+            // disocclude it. Solo hides every nearer plane and shows just those
+            // backdrop islands: head-on you see almost nothing (the occluders'
+            // own content is gone), and off-axis the islands appear exactly
+            // where a disocclusion opens — the SD inpaint region, floating in
+            // black. Restoring (solo off) returns the whole stack to visible,
+            // matching the v2 default.
+            for (const m of mpiFullMeshes) m.visible = solo ? (m.userData.v2rank === 0) : true;
+            // while solo'd, force the flat originals hidden so nothing occludes
+            // the isolated backdrop islands (they are shown when the whole plane
+            // stack is toggled off, which solo must override)
+            if (solo) for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = false;
             return;
         }
         // v1: the "FG" is the original mesh AND, under the MPI partition, the
@@ -12491,6 +12590,10 @@ function _wireDebugSheetControls() {
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
         if (mpiLayers && mpiLayers.length) { for (const Lr of mpiLayers) Lr.mesh.visible = !solo; }
         else if (L0 && L0.mesh) L0.mesh.visible = !solo;
+    });
+    document.getElementById('viewFadeToggle')?.addEventListener('change', (e) => {
+        bgViewFadeEnabled = e.target.checked;
+        updateViewFade();   // apply immediately (clears the overlay when turned off)
     });
     const _reachSlider = document.getElementById('fgReachSlider');
     const _reachValue = document.getElementById('fgReachSliderValue');
