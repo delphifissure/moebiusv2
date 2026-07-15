@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.16-a59a | angle-fade toggle + v2 BG-solo isolates backdrop plug islands', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -49,6 +49,7 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
 // design statement instead of an artifact.
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+let bgViewFadeEnabled = true;   // main-canvas "Angle fade" toggle (off = test wild angles)
 // PER-DEVICE FRONT-CAMERA FOV LUT. On top of the virtual-angle cone above,
 // the fade tracks the head's angular position INSIDE the device camera's
 // frame: the last 10 degrees before the head exits the camera FOV fade to
@@ -76,6 +77,7 @@ function bgDeviceFovProfile() {
 let _viewFadeEl = null;
 function updateViewFade() {
     if (!canvasElement || !camera) return;
+    if (!bgViewFadeEnabled) { if (_viewFadeEl) _viewFadeEl.style.opacity = '0'; return; }
     if (!_viewFadeEl) {
         _viewFadeEl = document.createElement('div');
         _viewFadeEl.style.cssText = 'position:fixed;background:#000;pointer-events:none;opacity:0;z-index:40;transition:none;';
@@ -5814,7 +5816,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.15-a58e | anamorphic backdrop for v2 full planes (hole-only, not full-frame clone)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.16-a59a | angle-fade toggle + v2 BG-solo isolates backdrop plug islands';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -12480,10 +12482,20 @@ function _wireDebugSheetControls() {
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
         const solo = e.target.checked;
         if (mpiFullMeshes && mpiFullMeshes.length) {
-            // v2: "BG only" hides the primary's NEAREST bin — peek behind the front
-            let maxR = -1;
-            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank > maxR) maxR = m.userData.v2rank;
-            for (const m of mpiFullMeshes) if (m.userData.v2tag === 'L0' && m.userData.v2rank === maxR) m.visible = !solo;
+            // v2: "BG solo" isolates the COMPLETION/PLUG. Each layer's farthest
+            // (rank 0) plane is the backdrop, which a58e turned into hole-only
+            // anamorphic islands — it fills ONLY where a nearer occluder can
+            // disocclude it. Solo hides every nearer plane and shows just those
+            // backdrop islands: head-on you see almost nothing (the occluders'
+            // own content is gone), and off-axis the islands appear exactly
+            // where a disocclusion opens — the SD inpaint region, floating in
+            // black. Restoring (solo off) returns the whole stack to visible,
+            // matching the v2 default.
+            for (const m of mpiFullMeshes) m.visible = solo ? (m.userData.v2rank === 0) : true;
+            // while solo'd, force the flat originals hidden so nothing occludes
+            // the isolated backdrop islands (they are shown when the whole plane
+            // stack is toggled off, which solo must override)
+            if (solo) for (const Lx of mediaLayers) if (Lx.mesh) Lx.mesh.visible = false;
             return;
         }
         // v1: the "FG" is the original mesh AND, under the MPI partition, the
@@ -12491,6 +12503,10 @@ function _wireDebugSheetControls() {
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
         if (mpiLayers && mpiLayers.length) { for (const Lr of mpiLayers) Lr.mesh.visible = !solo; }
         else if (L0 && L0.mesh) L0.mesh.visible = !solo;
+    });
+    document.getElementById('viewFadeToggle')?.addEventListener('change', (e) => {
+        bgViewFadeEnabled = e.target.checked;
+        updateViewFade();   // apply immediately (clears the overlay when turned off)
     });
     const _reachSlider = document.getElementById('fgReachSlider');
     const _reachValue = document.getElementById('fgReachSliderValue');
