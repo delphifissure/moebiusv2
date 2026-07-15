@@ -6004,21 +6004,24 @@ function exportDebugContactSheet() {
             // path keeps the FG mesh hidden (it renders through ping-pong
             // targets), so a visible-only traversal would miss it and the grid
             // would be all-green.
-            const swap = [], vis = [];
-            const wantMeshes = [];
-            if (typeof mediaLayers !== 'undefined') for (const Lx of mediaLayers) if (Lx && Lx.mesh) wantMeshes.push([Lx.mesh, false]);
-            if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) wantMeshes.push([bgLayerMesh, true]);
-            if (typeof bgCardMesh !== 'undefined' && bgCardMesh) wantMeshes.push([bgCardMesh, false]);
-            for (const [o, isBG] of wantMeshes) {
-                if (!o.material || !o.material.uniforms) continue;
-                vis.push([o, o.visible]); o.visible = true;
+            // Show whatever is actually VISIBLE (in the MPI-v2 default that is
+            // the relief planes; the source media meshes are hidden). Colour
+            // BG-class geometry (v2 planes / u_isBackgroundLayer) green and
+            // foreground media red. In v2 the planes ARE the scene, so the
+            // grid is mostly green — the backdrop plane's full-frame coverage
+            // vs the near planes' island coverage is directly visible.
+            const swap = [];
+            scene.traverse((o) => {
+                if (!o.isMesh || !o.visible || !o.material || !o.material.uniforms) return;
+                const isBG = !!(o.userData && o.userData.v2Plane) ||
+                             !!(o.material.uniforms.u_isBackgroundLayer && o.material.uniforms.u_isBackgroundLayer.value);
                 const wm = o.material.clone();
                 wm.fragmentShader = gridFrag(isBG ? '0.15, 1.0, 0.42' : '1.0, 0.24, 0.30');
                 wm.transparent = false; wm.depthTest = true; wm.depthWrite = true;
                 wm.wireframe = false; wm.needsUpdate = true;
                 swap.push([o, o.material, wm]);
                 o.material = wm;
-            }
+            });
             const prevRT = renderer.getRenderTarget();
             const prevCC = new THREE.Color(); renderer.getClearColor(prevCC);
             const prevCA = renderer.getClearAlpha();
@@ -6035,7 +6038,6 @@ function exportDebugContactSheet() {
             const wc = document.createElement('canvas'); wc.width = panelW; wc.height = panelH;
             wc.getContext('2d').putImageData(new ImageData(wflip, panelW, panelH), 0, 0);
             for (const [o, m, wm] of swap) { o.material = m; wm.dispose(); }
-            for (const [o, v] of vis) o.visible = v;
             renderer.setRenderTarget(prevRT);
             renderer.setClearColor(prevCC, prevCA);
             panels.push({ label: 'deform grid (FG red / BG-plug green = hole or extrusion)', canvas: wc });
