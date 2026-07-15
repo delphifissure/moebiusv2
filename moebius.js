@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.16-a59b | v1 plate hole-only anamorphic islands (horizon from FG, taffy cut)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.17-a59c | tight silhouette plug @ flush depth (drop bud spill) + shader UV-gate for extension margin', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -1660,7 +1660,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // backstop, so discard it -> the plate becomes floating islands
                 // that plug exactly the reveals, at the background depth behind
                 // the occluder.
-                if (u_useBgIslands && texture2D(u_bgIslandMask, vUv).r < 0.5) discard;
+                // A59b: only the in-frame CORE is hole-only. Outside [0,1] is the
+                // scene-extension margin (edge-replicated backdrop) which must stay
+                // visible, so the island discard is gated to vUv in [0,1].
+                if (u_useBgIslands && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0 &&
+                    texture2D(u_bgIslandMask, vUv).r < 0.5) discard;
                 ${unifiedGapLogicGLSL}
                 ${peekHighlightLogicGLSL}
                 ${sdHighlightLogicGLSL}
@@ -5816,7 +5820,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.16-a59b | v1 plate hole-only anamorphic islands (horizon from FG, taffy cut)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.17-a59c | tight silhouette plug @ flush depth (drop bud spill) + shader UV-gate for extension margin';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9338,13 +9342,29 @@ function buildBackgroundLayer() {
                         dist[i] = v; }
                     cur = new Uint8Array(PNq);
                     for (let i = 0; i < PNq; i++) cur[i] = dist[i] <= FIX ? 1 : 0;
-                } else {
+                } else if (window._bgPlugBand) {
+                    // OPT-IN (legacy a58d): the wide anamorphic band — a 2D
+                    // screen-space approximation of the projection, seeded at the
+                    // cliff and grown by the depth-gap-scaled reach. Superseded by
+                    // the tight footprint below; kept as an escape hatch.
                     cur = new Uint8Array(PNq);
                     for (let i = 0; i < PNq; i++) cur[i] = (bud[i] > 0 || disocc[i]) ? 1 : 0;
+                } else {
+                    // DEFAULT (a59c): the TIGHT silhouette footprint at flush depth.
+                    // The plug is the occluder silhouette; placing it as a mesh at
+                    // the flush background depth and letting the GPU render it IS
+                    // the anamorphic backward projection (perspective divide), so no
+                    // 2D band is needed. With the plug flush and continuous with the
+                    // surrounding visible background, plug + visible-bg form one
+                    // complete surface — parallax shifts them together, so the FG
+                    // sliding over a complete background reveals no hole at any
+                    // angle, and there are NO extraneous pixels beyond the reveal.
+                    cur = new Uint8Array(PNq);
+                    for (let i = 0; i < PNq; i++) cur[i] = disocc[i] ? 1 : 0;
                 }
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const on = cur[s+x]; islandF[d2+x] = on; nIsl += on; } }
-                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px anamorphic band (SD region ' + nD + 'px' + (FIX>=0?(', fixed '+FIX+'px'):', bud-scaled') + ')');
+                console.log('[QUICK-BAKE] plate plugs: ' + nIsl + 'px (SD region ' + nD + 'px, ' + (FIX>=0?('fixed '+FIX+'px'):(window._bgPlugBand?'bud-scaled band':'tight silhouette @ flush depth')) + ')');
             }
             const islandDT = new THREE.DataTexture(islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
             islandDT.needsUpdate = true; islandDT.flipY = false;
@@ -12213,8 +12233,12 @@ function buildBackgroundLayer() {
                     }
                     const _islandF = new Float32Array(PN);
                     let nIslV = 0;
+                    // DEFAULT (a59c): tight silhouette footprint (disocc) at flush
+                    // depth — same as the quick-bake plate. window._bgPlugBand opts
+                    // back into the wide bud band.
+                    const _useBand = !!window._bgPlugBand;
                     for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
-                        for (let x = 0; x < pw; x++) { const on = (budB[s+x] > 0 || disB[s+x]) ? 1 : 0; _islandF[d2+x] = on; nIslV += on; } }
+                        for (let x = 0; x < pw; x++) { const on = (_useBand ? (budB[s+x] > 0 || disB[s+x]) : disB[s+x]) ? 1 : 0; _islandF[d2+x] = on; nIslV += on; } }
                     _islandDT = new THREE.DataTexture(_islandF, pw, ph, THREE.RedFormat, THREE.FloatType);
                     _islandDT.needsUpdate = true; _islandDT.flipY = false;
                     _islandDT.minFilter = THREE.LinearFilter; _islandDT.magFilter = THREE.LinearFilter;
