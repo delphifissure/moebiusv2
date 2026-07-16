@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a66 | v2 plane claims pair-validated (kills figure-shaped wash columns); frame flank only through occluder cover. opt-out window._noV2PairValid=true', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a66 | v2 plane claims pair-validated (kills figure-shaped wash columns); frame flank only through occluder cover. opt-out window._noV2PairValid=true';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -8285,6 +8285,10 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     const outMeshes = [];
     const EPSd = 1.5/255, RBLUR = 8;
     let totTris = 0;
+    // A66 PAIR-VALIDATION scratch (see claim gate below): per bin, whether the
+    // march from a pixel to each frame edge crosses ONLY strictly-nearer
+    // content (occluders of this bin). Reused across bins.
+    const fOL = new Uint8Array(PN), fOR = new Uint8Array(PN), fOU = new Uint8Array(PN), fOD = new Uint8Array(PN);
     // A58e ANAMORPHIC BACKDROP REACH. The farthest plane must be a HOLE-ONLY
     // completion — it fills only where a nearer occluder can DISOCCLUDE it,
     // which is each occluder silhouette PROJECTED onto the backdrop, scaled by
@@ -8337,6 +8341,37 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
             last = -2;
             for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; if (texLV[i] === k) { last = i; aD[i] = i; } else aD[i] = last; }
         }
+        // A66 PAIR VALIDATION for plane claims. The old gate accepted ANY
+        // single row/col anchor, and a one-sided lerp collapses to the
+        // anchor's own depth — so a mid bin with ground anchors far below
+        // extended straight UP a figure/staff silhouette and hung in front
+        // of sky as a figure-shaped wash column (the measured v2 ghost
+        // columns; layer-solo render pinned them to the claim regions).
+        // This is the strips' pair rule (Addendum: armor-behind-sword vs
+        // bird-flank-under-sibling) applied to full-plane claims: a claim
+        // needs anchors on BOTH sides of its row or column, where the frame
+        // edge counts as a flank ONLY if the march to it crosses nothing
+        // but strictly-nearer content (occluders of this bin — a figure
+        // cropped by the frame). Sky above a staff breaks the march, so
+        // the column dies; dune behind legs keeps its two-sided rows.
+        // The backdrop bin keeps its own unconditional budV-band rule.
+        // window._noV2PairValid reverts to the one-sided gate.
+        const pairValid = !window._noV2PairValid && !(isPrimary && k === farKV);
+        if (pairValid) {
+            const nearCut = cutV[k] + fgTearStep;   // nearer than the whole bin = occluder
+            for (let y = 0; y < ph; y++) { const row = y*pw;
+                let ok = 1;
+                for (let x = 0; x < pw; x++) { const i = row+x; fOL[i] = ok; if (dV[i] <= nearCut) ok = 0; }
+                ok = 1;
+                for (let x = pw-1; x >= 0; x--) { const i = row+x; fOR[i] = ok; if (dV[i] <= nearCut) ok = 0; }
+            }
+            for (let x = 0; x < pw; x++) {
+                let ok = 1;
+                for (let y = 0; y < ph; y++) { const i = y*pw+x; fOU[i] = ok; if (dV[i] <= nearCut) ok = 0; }
+                ok = 1;
+                for (let y = ph-1; y >= 0; y--) { const i = y*pw+x; fOD[i] = ok; if (dV[i] <= nearCut) ok = 0; }
+            }
+        }
         // region: visible + flank-validated claims where the visible
         // surface is strictly nearer than the layer's continuation
         let nVis = 0, nClaim = 0;
@@ -8378,6 +8413,11 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                 continue;
             }
             if (den <= 0) continue;
+            if (pairValid) {
+                const rowPair = (l2 >= 0 && r2 >= 0) || (l2 >= 0 && fOR[i]) || (r2 >= 0 && fOL[i]);
+                const colPair = (u2 >= 0 && d2 >= 0) || (u2 >= 0 && fOD[i]) || (d2 >= 0 && fOU[i]);
+                if (!rowPair && !colPair) continue;
+            }
             const cont = num / den;
             if (dV[i] - cont > fgTearStep) { reg[i] = 1; Ff[i] = cont; nClaim++; }
         }
