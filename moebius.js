@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a62b | dir-plate shared helper: quick + v1 plug consumers + v2 under-sheet; ink-adjacency SD closure (silhouette ink at far depth joins reveal). opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a62d | frame-edge seed gate (ground = walkable recession or far-field; cropped figures = object) + resolution-scaled barrier window + coupled fold probe. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a62b | dir-plate shared helper: quick + v1 plug consumers + v2 under-sheet; ink-adjacency SD closure (silhouette ink at far depth joins reveal). opt-out window._dirPlate=false';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a62d | frame-edge seed gate (ground = walkable recession or far-field; cropped figures = object) + resolution-scaled barrier window + coupled fold probe. opt-out window._dirPlate=false';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -8782,6 +8782,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     const remB = new Float32Array(PN2);
     const carry = new Float32Array(PN2);
     const q = [];
+    const RWD = Math.max(3, Math.round(4 * pw / 1200));   // depth-window radius (smear scale) — also couples RF below
     let ground = null;
     if (cImg && !window._noGroundStop) {
         const ccQ = document.createElement('canvas'); ccQ.width = pw; ccQ.height = ph;
@@ -8800,7 +8801,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // warrior included). Same smearing physics, same windowed answer
         // as the cliff-seed budgets.
         const isEdge = new Uint8Array(PN2);
-        const dwMx = bgSlide2D(dQ, pw, ph, 3, false), dwMn = bgSlide2D(dQ, pw, ph, 3, true);
+        // Window radius scales with resolution (upscaled estimator output
+        // smears transitions proportionally): ±3 at 1200px missed the
+        // warrior's fur/field boundary (0.24 spread over ~30px at 3000px —
+        // range just under the threshold) and the flood leaked from the
+        // legitimately-seeded 0-field into the figure group.
+        const dwMx = bgSlide2D(dQ, pw, ph, RWD, false), dwMn = bgSlide2D(dQ, pw, ph, RWD, true);
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
             if (dwMx[i] - dwMn[i] > tearStep) { isEdge[i] = 1; continue; }
             if (x < pw-1 && Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE) { isEdge[i]=1; isEdge[i+1]=1; }
@@ -8808,7 +8814,44 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         }
         ground = new Uint8Array(PN2);
         const gq = [];
-        const seed = (i) => { if (!isEdge[i] && !ground[i]) { ground[i]=1; gq.push(i); } };
+        // A62d FRAME-EDGE SEED GATE — "ground is what you can walk down into
+        // the distance". Foreground characters breaking the frame are common
+        // (measured: the silver warrior's bear/sled group touches the bottom
+        // edge and was seeded as ground FROM WITHIN, 134 raw over a 0 field).
+        // Nearness is not the signal (the dune at the bottom edge is the
+        // nearest thing in its scene and IS ground), and raw recession is not
+        // either (a figure STACK also recedes front-to-back: bears 134 ->
+        // rider 72). The discriminator is HOW it recedes: a support surface
+        // recedes SMOOTHLY at plausible ground slopes; a figure pile recedes
+        // through silhouette cliffs. Seed iff (a) within a tear step of the
+        // far limit (sky, a 0-flat field: cannot hide a reveal -> stop
+        // surface by definition), or (b) a cardinal walk accumulates
+        // tearStep/2 of recession with every step smooth at window scale
+        // (±3 range <= 6*sCone — the "plausible ground slope" semantic sCone
+        // already encodes; a cliff ends the walk). False negatives (fronto-
+        // parallel far scenery, studio backdrops -> object) are provably
+        // inert: a front entering flush content is never funded and lowers
+        // nothing. All constants are existing geometry constants.
+        const FARE = tearStep;
+        const RECC = tearStep / 2;
+        const KWALK = Math.max(16, Math.round(48 * pw / 1200));
+        const SMOOTH = tearStep;   // walkable = not a cliff at window scale (window now resolution-scaled)
+        const recedes = (i) => {
+            if (dQ[i] <= FARE) return true;
+            const x0 = i % pw, y0 = (i / pw) | 0;
+            for (const dxy of [[0,-1],[0,1],[-1,0],[1,0]]) {
+                let x = x0, y = y0;
+                for (let k = 0; k < KWALK; k++) {
+                    x += dxy[0]; y += dxy[1];
+                    if (x < 0 || y < 0 || x >= pw || y >= ph) break;
+                    const j = y*pw + x;
+                    if (dwMx[j] - dwMn[j] > SMOOTH) break;      // cliff / non-ground slope: not walkable
+                    if (dQ[i] - dQ[j] >= RECC) return true;      // walked down into the distance
+                }
+            }
+            return false;
+        };
+        const seed = (i) => { if (!isEdge[i] && !ground[i] && recedes(i)) { ground[i]=1; gq.push(i); } };
         for (let x = 0; x < pw; x++) { seed(x); seed((ph-1)*pw+x); }
         for (let y = 0; y < ph; y++) { seed(y*pw); seed(y*pw+pw-1); }
         let gh = 0;
@@ -8840,7 +8883,13 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         pushSeed(i, dQ[i], BOOT, ground && ground[i] && ground[nearJ], (wmx - wmn) / sCone);
     }
     if (ground) {
-        const RF = Math.max(3, Math.round(5 * pw / 1200));
+        // RF must OUT-REACH the barrier strip it probes across: the windowed
+        // depth barrier marks a (2*RWD+1)-wide strip at a smeared fold line,
+        // and a probe smaller than that never sees ground on both sides — the
+        // fold seeds vanish and the crest/ridge reveal band with them
+        // (measured: star SD halved, 13.2% -> 6.6%, when RWD grew to 6 with
+        // RF still 8). RF = RWD + stroke term keeps them coupled.
+        const RF = RWD + Math.max(3, Math.round(5 * pw / 1200));
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
             if (ground[i]) continue;
             let g = -1;
