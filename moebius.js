@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a60 | ray-reprojection is now DEFAULT (kills extreme-angle taffy); UI toggle + window._rayReproject override', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a61b | trust-the-depth-map: ink-seat + stroke-adopt DEPTH DEFAULT OFF (both corrupt good party depth; adopt shatters figures to near dune). opt-in window._inkSeat / window._strokeAdopt', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a60 | ray-reprojection is now DEFAULT (kills extreme-angle taffy); UI toggle + window._rayReproject override';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a61b | trust-the-depth-map: ink-seat + stroke-adopt DEPTH DEFAULT OFF (both corrupt good party depth; adopt shatters figures to near dune). opt-in window._inkSeat / window._strokeAdopt';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -7409,7 +7409,7 @@ function applyLiveBake(L) {
                 // must be the local near plateau or the local far minimum — the
                 // bake's pepper (intermediate values) poisons the plug's rim
                 // depths (mid-gray slabs floating in the reveals) and the tear.
-                if (bmax[i] - bmin[i] > 0.06) {
+                if (!window._noRampCollapse && bmax[i] - bmin[i] > 0.06) {
                     const dN = Math.abs(s - bmax[i]), dF = Math.abs(s - bmin[i]);
                     if (dN > 0.05 && dF > 0.05) { out.sharpened[i] = snapToNear(out.sharpened, i, bmax[i], bmin[i], dN, dF) ? bmax[i] : bmin[i]; snapped++; }
                 }
@@ -7424,7 +7424,7 @@ function applyLiveBake(L) {
             // under parallax. Iterating the same snap lets the plateaus eat
             // the ramp from both sides — each pass converts the texels
             // adjacent to a plateau, so the front marches ~2px per pass.
-            for (let pass = 0; pass < 4; pass++) {
+            for (let pass = 0; !window._noRampCollapse && pass < 4; pass++) {
                 const S = out.sharpened;
                 for (let y = 0; y < h; y++) { const row = y * w;
                     for (let x = 0; x < w; x++) { let m = -1;
@@ -7547,6 +7547,19 @@ function applyLiveBake(L) {
             if (nStroke) {
                 const GAP = 0.05;
                 const D = out.sharpened;
+                // A61: stroke-adopt DEPTH writes DEFAULT OFF. Audit (measured
+                // vs shipped depth map) showed adopt is inert where the
+                // estimator is already right (staff core 118→119, glider
+                // untouched at far) and DESTRUCTIVE where ink is dense: it
+                // lifts every party outline up to the NEAR dune floor the party
+                // stands on, shattering coherent mid-depth figures into a lace
+                // of near-depth ridges (the true source of the party shatter/
+                // billboard the seat then papered over). Its premise ("thin ink
+                // lands at background depth") does not hold on this map. Depth
+                // writes are opt-in via window._strokeAdopt; the stroke mask and
+                // wash-ink rejection below still build (plug ink handling
+                // unchanged) — only the depth corruption is removed.
+                const _adoptOff = (typeof window._strokeAdopt === 'boolean') ? !window._strokeAdopt : true;
                 const adopt = new Float32Array(N);
                 // Per-texel seed candidates (near non-stroke content within
                 // 3px — estimators put the cliff a couple px off the stroke).
@@ -7625,7 +7638,7 @@ function applyLiveBake(L) {
                 L._strokeMask = stroke; L._strokeMaskW = w; L._strokeMaskH = h;
                 let repaired = 0;
                 const adoptedM = new Uint8Array(N);
-                for (let i = 0; i < N; i++) if (adopt[i] > 0 && adopt[i] > D[i] + GAP) {
+                for (let i = 0; i < N; i++) if (!_adoptOff && adopt[i] > 0 && adopt[i] > D[i] + GAP) {
                     D[i] = adopt[i];
                     if (L._rawDepth && adopt[i] > L._rawDepth[i]) L._rawDepth[i] = adopt[i];
                     adoptedM[i] = 1;
@@ -7789,7 +7802,7 @@ function applyLiveBake(L) {
                                        ((bx1 - bx0 > 3 * TOL2) && cx0 <= bx0 + TOL2 && cx1 >= bx1 - TOL2);
                         if (!spanOK) continue;
                         for (const i of members) {
-                            if (adoptD2 > D[i] + GAP) {
+                            if (!_adoptOff && adoptD2 > D[i] + GAP) {
                                 D[i] = adoptD2;
                                 if (L._rawDepth && adoptD2 > L._rawDepth[i]) L._rawDepth[i] = adoptD2;
                                 adoptedM[i] = 1; p2M[i] = 1;
@@ -7856,22 +7869,27 @@ function applyLiveBake(L) {
         // into its ground plane; v1's tear sees no cliff). Big genuinely-
         // near content (the astronaut, mountains) exceeds the area cap and
         // keeps its native 3D. window._noSeatFloor disables for A/B.
-        // ===== A56 INK-ISLAND SEAT (the party fix, measured) =====
-        // The estimator floats small mid-ground figures to near-depth
-        // (the star party: 0.27 over 0.12 ground, spread 0.52), and NO
-        // depth-domain test can isolate them — the standing mask chains
-        // the party to the mountain into one frame-spanning blob, and
-        // floor/lift do not separate the party from the near hero
-        // (measured a55). But this is INK art: Moebius outlines every
-        // form, and the ink is independent of the broken depth. Segment
-        // by ink instead: label non-ink cells, call the two largest
-        // (desert + sky) the background, and connected-component
-        // everything else into figure ISLANDS. The astronaut is one
-        // 1.4M-px island (kept); each party figure is a ~30k-px island
-        // (seated on its ground floor). This fixes the party at the
-        // SHARED source, so v1, quick and v2 all consume corrected depth.
-        // window._noInkSeat disables for A/B.
-        if (!window._noInkSeat && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
+        // ===== A56 INK-ISLAND SEAT — DEFAULT OFF as of A61 =====
+        // WHY OFF: the founding premise ("the estimator floats the party to
+        // a near-spike, 0.27 over 0.12 ground, spread 0.52") does not hold on
+        // the shipped depth map. Measured on starwatcher_depth.png the party
+        // is a coherent mid-depth blob (raw 80..111 over ground ~180, bright=
+        // near) — sensible on the dune, not a hallucinated spike. So the seat
+        // was correcting a NON-error: it took good depth and flattened every
+        // party figure to ONE card (S[i]=cardDepth), which under ray-
+        // reprojection (A60, now default) has no relief to rotate and so
+        // BILLBOARDS in the bake, while realtime — which consumes the depth
+        // faithfully — shows the party from a true angle. Removing the seat
+        // makes the bake consume the raw depth like realtime: the party keeps
+        // its native relief and rotates, with no shear/deep-fan (there was no
+        // spike to shear). The whole mechanism was also a per-image hack —
+        // it ASSUMES ink line-art, ASSUMES the two largest non-ink regions are
+        // the background, and uses hand-tuned size/lift/compactness constants
+        // calibrated to this one composition — which violates the zero-per-
+        // image-tuning contract. Kept behind an explicit opt-in for A/B and
+        // regression archaeology; the estimator's depth is the source of truth.
+        const _inkSeatOn = (typeof window._inkSeat === 'boolean') ? window._inkSeat : false;
+        if (_inkSeatOn && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
             const S = out.sharpened, N = w * h;
             // slope-tolerant cone-erosion floor (ground beneath content)
             const sCone = 0.0015 * 1920 / w;
@@ -9156,6 +9174,59 @@ function buildBackgroundLayer() {
                     if (x < pw-1 && plateQ[i+1]  + sCone < v) v = plateQ[i+1]  + sCone;
                     if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
                     plateQ[i] = v; } }
+            // ===== A62 Step-2 PROTOTYPE: directional far-continuation plate =====
+            // The cone erosion above is a global LOWER ENVELOPE: any farther
+            // region cones its low value outward, so open continuous ground
+            // (the near dune) reads as standing proud of a floor that has been
+            // dragged down to the distant mid-ground — a false disocclusion
+            // (disocc = dQ - plate). The physical plate is the BACKGROUND that
+            // a reveal would expose: on open ground nothing is behind the
+            // surface, so plate == dQ; only UNDER a real occluder (across a
+            // tear-cliff) does a farther surface continue inward. Build that
+            // directly: start plate = the surface, then from every FAR lip of a
+            // tear-cliff flood the far depth INTO the nearer occluder for that
+            // cliff's reveal budget (step / sCone). Open ground gets no far lip
+            // adjacent, so it keeps plate == dQ and never reads proud. (v1 flat
+            // continuation; the far-gradient ramp is the next increment.)
+            if (window._dirPlate) {
+                const P = dQ.slice();
+                const remB = new Float32Array(PNq);
+                const carry = new Float32Array(PNq);
+                const q = [];
+                // STOP-AT-FEET (the standing-ground cue): the far continuation
+                // may only enter a pixel that stands proud of its OWN LOCAL
+                // ground — a genuine occluder body/edge (the figure, its legs,
+                // a cliff lip). Where an occluder meets the ground at equal
+                // depth (the feet) the local relief vanishes, so the flood
+                // stops instead of spilling a skirt across the flat open dune.
+                // Legs survive: a thin leg is proud of the dune right behind it,
+                // so it keeps filling; only flush flat ground is excluded.
+                const locFloor = bgSlide2D(dQ, pw, ph, 3, true);   // small-window ground under each pixel
+                const proud = (j) => dQ[j] - locFloor[j] > fgTearStep;
+                const pushSeed = (i, c, b) => { if (b > remB[i]) { remB[i] = b; carry[i] = c; q.push(i); if (c < P[i]) P[i] = c; } };
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                    let s = 0;
+                    if (x > 0    && dQ[i-1]  - dQ[i] > s) s = dQ[i-1]  - dQ[i];
+                    if (x < pw-1 && dQ[i+1]  - dQ[i] > s) s = dQ[i+1]  - dQ[i];
+                    if (y > 0    && dQ[i-pw] - dQ[i] > s) s = dQ[i-pw] - dQ[i];
+                    if (y < ph-1 && dQ[i+pw] - dQ[i] > s) s = dQ[i+pw] - dQ[i];
+                    if (s > fgTearStep) pushSeed(i, dQ[i], s / sCone);   // far lip; budget = step/sCone
+                }
+                let h = 0;
+                while (h < q.length) { const i = q[h++]; const c = carry[i], b = remB[i];
+                    if (b <= 1) continue;
+                    const x = i%pw, y = (i/pw)|0;
+                    const nb = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                    for (const j of nb) { if (j < 0) continue;
+                        // j must (a) still stand above the far level (under the
+                        // occluder) AND (b) be proud of its own local ground
+                        // (a real occluder, not flat open floor at the feet).
+                        if (dQ[j] - c > fgTearStep && (!window._dirStop || proud(j))) pushSeed(j, c, b - 1);
+                    }
+                }
+                for (let i = 0; i < PNq; i++) plateQ[i] = P[i];
+                console.log('[DIR-PLATE] directional far-continuation plate applied (' + q.length + ' flood cells, stop-at-feet)');
+            }
             // A54 RIGIDIFY — connectivity is a spatial regularizer, and a
             // bake that disconnects (tears + cards) loses it: over the
             // party the estimator's depth is shattered, and per-pixel
@@ -9316,6 +9387,7 @@ function buildBackgroundLayer() {
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
+            if (window._srCapture) { window._qbMask = { disocc: Array.from(disocc), pw, ph }; }  // A61 audit: post-cliff-gate SD mask (top-down)
             // A58c FLUSH PLUG DEPTH. plateQ is the cone-erosion FLOOR — it
             // takes the farther depth, so it sits TOO FAR BACK inside the
             // silhouette; parallax then pulls a gap open at the boundary
