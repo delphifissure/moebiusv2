@@ -8791,10 +8791,20 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         const lumaQ = new Float32Array(PN2);
         for (let i = 0; i < PN2; i++) lumaQ[i] = (0.299*cpxQ[i*4] + 0.587*cpxQ[i*4+1] + 0.114*cpxQ[i*4+2]) / 255;
         const EDGE = (typeof window._grdEdge === 'number') ? window._grdEdge : 0.10;
+        // Barriers: per-px LUMA edge (windowing luma would fuse textured
+        // ground — dune stipple — into a contiguous wall and strand the
+        // flood) + WINDOWED depth range (±3): painterly silhouettes smear
+        // the depth transition over several px, so no single px steps a
+        // full tearStep and the flood walked straight through the figure
+        // (measured on the silver warrior: 94% classified ground, the
+        // warrior included). Same smearing physics, same windowed answer
+        // as the cliff-seed budgets.
         const isEdge = new Uint8Array(PN2);
+        const dwMx = bgSlide2D(dQ, pw, ph, 3, false), dwMn = bgSlide2D(dQ, pw, ph, 3, true);
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-            if (x < pw-1 && (Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE || Math.abs(dQ[i+1]-dQ[i]) > tearStep)) { isEdge[i]=1; isEdge[i+1]=1; }
-            if (y < ph-1 && (Math.abs(lumaQ[i+pw]-lumaQ[i]) > EDGE || Math.abs(dQ[i+pw]-dQ[i]) > tearStep)) { isEdge[i]=1; isEdge[i+pw]=1; }
+            if (dwMx[i] - dwMn[i] > tearStep) { isEdge[i] = 1; continue; }
+            if (x < pw-1 && Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE) { isEdge[i]=1; isEdge[i+1]=1; }
+            if (y < ph-1 && Math.abs(lumaQ[i+pw]-lumaQ[i]) > EDGE) { isEdge[i]=1; isEdge[i+pw]=1; }
         }
         ground = new Uint8Array(PN2);
         const gq = [];
