@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a62 | directional rising-plate DEFAULT ON (quick-bake): plate=far continuation under real occluders only; ground seg + fold case + hop budget; A44 gate bypassed. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a62b | dir-plate shared helper: quick + v1 plug consumers + v2 under-sheet; ink-adjacency SD closure (silhouette ink at far depth joins reveal). opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a62 | directional rising-plate DEFAULT ON (quick-bake): plate=far continuation under real occluders only; ground seg + fold case + hop budget; A44 gate bypassed. opt-out window._dirPlate=false';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a62b | dir-plate shared helper: quick + v1 plug consumers + v2 under-sheet; ink-adjacency SD closure (silhouette ink at far depth joins reveal). opt-out window._dirPlate=false';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -8761,6 +8761,127 @@ function bgBackstopSweep() {
     } catch (e) { console.warn('[RUNG-PLUG] backstop sweep failed:', e); }
 }
 
+// ===== A62 DIRECTIONAL RISING-PLATE (shared: quick-bake, v1 plug, v2 under-sheet) =====
+// The plate a reveal would expose, built from occlusion physics instead of a
+// global lower envelope: plate starts AT the surface (open ground can never
+// read proud) and the far surface continues inward only under real occluders.
+// Ground segmentation (frame-edge flood bounded by luma edges + depth cliffs)
+// supplies object footprints — general to ink art and photos. Seeds at cliff
+// far-lips + ground->object boundary lines; the carried plate RISES at sCone
+// per px (directional min-plus cone: band-limits and ramps); hop budget fixed
+// at seed (the A44 chamfer made directional — margin death alone is unbounded
+// when the surface recedes); fold case (ground-occluding-ground: crests,
+// ridge lips) may enter ground while tear-step funded; BOOT pass-through
+// crosses the estimator's undershot silhouette skin. Full derivation and the
+// measured failure of each simpler variant: REVIEW.md Addendum 62.
+// Returns { plate, ground, cells, guardHit } or null (no depth).
+function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
+    if (!dQ || !pw || !ph) return null;
+    const PN2 = pw * ph;
+    const P = dQ.slice();
+    const remB = new Float32Array(PN2);
+    const carry = new Float32Array(PN2);
+    const q = [];
+    let ground = null;
+    if (cImg && !window._noGroundStop) {
+        const ccQ = document.createElement('canvas'); ccQ.width = pw; ccQ.height = ph;
+        const cctx = ccQ.getContext('2d', { willReadFrequently: true });
+        cctx.drawImage(cImg, 0, 0, pw, ph);
+        const cpxQ = cctx.getImageData(0, 0, pw, ph).data;
+        const lumaQ = new Float32Array(PN2);
+        for (let i = 0; i < PN2; i++) lumaQ[i] = (0.299*cpxQ[i*4] + 0.587*cpxQ[i*4+1] + 0.114*cpxQ[i*4+2]) / 255;
+        const EDGE = (typeof window._grdEdge === 'number') ? window._grdEdge : 0.10;
+        const isEdge = new Uint8Array(PN2);
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+            if (x < pw-1 && (Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE || Math.abs(dQ[i+1]-dQ[i]) > tearStep)) { isEdge[i]=1; isEdge[i+1]=1; }
+            if (y < ph-1 && (Math.abs(lumaQ[i+pw]-lumaQ[i]) > EDGE || Math.abs(dQ[i+pw]-dQ[i]) > tearStep)) { isEdge[i]=1; isEdge[i+pw]=1; }
+        }
+        ground = new Uint8Array(PN2);
+        const gq = [];
+        const seed = (i) => { if (!isEdge[i] && !ground[i]) { ground[i]=1; gq.push(i); } };
+        for (let x = 0; x < pw; x++) { seed(x); seed((ph-1)*pw+x); }
+        for (let y = 0; y < ph; y++) { seed(y*pw); seed(y*pw+pw-1); }
+        let gh = 0;
+        while (gh < gq.length) { const i = gq[gh++]; const x=i%pw, y=(i/pw)|0;
+            const nb=[x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+            for (const j of nb) { if (j<0 || ground[j] || isEdge[j]) continue; ground[j]=1; gq.push(j); } }
+    }
+    const passRem = remB;
+    const seenP = new Uint8Array(PN2);
+    const foldF = new Uint8Array(PN2);
+    const hopB = new Float32Array(PN2);
+    const pushSeed = (i, v, pb, fold, bud) => {
+        if (seenP[i]) return;
+        seenP[i] = 1; carry[i] = v; passRem[i] = pb; foldF[i] = fold ? 1 : 0; hopB[i] = bud; q.push(i);
+    };
+    const BOOT = Math.max(4, Math.round(6 * pw / 1200));
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+        let s = 0, nearJ = -1;
+        if (x > 0    && dQ[i-1]  - dQ[i] > s) { s = dQ[i-1]  - dQ[i]; nearJ = i-1; }
+        if (x < pw-1 && dQ[i+1]  - dQ[i] > s) { s = dQ[i+1]  - dQ[i]; nearJ = i+1; }
+        if (y > 0    && dQ[i-pw] - dQ[i] > s) { s = dQ[i-pw] - dQ[i]; nearJ = i-pw; }
+        if (y < ph-1 && dQ[i+pw] - dQ[i] > s) { s = dQ[i+pw] - dQ[i]; nearJ = i+pw; }
+        if (s <= tearStep) continue;
+        let wmn = dQ[i], wmx = dQ[i];
+        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+            const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
+            const v = dQ[yy*pw+xx]; if (v < wmn) wmn = v; if (v > wmx) wmx = v;
+        }
+        pushSeed(i, dQ[i], BOOT, ground && ground[i] && ground[nearJ], (wmx - wmn) / sCone);
+    }
+    if (ground) {
+        const RF = Math.max(3, Math.round(5 * pw / 1200));
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+            if (ground[i]) continue;
+            let g = -1;
+            if (x > 0    && ground[i-1])  g = i-1;
+            else if (x < pw-1 && ground[i+1])  g = i+1;
+            else if (y > 0    && ground[i-pw]) g = i-pw;
+            else if (y < ph-1 && ground[i+pw]) g = i+pw;
+            if (g < 0) continue;
+            let gmn = 2, gmx = -1;
+            for (let dy = -RF; dy <= RF; dy++) for (let dx = -RF; dx <= RF; dx++) {
+                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
+                const jj = yy*pw+xx; if (!ground[jj]) continue;
+                const v = dQ[jj]; if (v <= 0.01) continue;
+                if (v < gmn) gmn = v; if (v > gmx) gmx = v;
+            }
+            const isFold = gmx > 0 && gmx - gmn > tearStep;
+            let omx = dQ[i];
+            for (let dy = -RF; dy <= RF; dy++) for (let dx = -RF; dx <= RF; dx++) {
+                const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
+                const jj = yy*pw+xx; if (ground[jj]) continue;
+                const v = dQ[jj]; if (v > omx) omx = v;
+            }
+            const cSeed = isFold ? gmn : dQ[g];
+            pushSeed(i, cSeed, BOOT, isFold, Math.max(BOOT, ((isFold ? gmx : omx) - cSeed) / sCone));
+        }
+    }
+    const QUANT = 0.002;
+    let h = 0, guard = 0, GUARD = PN2 * 24;
+    while (h < q.length && guard++ < GUARD) {
+        const i = q[h++]; const v = carry[i]; const fold = foldF[i]; const bud = hopB[i];
+        if (bud <= 1) continue;
+        const x = i%pw, y = (i/pw)|0;
+        const nb = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+        for (const j of nb) { if (j < 0) continue;
+            const v2 = v + sCone;
+            if (ground && ground[j]) {
+                if (!fold || !(dQ[j] - v2 > tearStep)) continue;
+                if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
+                continue;
+            }
+            if (!ground && !(dQ[j] - v > tearStep)) continue;
+            if (v2 < dQ[j] - 0.001) {
+                if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
+            } else if (passRem[i] > 1 && !seenP[j]) {
+                seenP[j] = 1; carry[j] = v2; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
+            }
+        }
+    }
+    return { plate: P, ground, cells: q.length, guardHit: guard >= GUARD };
+}
+
 function buildBackgroundLayer() {
     try {
         const L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
@@ -9174,239 +9295,18 @@ function buildBackgroundLayer() {
                     if (x < pw-1 && plateQ[i+1]  + sCone < v) v = plateQ[i+1]  + sCone;
                     if (y < ph-1 && plateQ[i+pw] + sCone < v) v = plateQ[i+pw] + sCone;
                     plateQ[i] = v; } }
-            // ===== A62 Step-2 PROTOTYPE: directional far-continuation plate =====
-            // The cone erosion above is a global LOWER ENVELOPE: any farther
-            // region cones its low value outward, so open continuous ground
-            // (the near dune) reads as standing proud of a floor that has been
-            // dragged down to the distant mid-ground — a false disocclusion
-            // (disocc = dQ - plate). The physical plate is the BACKGROUND that
-            // a reveal would expose: on open ground nothing is behind the
-            // surface, so plate == dQ; only UNDER a real occluder (across a
-            // tear-cliff) does a farther surface continue inward. Build that
-            // directly: start plate = the surface, then from every FAR lip of a
-            // tear-cliff flood the far depth INTO the nearer occluder for that
-            // cliff's reveal budget (step / sCone). Open ground gets no far lip
-            // adjacent, so it keeps plate == dQ and never reads proud. (v1 flat
-            // continuation; the far-gradient ramp is the next increment.)
-            // A62: DEFAULT ON. Opt-out via window._dirPlate = false (reverts
-            // to the min-envelope + A44 gate for A/B).
+            // ===== A62: directional rising-plate (shared helper) =====
+            // Replaces the cone lower-envelope above when ON (default). Full
+            // physics + derivation: bgDirectionalPlate() and REVIEW Addendum 62.
             const _dirPlateOn = (typeof window._dirPlate === 'boolean') ? window._dirPlate : true;
             if (_dirPlateOn) {
-                const P = dQ.slice();
-                const remB = new Float32Array(PNq);
-                const carry = new Float32Array(PNq);
-                const q = [];
-                // FOOTPRINT BOUND via GROUND SEGMENTATION (the "object base"
-                // stop — general to photos AND ink). Depth alone cannot find a
-                // figure's feet: a standing figure sits at essentially the same
-                // depth as the ground it stands on, so a depth-only stop either
-                // skirts the flood onto the open floor or collapses it to a rim.
-                // The signal that DOES separate a footprint from its ground is
-                // the object's SILHOUETTE — a strong colour/luma edge (an ink
-                // outline, or a photo colour boundary). So segment the GROUND,
-                // not the object: ground = the smooth background reachable from
-                // the FRAME EDGE without crossing a strong colour edge or a
-                // depth cliff. Everything else is object. The far continuation
-                // then fills object pixels and STOPS at any ground pixel — which
-                // is exactly the feet (a colour edge with the large frame-
-                // connected floor on the far side). Figure interiors still fill
-                // (interior detail lines are not frame-connected ground); the
-                // smooth dune crest stays ground (its self-occlusion the mesh
-                // stretches over, no SD). window._noGroundStop reverts to the
-                // raw budget flood for A/B.
                 const cImgQ = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
-                const ccQ = document.createElement('canvas'); ccQ.width = pw; ccQ.height = ph;
-                const cctx = ccQ.getContext('2d', { willReadFrequently: true });
-                let ground = null;
-                if (cImgQ && !window._noGroundStop) {
-                    cctx.drawImage(cImgQ, 0, 0, pw, ph);
-                    const cpxQ = cctx.getImageData(0, 0, pw, ph).data;
-                    const lumaQ = new Float32Array(PNq);
-                    for (let i = 0; i < PNq; i++) lumaQ[i] = (0.299*cpxQ[i*4] + 0.587*cpxQ[i*4+1] + 0.114*cpxQ[i*4+2]) / 255;
-                    const EDGE = (typeof window._grdEdge === 'number') ? window._grdEdge : 0.10;   // luma-gradient silhouette
-                    const isEdge = new Uint8Array(PNq);
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        if (x < pw-1 && (Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE || Math.abs(dQ[i+1]-dQ[i]) > fgTearStep)) { isEdge[i]=1; isEdge[i+1]=1; }
-                        if (y < ph-1 && (Math.abs(lumaQ[i+pw]-lumaQ[i]) > EDGE || Math.abs(dQ[i+pw]-dQ[i]) > fgTearStep)) { isEdge[i]=1; isEdge[i+pw]=1; }
-                    }
-                    ground = new Uint8Array(PNq);
-                    const gq = [];
-                    const seed = (i) => { if (!isEdge[i] && !ground[i]) { ground[i]=1; gq.push(i); } };
-                    for (let x = 0; x < pw; x++) { seed(x); seed((ph-1)*pw+x); }
-                    for (let y = 0; y < ph; y++) { seed(y*pw); seed(y*pw+pw-1); }
-                    let gh = 0;
-                    while (gh < gq.length) { const i = gq[gh++]; const x=i%pw, y=(i/pw)|0;
-                        const nb=[x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                        for (const j of nb) { if (j<0 || ground[j] || isEdge[j]) continue; ground[j]=1; gq.push(j); } }
+                const dirR = bgDirectionalPlate(dQ, pw, ph, cImgQ, sCone, fgTearStep);
+                if (dirR) {
+                    plateQ.set(dirR.plate);
+                    if (window._srCapture) window._dirGroundDbg = dirR.ground ? Array.from(dirR.ground) : null;
+                    console.log('[DIR-PLATE] directional rising-plate continuation (' + dirR.cells + ' flood cells' + (dirR.guardHit ? ', GUARD HIT' : '') + ', ' + (dirR.ground ? 'cliff+boundary seeds' : 'cliff seeds only (no colour)') + ')');
                 }
-                // RISING-PLATE FLOOD (the ramp increment + the band limit in
-                // one). The carried plate value RISES at the cone slope as the
-                // front advances: v' = v + sCone per px. This is the min-plus
-                // cone made DIRECTIONAL — same math as the old envelope, but
-                // supported only on object px reached from real occlusion
-                // boundaries. It band-limits automatically (v meets the surface
-                // after proud/sCone px: wide massifs keep silhouette bands —
-                // crystal TIPS, not the whole mountain — while both-sided
-                // narrow bodies like the astronaut still merge solid), and it
-                // RAMPS the fill (the dune's far side climbs to the distant
-                // ground instead of a flat far slab). A flat carry + budget
-                // RENEWAL had no band limit: renewal re-funds forever inside a
-                // uniformly-proud region and the crystal massif flooded solid.
-                // Estimator UNDERSHOOT (skin px whose depth has not risen yet)
-                // is crossed with a small PASS-THROUGH allowance (BOOT px,
-                // plate not lowered while unfunded) instead of renewal.
-                // Re-push only on a strict plate improvement (> half a depth
-                // quantum) — bounds the queue, no RangeError blowup.
-                const passRem = remB;                    // reuse: pass-through px remaining
-                const seenP = new Uint8Array(PNq);       // pass-through visit-once
-                // SELF-OCCLUSION (the fold case): a dune crest is GROUND
-                // occluding GROUND — the hidden midground strip lies under the
-                // dune's own px below the crest line, which the ground mask
-                // blocks (measured: black tear holes at the crest, no plug
-                // beneath). Discriminator: a fold's cliff has ground on BOTH
-                // sides. Fronts seeded at a ground-ground cliff carry a fold
-                // flag and may enter ground px while funded by a full
-                // tear-step margin (the rising plate band-limits them as
-                // usual); figure-boundary fronts may not (keeps the feet-stop:
-                // a figure's cliff has object on its near side).
-                const foldF = new Uint8Array(PNq);       // front's fold flag at claim time
-                // HOP BUDGET (per-px decay, set at seed, no renewal): the
-                // margin death alone is NOT a band limit when the surface runs
-                // away from the rising plate (measured: the left dune ridge,
-                // step 0.40 over carry 0.12 with the dune receding at
-                // 0.00114/px, closed at only ~0.0014/px -> a 330px band across
-                // most of the visible dune). The old A44 gate's chamfer decays
-                // per PIXEL, capping every band at step/sCone regardless of
-                // surface gradient — reintroduce exactly that, directional:
-                // budget = localStep/sCone at the seed, -1 per hop, dead at 0.
-                // No renewal (renewal == margin, which is the unbounded case).
-                const hopB = new Float32Array(PNq);
-                const pushSeed = (i, v, pb, fold, bud) => {   // seeds: plate not lowered at the seed px itself
-                    if (seenP[i]) return;
-                    seenP[i] = 1; carry[i] = v; passRem[i] = pb; foldF[i] = fold ? 1 : 0; hopB[i] = bud; q.push(i);
-                };
-                // SEEDS — two families, both needed:
-                // (1) CLIFF seeds (every far lip of a per-px tear step): robust
-                //     funding for interiors and for objects whose reveal is
-                //     funded from their own far side (the party, which is
-                //     FARTHER than the dune crest in front of it — a foot
-                //     boundary can never fund it).
-                // (2) BOUNDARY seeds (object px adjacent to ground): catch
-                //     silhouette segments whose depth step the estimator
-                //     smeared below the per-px threshold (the outline-gap
-                //     flag). Carry = the ground's own depth. The estimator
-                //     UNDERSHOOTS the colour silhouette, so at the exact
-                //     boundary px the depth has not risen yet (proud ~ 0): a
-                //     proud-funded budget dies inside the outline skin. Give
-                //     boundary seeds a small BOOTSTRAP budget (cross the
-                //     outline, stroke-width-scaled) — the real funding comes
-                //     from RENEWAL below.
-                // FLOOD: entry by object membership (never into ground; the
-                // foot-stop and the outline-gap fix in one), and the budget
-                // RE-FUNDS from the local proud (max(b-1, (dQ-c)/sCone)) as
-                // the front climbs past the undershot skin into the object's
-                // true height. Px at/below the carried level take plate=min
-                // (no-op) and are never flagged (disocc needs dQ-plate>0.02).
-                const BOOT = Math.max(4, Math.round(6 * pw / 1200));   // pass-through: cross the outline skin (stroke-width scale)
-                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                    let s = 0, nearJ = -1;
-                    if (x > 0    && dQ[i-1]  - dQ[i] > s) { s = dQ[i-1]  - dQ[i]; nearJ = i-1; }
-                    if (x < pw-1 && dQ[i+1]  - dQ[i] > s) { s = dQ[i+1]  - dQ[i]; nearJ = i+1; }
-                    if (y > 0    && dQ[i-pw] - dQ[i] > s) { s = dQ[i-pw] - dQ[i]; nearJ = i-pw; }
-                    if (y < ph-1 && dQ[i+pw] - dQ[i] > s) { s = dQ[i+pw] - dQ[i]; nearJ = i+pw; }
-                    if (s <= fgTearStep) continue;
-                    // (1) far lip: carry its own far depth. Fold flag when the
-                    // cliff is ground-on-both-sides (a surface folding away).
-                    // Budget from the TOTAL local step (±3 window: a smeared
-                    // cliff's full height, not its per-px slice — per-px would
-                    // starve figure interiors whose silhouettes the estimator
-                    // spread over several px).
-                    let wmn = dQ[i], wmx = dQ[i];
-                    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
-                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
-                        const v = dQ[yy*pw+xx]; if (v < wmn) wmn = v; if (v > wmx) wmx = v;
-                    }
-                    pushSeed(i, dQ[i], BOOT, ground && ground[i] && ground[nearJ], (wmx - wmn) / sCone);
-                }
-                if (ground) {
-                    // (2) boundary seeds. FOLD DETECTION AT THE LINE: the crest
-                    // has no per-px depth step (the estimator spreads it), so
-                    // cliff seeds never fire there — the only seeds ON a fold
-                    // are its ink/colour line's boundary seeds. A boundary px
-                    // is a FOLD LINE when the ground on its two sides differs
-                    // by a tear step (dune below, midground above — probed in a
-                    // small box across the line); it then carries the FARTHER
-                    // ground depth + the fold flag (may enter the nearer
-                    // ground: the hidden strip). Uniform ground around (party
-                    // feet, staff over open desert) => not a fold. The horizon
-                    // line (desert occluding sky) IS a fold — correct physics.
-                    const RF = Math.max(3, Math.round(5 * pw / 1200));   // must cross the fold's own ink line (stroke-width scale); RF=3 missed thick crest strokes -> sawtooth gaps in the band
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        if (ground[i]) continue;
-                        let g = -1;
-                        if (x > 0    && ground[i-1])  g = i-1;
-                        else if (x < pw-1 && ground[i+1])  g = i+1;
-                        else if (y > 0    && ground[i-pw]) g = i-pw;
-                        else if (y < ph-1 && ground[i+pw]) g = i+pw;
-                        if (g < 0) continue;
-                        // Fold probe EXCLUDES sky-class ground (dQ ~ 0): sky
-                        // has zero parallax, so what a horizon lip reveals is
-                        // the SAME surface continuing at the lip's own depth —
-                        // plate == surface, no SD (the horizon-line band that
-                        // ballooned the mask to 21% was this error). Sky as
-                        // the carried far side stays correct for OBJECT
-                        // boundaries (crystal tips against sky) via dQ[g].
-                        let gmn = 2, gmx = -1;
-                        for (let dy = -RF; dy <= RF; dy++) for (let dx = -RF; dx <= RF; dx++) {
-                            const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
-                            const jj = yy*pw+xx; if (!ground[jj]) continue;
-                            const v = dQ[jj]; if (v <= 0.01) continue;     // sky class: no fold funding
-                            if (v < gmn) gmn = v; if (v > gmx) gmx = v;
-                        }
-                        const isFold = gmx > 0 && gmx - gmn > fgTearStep;
-                        // budget: fold = the fold's own step; figure boundary =
-                        // the local proud over the carried ground (captures the
-                        // real height when the rise is within the probe box;
-                        // BOOT floor bootstraps across the undershot skin).
-                        let omx = dQ[i];
-                        for (let dy = -RF; dy <= RF; dy++) for (let dx = -RF; dx <= RF; dx++) {
-                            const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
-                            const jj = yy*pw+xx; if (ground[jj]) continue;
-                            const v = dQ[jj]; if (v > omx) omx = v;
-                        }
-                        const cSeed = isFold ? gmn : dQ[g];
-                        pushSeed(i, cSeed, BOOT, isFold, Math.max(BOOT, ((isFold ? gmx : omx) - cSeed) / sCone));
-                    }
-                }
-                const QUANT = 0.002;   // half a depth quantum: re-push only on real plate improvement
-                let h = 0, guard = 0, GUARD = PNq * 24;
-                while (h < q.length && guard++ < GUARD) {
-                    const i = q[h++]; const v = carry[i]; const fold = foldF[i]; const bud = hopB[i];
-                    if (bud <= 1) continue;                                // hop budget spent: band limit
-                    const x = i%pw, y = (i/pw)|0;
-                    const nb = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-                    for (const j of nb) { if (j < 0) continue;
-                        const v2 = v + sCone;                              // the plate RISES at the cone slope
-                        if (ground && ground[j]) {
-                            // ground entry: FOLD fronts only, and only while
-                            // funded by a full tear-step margin (the hidden
-                            // strip under the near side of a ground-ground
-                            // cliff). Figure fronts stop: feet-stop preserved.
-                            if (!fold || !(dQ[j] - v2 > fgTearStep)) continue;
-                            if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
-                            continue;
-                        }
-                        if (!ground && !(dQ[j] - v > fgTearStep)) continue; // legacy gate (no colour buffer)
-                        if (v2 < dQ[j] - 0.001) {                          // funded: plate genuinely below the surface
-                            if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
-                        } else if (passRem[i] > 1 && !seenP[j]) {          // unfunded skin: pass through, plate untouched
-                            seenP[j] = 1; carry[j] = v2; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
-                        }
-                    }
-                }
-                for (let i = 0; i < PNq; i++) plateQ[i] = P[i];
-                if (window._srCapture) window._dirGroundDbg = ground ? Array.from(ground) : null;
-                console.log('[DIR-PLATE] directional rising-plate continuation (' + q.length + ' flood cells' + (guard >= GUARD ? ', GUARD HIT' : '') + ', ' + (ground ? 'cliff+boundary seeds' : 'cliff seeds only (no colour)') + ')');
             }
             // A54 RIGIDIFY — connectivity is a spatial regularizer, and a
             // bake that disconnects (tears + cards) loses it: over the
@@ -9571,6 +9471,53 @@ function buildBackgroundLayer() {
                 let nRamp = 0;
                 for (let i = 0; i < PNq; i++) if (disocc[i] && bud[i] <= 0) { disocc[i] = 0; nRamp++; }
                 if (nRamp) { nD -= nRamp; console.log('[QUICK-BAKE] cliff gate: ' + nRamp + 'px of attached-ramp departure dropped from the SD mask'); }
+            }
+            // A62b INK-ADJACENCY CLOSURE. Silhouette ink whose estimator depth
+            // dipped to (or past) the far level is invisible to a depth-
+            // trusting mask: plate == its own depth, so it never flags — the
+            // helmet-top outline, the cape arc, the staff loop's inner edge
+            // (measured: helmet rim 23 raw, BELOW the plain behind it). But
+            // that ink belongs to the OCCLUDER and orphans when the figure
+            // pulls away, so it must be painted with the reveal. Closure:
+            // stroke-mask px adjacent to a flagged px join the SD region
+            // (stroke-width passes bound the crawl) and inherit the
+            // neighbouring plate (the far surface continues under the ink).
+            // A final sandwich pass seals 1-2px slivers (the ribbon
+            // highlight between its two outlines).
+            if (_dirPlateOn && L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
+                const strokeC = L._strokeMask;
+                const passesC = Math.max(3, Math.round(5 * pw / 1200));
+                let addedC = 0;
+                for (let p = 0; p < passesC; p++) {
+                    const adds = [];
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
+                        const i = y*pw+x;
+                        if (disocc[i] || !strokeC[i]) continue;
+                        let nb = -1;
+                        if (disocc[i-1]) nb = i-1; else if (disocc[i+1]) nb = i+1;
+                        else if (disocc[i-pw]) nb = i-pw; else if (disocc[i+pw]) nb = i+pw;
+                        if (nb >= 0) adds.push(i, nb);
+                    }
+                    if (!adds.length) break;
+                    for (let k = 0; k < adds.length; k += 2) {
+                        const i = adds[k], nb = adds[k+1];
+                        if (disocc[i]) continue;
+                        disocc[i] = 1; nD++; addedC++;
+                        if (plateQ[nb] < plateQ[i]) plateQ[i] = plateQ[nb];
+                    }
+                }
+                for (let sp = 0; sp < 2; sp++) {   // 2 passes, diagonals included: a DIAGONAL strand's highlight sliver is not h/v-sandwiched
+                    const sw = [];
+                    for (let y = 1; y < ph-1; y++) for (let x = 1; x < pw-1; x++) {
+                        const i = y*pw+x; if (disocc[i]) continue;
+                        if ((disocc[i-1] && disocc[i+1]) || (disocc[i-pw] && disocc[i+pw]) ||
+                            (disocc[i-pw-1] && disocc[i+pw+1]) || (disocc[i-pw+1] && disocc[i+pw-1])) sw.push(i);
+                    }
+                    if (!sw.length) break;
+                    for (const i of sw) { disocc[i] = 1; nD++; addedC++;
+                        for (const j of [i-1,i+1,i-pw,i+pw]) if (disocc[j] && plateQ[j] < plateQ[i]) plateQ[i] = plateQ[j]; }
+                }
+                if (addedC) console.log('[DIR-PLATE] ink-adjacency closure: +' + addedC + 'px of silhouette ink joined the SD region');
             }
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
@@ -10367,6 +10314,7 @@ function buildBackgroundLayer() {
                 let dispDepth = depth;  // DISPLAYED depth (haloed when the halo applies this build)
                 let dispBase = depth;   // display-side base: closing-cleaned copy when stroke dips are found (plug pipeline keeps `depth`)
                 let floorField = null;  // local lower envelope (shared: floor rind + under-sheet)
+                let dirPlateV = null;   // A62 port: directional plate for the PLUG-DEPTH consumers (under-sheet, protrusion flatten); the rind keeps the min-envelope (containment semantics)
                 let dropM = null;       // texels of pre-tear-DROPPED FG triangles (backstop contract, A43)
                 let midBand = null;     // under-sheet band (internal-overlap near-side footprint)
                 let midDepthV = null;   // carried LOCAL far-side depth per under-sheet pixel
@@ -11075,6 +11023,18 @@ function buildBackgroundLayer() {
                     // rind; they take diffused + membrane depth and continuation
                     // colours (no carried rim).
                     floorField = bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
+                    // A62 port: the directional plate replaces the min-envelope
+                    // for the PLUG-DEPTH consumers below (v2 under-sheet depth,
+                    // protrusion flatten target) — same physics as quick-bake.
+                    // The floor rind right here keeps floorField: it is
+                    // CONTAINMENT (which unclaimed standing px join the plug),
+                    // not a depth value, and the min-envelope is the
+                    // conservative choice for containment.
+                    if ((typeof window._dirPlate !== 'boolean') || window._dirPlate) {
+                        const cImgDP = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
+                        const dirR = bgDirectionalPlate(depth, pw, ph, cImgDP, 0.0025, fgTearStep);
+                        if (dirR) { dirPlateV = dirR.plate; console.log('[RUNG-PLUG] directional plate for plug consumers (' + dirR.cells + ' flood cells)'); }
+                    }
                     {
                         let nFloorAdd = 0;
                         for (let i = 0; i < PN; i++) {
@@ -11440,7 +11400,7 @@ function buildBackgroundLayer() {
                         // far sliver — the backdrop is the true next surface).
                         if (bgMPIMode) {
                             const RB = bgBandMaxGrowPx | 0;
-                            const fl = floorField || bgSlide2D(depth, pw, ph, RB, true);   // shared with the floor rind
+                            const fl = dirPlateV || floorField || bgSlide2D(depth, pw, ph, RB, true);   // A62: directional plate when ON (under-sheet = the surface BEHIND near content); min-envelope fallback
                             midBand = new Uint8Array(PN);
                             midDepthV = fl;
                             midRimC = new Int32Array(PN).fill(-1);
@@ -11961,7 +11921,7 @@ function buildBackgroundLayer() {
                         const surv = new Float32Array(PN);
                         for (let i = 0; i < PN; i++) surv[i] = dropM[i] ? 0 : dispDepth[i];
                         const survN = bgSlide2D(surv, pw, ph, 4, false);
-                        const floorC = floorField || bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);
+                        const floorC = dirPlateV || floorField || bgSlide2D(depth, pw, ph, bgBandMaxGrowPx | 0, true);   // A62: flatten protrusions to the far continuation, not the global min
                         let nPlateFix = 0, nStripFix = 0;
                         for (let i = 0; i < PN; i++) {
                             if (plugDepth[i] <= floorC[i] + fgTearStep) continue;
