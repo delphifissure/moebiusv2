@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a65 (lens branch) | content-lens FOV normalization: head-motion gain = tan(fov/2)/tan(45deg) on face-track + gyro (90deg = identity). window.setLensFov(deg)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -42,6 +42,19 @@ let isSweeping = false;           // Master lock for automated sweeps
 // to the head-tracked camera position, so poses can be tested without moving
 // your head. Double-click resets. Harness: window.setViewOffset(dx, dy).
 let manualCamDX = 0, manualCamDY = 0;
+// A65 CONTENT LENS FOV (the cut-normalization constant). 90deg ~ viewer-
+// native screen space (an 18mm-ish wide feel): head motion maps at unit
+// gain, today's behavior. For a long-lens close-up cut, the same physical
+// head motion must NOT translate the camera the same way: the scene must
+// feel the same size across cuts (focal-plane content in its expected
+// screen XY) while KEEPING the lens's authored depth compression. The
+// normalization that achieves it: head motion measured in FOCAL-PLANE
+// FRAME WIDTHS is lens-invariant. Frame width at the focal plane goes as
+// 2*D*tan(fov/2); the portal projection absorbs D (the focal plane rides
+// the portal and is pinned there at every eye offset — measured under
+// reprojection, Addendum 64), leaving a pure gain: tan(fov/2)/tan(45deg).
+// Set per cut via window.setLensFov(deg); 90 = identity.
+let contentLensFovDeg = 90;
 let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // SUPPORTED VIEW CONE: the layer stack is complete out to a bounded view
 // angle; past it, content genuinely runs out (a flat capture cannot fill
@@ -5850,7 +5863,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a65 (lens branch) | content-lens FOV normalization: head-motion gain = tan(fov/2)/tan(45deg) on face-track + gyro (90deg = identity). window.setLensFov(deg)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -13723,8 +13736,9 @@ function updateCameraAndProjection() {
         const effectiveDeviationX = currentCombinedX - baselineFaceTrackerOffsetX;
         const effectiveDeviationY = currentCombinedY - baselineFaceTrackerOffsetY;
         const camOff = 0.2;
-        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal;
-        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal;
+        const lensGain = Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg) / 2);   // A65: 90deg -> 1.0 (identity)
+        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * lensGain;
+        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * lensGain;
 
         let gyroCamX = 0;
         let gyroCamY = 0;
@@ -13747,8 +13761,8 @@ function updateCameraAndProjection() {
             const stablePitchDegEquivalent = stablePitchRad * radianToDegreeFactor;
             const stableRollDegEquivalent = stableRollRad * radianToDegreeFactor;
 
-            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX;
-            gyroCamY = stableRollDegEquivalent * gyroSensitivityY;
+            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * lensGain;
+            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * lensGain;
         }
 
         camera.position.x = faceTrackCamX + gyroCamX + manualCamDX;
@@ -17991,6 +18005,7 @@ function setupStaticControlListeners() {
             console.log('[VIEW] manual offset reset');
         });
         window.setViewOffset = (dx, dy) => { manualCamDX = dx || 0; manualCamDY = dy || 0; };
+        window.setLensFov = (deg) => { contentLensFovDeg = Math.max(5, Math.min(170, +deg || 90)); console.log('[LENS] content fov ' + contentLensFovDeg + 'deg, gain ' + Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg)/2).toFixed(3)); };
     }
     
     // --- NEW: Gap Accumulation Listeners ---
