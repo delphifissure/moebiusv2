@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a62d | frame-edge seed gate (ground = walkable recession or far-field; cropped figures = object) + resolution-scaled barrier window + coupled fold probe. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a63 | thin-lift: far-flush attached thin features (staff ribbon/loop at sky depth) lift to their near anchor; 3 structural gates keep figure outlines untouched. opt-out window._noThinLift', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a62d | frame-edge seed gate (ground = walkable recession or far-field; cropped figures = object) + resolution-scaled barrier window + coupled fold probe. opt-out window._dirPlate=false';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a63 | thin-lift: far-flush attached thin features (staff ribbon/loop at sky depth) lift to their near anchor; 3 structural gates keep figure outlines untouched. opt-out window._noThinLift';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -7852,6 +7852,85 @@ function applyLiveBake(L) {
                 // standing-content set even when its ride is too small/low
                 // for the floor sweep (A42)
                 L._inkAdopted = adoptedM; L._inkAdoptedW = w; L._inkAdoptedH = h;
+            }
+            // ===== A63 THIN-LIFT: far-flush dropout rescue (NOT adopt redux) =====
+            // The estimator drops sub-stroke-thin attached features to the FAR
+            // LIMIT outright (the staff's ribbon curls and upper-loop edges
+            // measure 0.0 — exact sky) and they render pinned to the background,
+            // detaching from their occluder under parallax (reproduced at 1440px:
+            // the loop's ghost stays in the sky while the staff moves). Adopt
+            // died because it couldn't tell this from a figure's outline skin;
+            // three STRUCTURAL gates can, each measured:
+            //   1. FLUSH-FAR: candidate stroke px must sit at the far limit
+            //      (D <= fgTearStep). The party/helmet outlines dip only to
+            //      ~0.09 — structurally excluded before any shape test.
+            //   2. FAR-SURROUNDED: the component's ring (outside its own ink)
+            //      must be overwhelmingly far — a body-skin outline has its
+            //      figure on one side and fails.
+            //   3. NEAR ANCHOR: the component must touch decisively nearer
+            //      content (> 4 tear steps) and adopts THAT depth — the physics
+            //      is "this ink is attached to that occluder". No anchor (mesa
+            //      lines, horizon strokes, bird flocks) -> untouched.
+            // window._noThinLift disables for A/B.
+            if (!window._noThinLift && nStroke) {
+                const N3 = w * h;
+                const D3 = out.sharpened;
+                const FARC = 0.06;                        // far-limit flush (tear-step scale)
+                const cand = new Uint8Array(N3);
+                let nC = 0;
+                for (let i = 0; i < N3; i++) if (stroke[i] && D3[i] <= FARC) { cand[i] = 1; nC++; }
+                if (nC) {
+                    const lab3 = new Int32Array(N3).fill(-1);
+                    const q3b = new Int32Array(N3);
+                    let nLift = 0, nComp = 0;
+                    const RS = Math.max(2, Math.round(3 * w / 1200));   // ring / contact radius (stroke scale)
+                    for (let s = 0; s < N3; s++) {
+                        if (!cand[s] || lab3[s] >= 0) continue;
+                        let qt = 0, qh = 0; q3b[qt++] = s; lab3[s] = nComp;
+                        const mem = [];
+                        while (qh < qt) { const i = q3b[qh++]; mem.push(i);
+                            const x = i % w, y = (i / w) | 0;
+                            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                                if (!dx && !dy) continue;
+                                const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                                const j = yy * w + xx; if (cand[j] && lab3[j] < 0) { lab3[j] = nComp; q3b[qt++] = j; }
+                            } }
+                        nComp++;
+                        if (mem.length < 24 || mem.length > N3 * 0.01) continue;   // noise / not a thin feature
+                        // ring + anchor in one pass over the dilated border
+                        let ringFar = 0, ringNear = 0, anchorSum = 0, anchorN = 0;
+                        for (const i of mem) { const x = i % w, y = (i / w) | 0;
+                            for (let dy = -RS; dy <= RS; dy++) for (let dx = -RS; dx <= RS; dx++) {
+                                const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                                const j = yy * w + xx;
+                                if (cand[j] || stroke[j]) continue;        // own ink doesn't vote
+                                if (D3[j] <= 2 * FARC) ringFar++;
+                                else { ringNear++;
+                                    if (D3[j] > FARC * 4) { anchorSum += D3[j]; anchorN++; } }
+                            } }
+                        if (!anchorN) continue;                            // no near attachment: far scenery ink
+                        if (ringNear > 0.15 * (ringFar + ringNear)) {
+                            // more than a contact patch of near around it: body
+                            // skin / dense cluster, not an isolated thin feature
+                            // — unless the near IS the anchor contact only.
+                            if (ringNear - anchorN > 0.05 * (ringFar + ringNear)) continue;
+                        }
+                        const anchorD = anchorSum / anchorN;
+                        for (const i of mem) { D3[i] = anchorD; if (L._rawDepth && anchorD > L._rawDepth[i]) L._rawDepth[i] = anchorD; }
+                        nLift += mem.length;
+                        // sandwich: pale interior between lifted outlines (the
+                        // ribbon's white core is not stroke-classified)
+                        for (const i of mem) { const x = i % w, y = (i / w) | 0;
+                            for (let dy = -RS; dy <= RS; dy++) for (let dx = -RS; dx <= RS; dx++) {
+                                const xx = x + dx, yy = y + dy; if (xx < 1 || yy < 1 || xx >= w - 1 || yy >= h - 1) continue;
+                                const j = yy * w + xx;
+                                if (cand[j] || D3[j] > FARC) continue;
+                                if ((lab3[j - 1] === lab3[i] && lab3[j + 1] === lab3[i]) ||
+                                    (lab3[j - w] === lab3[i] && lab3[j + w] === lab3[i])) { D3[j] = anchorD; nLift++; }
+                            } }
+                    }
+                    if (nLift) console.log('[THIN-LIFT] ' + nLift + 'px of far-flush attached thin features lifted to their anchor');
+                }
             }
         }
         // ===== A55 SEAT-ON-FLOOR: the mis-estimated-figure fix =====
