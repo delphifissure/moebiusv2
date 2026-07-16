@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a63 | thin-lift: far-flush attached thin features (staff ribbon/loop at sky depth) lift to their near anchor; 3 structural gates keep figure outlines untouched. opt-out window._noThinLift', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5850,7 +5850,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a63 | thin-lift: far-flush attached thin features (staff ribbon/loop at sky depth) lift to their near anchor; 3 structural gates keep figure outlines untouched. opt-out window._noThinLift';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a63b | gradient-true fill: anchor PLANES (ramp-vs-hard by measurement) + nearest-anchor-wins + descent floor/trust span; sky-lip fold gate. opt-out window._dirPlate=false';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -8937,14 +8937,99 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         while (gh < gq.length) { const i = gq[gh++]; const x=i%pw, y=(i/pw)|0;
             const nb=[x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
             for (const j of nb) { if (j<0 || ground[j] || isEdge[j]) continue; ground[j]=1; gq.push(j); } }
+        // POCKET PROMOTION. The edge flood only reaches edge-CONNECTED ground;
+        // barrier archipelagos (footprint depth-dents on the open dune, mesa
+        // strips around sky pockets) enclose smooth pockets that then classify
+        // as object — free-fill corridors where any wandering front claims via
+        // membership entry (measured: a sky-anchored cliff seed carried plate
+        // ~0 down a footprint-pocket corridor into the dune, stable through
+        // three seed-side gates). A pocket that touches no frame edge and is
+        // DEPTH-FLUSH with the ground around it (median |delta| <= tearStep,
+        // sampled through the thin barrier) is the same surface: promote. A
+        // figure interior is NOT flush with its surround (astronaut ~0.3
+        // proud) and stays object.
+        if (window._pocketProm) {   // opt-in: nearest-anchor made this unnecessary on the reference (the leak-amplification on painterly figures outweighs it; measured 576k over-promotion on the warrior)
+            const lab = new Int32Array(PN2).fill(-1);
+            const pq = new Int32Array(PN2);
+            const RG = RWD + 2;
+            let nProm = 0;
+            // SINGLE PASS vs a SNAPSHOT of the edge-connected ground: letting
+            // promoted pockets count as ground for later components CASCADES
+            // up through a figure's smeared internal transitions (measured:
+            // 584k px promoted on the warrior, torso/sword bands lost).
+            const ground0 = ground.slice();
+            const promoted = [];
+            for (let s = 0; s < PN2; s++) {
+                if (ground[s] || isEdge[s] || lab[s] >= 0) continue;
+                let qt = 0, qh2 = 0; pq[qt++] = s; lab[s] = s;
+                const mem = []; let touchesEdge = false;
+                while (qh2 < qt) { const i = pq[qh2++]; mem.push(i);
+                    const x = i%pw, y = (i/pw)|0;
+                    if (x === 0 || y === 0 || x === pw-1 || y === ph-1) touchesEdge = true;
+                    const nb = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
+                    for (const j of nb) { if (j<0 || ground[j] || isEdge[j] || lab[j]>=0) continue; lab[j]=s; pq[qt++]=j; } }
+                if (touchesEdge) continue;
+                const ds = [];
+                for (const i of mem) { if (ds.length > 4000) break;
+                    const x = i%pw, y = (i/pw)|0;
+                    let bestA = -1;
+                    for (let dy = -RG; dy <= RG && bestA < 0; dy++) for (let dx = -RG; dx <= RG; dx++) {
+                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
+                        const j = yy*pw+xx; if (ground0[j]) { bestA = Math.abs(dQ[i]-dQ[j]); break; }
+                    }
+                    if (bestA >= 0) ds.push(bestA);
+                }
+                if (!ds.length) continue;
+                ds.sort((a,b)=>a-b);
+                if (ds[ds.length >> 1] <= tearStep) { promoted.push(mem); nProm += mem.length; }
+            }
+            for (const mem of promoted) for (const i of mem) ground[i] = 1;
+            if (nProm) console.log('[DIR-PLATE] pocket promotion: ' + nProm + 'px of enclosed flush pockets joined ground');
+        }
     }
     const passRem = remB;
     const seenP = new Uint8Array(PN2);
     const foldF = new Uint8Array(PN2);
     const hopB = new Float32Array(PN2);
-    const pushSeed = (i, v, pb, fold, bud) => {
+    // A63b RAMP-VS-HARD, measured not classified: each front carries its FAR
+    // ANCHOR's local gradient and the fill continues at THAT slope. Sky and
+    // flat layers measure ~0 -> the fill stays at their depth (hard step);
+    // receding ground measures its own recession -> the fill ramps (ground
+    // continuation). The old fixed +sCone rise domed the fill up toward the
+    // occluder regardless of what the background was doing; extent never
+    // needed the rise anyway — the hop budget (A44 chamfer) owns it. Steps
+    // are clamped to ±sCone (the cone stays the ceiling in both directions).
+    const carGx = new Float32Array(PN2), carGy = new Float32Array(PN2);
+    // The front carries its ANCHOR PLANE (position, depth, gradient) and the
+    // fill value is EVALUATED at each px: v = av + g.(p - a). Path-integrating
+    // the gradient per hop let improve-and-repush prefer descending zig-zags -
+    // each cycle against the gradient lowered v further and the plate walked
+    // to 0 under the dune (measured: p=0.000 flat at x=0.25). A plane is
+    // path-independent: only different seeds' planes compete.
+    const carAx = new Int32Array(PN2), carAy = new Int32Array(PN2), carAv = new Float32Array(PN2);
+    const claimedF = new Uint8Array(PN2);   // px has a plate-lowering claim (nearest-anchor conflict rule)
+    const gradAt = (p2) => {
+        // far-side local gradient, windowed; zeroed across structure (a
+        // sample pair spanning a cliff is not a surface gradient)
+        const x = p2 % pw, y = (p2 / pw) | 0;
+        const R = Math.max(2, Math.round(3 * pw / 1200));
+        let gx = 0, gy = 0;
+        const xa = Math.max(0, x - R), xb = Math.min(pw - 1, x + R);
+        const dxs = dQ[y * pw + xb] - dQ[y * pw + xa];
+        if (Math.abs(dxs) <= tearStep) gx = dxs / Math.max(1, xb - xa);
+        const ya = Math.max(0, y - R), yb = Math.min(ph - 1, y + R);
+        const dys = dQ[yb * pw + x] - dQ[ya * pw + x];
+        if (Math.abs(dys) <= tearStep) gy = dys / Math.max(1, yb - ya);
+        const cl = sCone;
+        return [Math.max(-cl, Math.min(cl, gx)), Math.max(-cl, Math.min(cl, gy))];
+    };
+    const pushSeed = (i, v, pb, fold, bud, gsrc) => {
         if (seenP[i]) return;
-        seenP[i] = 1; carry[i] = v; passRem[i] = pb; foldF[i] = fold ? 1 : 0; hopB[i] = bud; q.push(i);
+        seenP[i] = 1; carry[i] = v; passRem[i] = pb; foldF[i] = fold ? 1 : 0; hopB[i] = bud;
+        const g = gradAt(gsrc === undefined ? i : gsrc);
+        carGx[i] = g[0]; carGy[i] = g[1];
+        carAx[i] = i % pw; carAy[i] = (i / pw) | 0; carAv[i] = v;
+        q.push(i);
     };
     const BOOT = Math.max(4, Math.round(6 * pw / 1200));
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
@@ -8959,7 +9044,15 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
             const v = dQ[yy*pw+xx]; if (v < wmn) wmn = v; if (v > wmx) wmx = v;
         }
-        pushSeed(i, dQ[i], BOOT, ground && ground[i] && ground[nearJ], (wmx - wmn) / sCone);
+        // Fold flag requires a NON-SKY far lip: a lip against zero-parallax
+        // sky reveals more of the SAME surface (plate == surface, nothing to
+        // seed), never sky — the boundary-seed fold probe already excludes
+        // sky, but cliff seeds carried dQ[i]=0 straight in, and with the
+        // gradient-true fill (sky gradient = 0) those fronts ran the whole
+        // budget at plate 0 under the dune (measured: plate 0.000 flat at
+        // x=0.25, mask 13.7 -> 16.7%). Object fills from sky lips (crystal
+        // tips) stay: that reveal is real, and they are not folds.
+        pushSeed(i, dQ[i], BOOT, ground && ground[i] && ground[nearJ] && dQ[i] > 0.01, (wmx - wmn) / sCone);
     }
     if (ground) {
         // RF must OUT-REACH the barrier strip it probes across: the windowed
@@ -8992,28 +9085,62 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 const v = dQ[jj]; if (v > omx) omx = v;
             }
             const cSeed = isFold ? gmn : dQ[g];
-            pushSeed(i, cSeed, BOOT, isFold, Math.max(BOOT, ((isFold ? gmx : omx) - cSeed) / sCone));
+            pushSeed(i, cSeed, BOOT, isFold, Math.max(BOOT, ((isFold ? gmx : omx) - cSeed) / sCone), g);   // gradient measured at the GROUND anchor
         }
     }
+    const KE = 4 * (Math.max(3, Math.round(4 * pw / 1200)) + Math.max(3, Math.round(5 * pw / 1200)));   // gradient trust span ~ 4*RF
     const QUANT = 0.002;
     let h = 0, guard = 0, GUARD = PN2 * 24;
     while (h < q.length && guard++ < GUARD) {
         const i = q[h++]; const v = carry[i]; const fold = foldF[i]; const bud = hopB[i];
         if (bud <= 1) continue;
+        const gx = carGx[i], gy = carGy[i];
+        const ax = carAx[i], ay = carAy[i], av = carAv[i];
         const x = i%pw, y = (i/pw)|0;
         const nb = [x>0?i-1:-1, x<pw-1?i+1:-1, y>0?i-pw:-1, y<ph-1?i+pw:-1];
-        for (const j of nb) { if (j < 0) continue;
-            const v2 = v + sCone;
+        for (let n4 = 0; n4 < 4; n4++) { const j = nb[n4]; if (j < 0) continue;
+            const xj = j % pw, yj = (j / pw) | 0;
+            // anchor plane evaluated at j, extrapolation TRUSTED only near the
+            // anchor (a +/-3px-window gradient extrapolated 150px is noise
+            // amplification: a slightly-negative fold anchor walked the plate
+            // to a clamped 0 under the dune). Beyond KE the fill holds flat.
+            let dxe = xj - ax, dye = yj - ay;
+            if (dxe > KE) dxe = KE; else if (dxe < -KE) dxe = -KE;
+            if (dye > KE) dye = KE; else if (dye < -KE) dye = -KE;
+            // DESCENT FLOOR: a continuation may ramp UP freely (ground coming
+            // nearer under the occluder — physical) but never more than one
+            // tear step BELOW its own anchor: deeper has no evidence, it is
+            // extrapolated fantasy — and lowest-plane-wins re-push otherwise
+            // selects the noisiest negative-gradient seed in range (measured:
+            // a -sCone anchor at the ridge walked the plate to a clamped 0
+            // across the dune, stable through three upstream fixes).
+            const v2 = Math.max(0, Math.max(av - tearStep, av + gx * dxe + gy * dye));
+            // NEAREST-ANCHOR WINS: a reveal shows the continuation of the
+            // occlusion boundary NEAREST to it. Lowest-plane-wins selected
+            // the noisiest negative-gradient anchor in budget range every
+            // time (three measured incarnations of the same zero-plate).
+            // Value is only the tiebreak at ~equal distance. Re-claims
+            // strictly reduce anchor distance -> bounded.
+            const takes = (jj) => {
+                if (!claimedF[jj]) return true;
+                const dxo = xj - carAx[jj], dyo = yj - carAy[jj];
+                const d2o = dxo*dxo + dyo*dyo;
+                const dxn = xj - ax, dyn = yj - ay;
+                const d2n = dxn*dxn + dyn*dyn;
+                if (d2n < d2o - 1) return true;
+                if (d2n <= d2o + 1 && v2 < P[jj] - QUANT) return true;
+                return false;
+            };
             if (ground && ground[j]) {
                 if (!fold || !(dQ[j] - v2 > tearStep)) continue;
-                if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
+                if (takes(j)) { P[j] = v2; claimedF[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
                 continue;
             }
             if (!ground && !(dQ[j] - v > tearStep)) continue;
             if (v2 < dQ[j] - 0.001) {
-                if (v2 < P[j] - QUANT) { P[j] = v2; carry[j] = v2; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
+                if (takes(j)) { P[j] = v2; claimedF[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
             } else if (passRem[i] > 1 && !seenP[j]) {
-                seenP[j] = 1; carry[j] = v2; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
+                seenP[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
             }
         }
     }
