@@ -9217,8 +9217,19 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 if (!claimedF[i]) continue;
                 const l = gL[x];
                 if (l < 0 || nextG < 0) continue;
+                const vL = dQ[row + l], vR = dQ[row + nextG];
+                // SAME-CLASS GATE (the part of the membrane rule the first cut
+                // dropped, and the user's device caught): the lerp is only the
+                // continuation of A surface when both flanks ARE one surface.
+                // Sky-left/plain-right across the astronaut lerped into a
+                // mid-depth shelf that glued the horizon to the figure and
+                // deepened the plate (wider reveal, exposed wash ghost). When
+                // the flanks disagree by more than a tear step, keep the
+                // flood's directional value — that case is the fold/skyline
+                // territory the flood already owns.
+                if (Math.abs(vL - vR) > tearStep) continue;
                 const dl = x - l, dr = nextG - x;
-                let v = (dQ[row + l] * dr + dQ[row + nextG] * dl) / (dl + dr);
+                let v = (vL * dr + vR * dl) / (dl + dr);
                 if (v > dQ[i]) v = dQ[i];
                 if (v < 0) v = 0;
                 if (Math.abs(v - P[i]) > 0.005) fixed++;
