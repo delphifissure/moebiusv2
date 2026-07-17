@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a66 | v2 plane claims pair-validated (kills figure-shaped wash columns); frame flank only through occluder cover. opt-out window._noV2PairValid=true', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a67 | q!=P subject pin via lateral-offset gain (e-q)/(e0-q) under reprojection (mesh-scale law demoted to legacy path); a66 v2 pair-validated claims', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -207,6 +207,7 @@ let dollyZoomActive = false;
 let subjectLockActive = true; // Set to true by default
 let dollyZoomTime = 0;
 const dollyZoomSpeed = 0.0005;
+let dollyLatGain = 1;   // A67: q!=P subject pin under reprojection — scales the applied lateral eye offset during a dolly (1 = inert)
 let initialFov = 75; // This is now a baseline that can be overridden by intrinsics
 let subjectLockConstantK = 0;
 const dollyMinDistance = 0.05;
@@ -5850,7 +5851,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a66 | v2 plane claims pair-validated (kills figure-shaped wash columns); frame flank only through occluder cover. opt-out window._noV2PairValid=true';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a67 | q!=P subject pin via lateral-offset gain (e-q)/(e0-q) under reprojection (mesh-scale law demoted to legacy path); a66 v2 pair-validated claims';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -13710,6 +13711,33 @@ function updateCameraAndProjection() {
         // (base distance) the transform is identity, so head-tracking
         // parallax at rest is untouched.
         if (subjectLockActive && Math.abs(subjectFocalPlaneWorldZ - portalPlaneWorldZ) > 1e-6) {
+            if (_rayReprojectNow()) {
+                // A67 REPROJECTION-NATIVE SUBJECT PIN. The mesh-scaling pin
+                // below is wrong under ray reprojection — the scale moves the
+                // plane the shader displaces from, so content Z itself shifts;
+                // measured: the subject bin drifted exactly like lock-off while
+                // other depth bands warped. Reprojection also makes the pin
+                // trivial: with u_refEye z-tracking the eye, a texel's portal
+                // hit is X = px - ex*zOff/(e-P-zOff) — an on-axis dolly is a
+                // structural no-op and ALL dolly drift is the lateral-offset
+                // term. Content on the subject plane (zOff = q-P) drifts only
+                // through ex/(e-q), so scaling the APPLIED lateral eye offset
+                // by g = (e-q)/(e0-q) pins the subject plane exactly, for any
+                // live head position, off-axis included — while the portal
+                // plane stays pinned (its term has zOff = 0). Head parallax
+                // about the subject becomes dolly-invariant; other depths
+                // breathe. g = 1 at the engage distance, so activation is
+                // seamless.
+                if (window._dzBase) {   // switched paths mid-dolly: restore mesh transforms
+                    for (const b of window._dzBase.list) { b.m.scale.set(b.sx, b.sy, b.sz); b.m.position.set(b.px, b.py, b.pz); }
+                    window._dzBase = null;
+                }
+                if (!window._dzLat) window._dzLat = { e0: camera.position.z };
+                const dq0 = window._dzLat.e0 - subjectFocalPlaneWorldZ;
+                const dqe = camera.position.z - subjectFocalPlaneWorldZ;
+                dollyLatGain = Math.abs(dq0) < 1e-4 ? 1 : dqe / dq0;
+            } else {
+            window._dzLat = null; dollyLatGain = 1;   // legacy path owns the pin
             if (!window._dzBase) {
                 const list = [];
                 const add = (m) => { if (m) list.push({ m, sx: m.scale.x, sy: m.scale.y, sz: m.scale.z, px: m.position.x, py: m.position.y, pz: m.position.z }); };
@@ -13731,11 +13759,14 @@ function updateCameraAndProjection() {
                 b.m.scale.set(b.sx * s, b.sy * s, b.sz * s);
                 b.m.position.set(ex + (b.px - ex) * s, ey + (b.py - ey) * s, q + (b.pz - q) * s);
             }
+            }
         }
     } else if (window._dzBase) {
         for (const b of window._dzBase.list) { b.m.scale.set(b.sx, b.sy, b.sz); b.m.position.set(b.px, b.py, b.pz); }
         window._dzBase = null;
     }
+    if (!dollyZoomActive || !subjectLockActive ||
+        Math.abs(subjectFocalPlaneWorldZ - portalPlaneWorldZ) <= 1e-6) { window._dzLat = null; dollyLatGain = 1; }
 
     // --- 2. Handle Face Tracking & Gyro ---
     const ftsSlider = document.getElementById('facetrackingScalarSlider');
@@ -13791,8 +13822,9 @@ function updateCameraAndProjection() {
             gyroCamY = stableRollDegEquivalent * gyroSensitivityY;
         }
 
-        camera.position.x = faceTrackCamX + gyroCamX + manualCamDX;
-        camera.position.y = faceTrackCamY + gyroCamY + manualCamDY;
+        // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
+        camera.position.x = (faceTrackCamX + gyroCamX + manualCamDX) * dollyLatGain;
+        camera.position.y = (faceTrackCamY + gyroCamY + manualCamDY) * dollyLatGain;
     }
     updateViewFade();
 
