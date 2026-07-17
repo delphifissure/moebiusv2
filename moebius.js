@@ -10275,9 +10275,89 @@ function buildBackgroundLayer() {
                     }
                 }
             }
+            // A70 DEPTH-CONSISTENT PLATE COLOURS. The GPU wash ghosted: its
+            // seed gate is a fixed-radius dilation, and figure-fringe texels
+            // reading as plate depth seeded figure tones that pull-push spread
+            // into a figure-shaped doppelganger across the reveal (measured:
+            // the plate-only render carries a blue astronaut copy — the same
+            // class v1 killed with depth-consistent continuation). The rule,
+            // ported to the quick plate: every disocc px's colour comes from
+            // REAL BACKGROUND at the px's OWN plate depth, found along its row
+            // (columns as fallback) within a resolution-scaled bound;
+            // inverse-distance blend when two-sided. Pixels with no
+            // depth-compatible background in reach take the nearest RESOLVED
+            // reveal colour in their row (never the figure). The GPU wash
+            // remains the base texture only where nothing resolves.
+            // Opt-out window._noPlateRowColor.
+            let plateColorTex = null;
+            if (!window._noPlateRowColor) {
+                try {
+                    const tCR0 = Date.now();
+                    const cImgP = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvP = document.createElement('canvas'); cvP.width = pw; cvP.height = ph;
+                    const cxP = cvP.getContext('2d', { willReadFrequently: true });
+                    cxP.drawImage(cImgP, 0, 0, pw, ph);
+                    const pxP = cxP.getImageData(0, 0, pw, ph);
+                    const cd = pxP.data;
+                    const BOUNDR = Math.max(200, Math.round(400 * pw / 1920));
+                    const TOLD = 0.06;
+                    const resolved = new Uint8Array(PNq);
+                    let nRow = 0, nCol = 0, nMiss = 0;
+                    for (let y = 0; y < ph; y++) {
+                        const row = y * pw;
+                        for (let x = 0; x < pw; x++) {
+                            const i = row + x;
+                            if (!disocc[i]) continue;
+                            const tgt = plateQ[i];
+                            let lj = -1, rj = -1;
+                            for (let s = 1; s <= BOUNDR; s++) { const xx = x - s; if (xx < 0) break;
+                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
+                            for (let s = 1; s <= BOUNDR; s++) { const xx = x + s; if (xx >= pw) break;
+                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
+                            if (lj < 0 && rj < 0) {
+                                for (let s = 1; s <= BOUNDR; s++) { const yy = y - s; if (yy < 0) break;
+                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
+                                for (let s = 1; s <= BOUNDR; s++) { const yy = y + s; if (yy >= ph) break;
+                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
+                                if (lj >= 0 || rj >= 0) nCol++; else { nMiss++; continue; }
+                            } else nRow++;
+                            let r2, g2, b2;
+                            if (lj >= 0 && rj >= 0) {
+                                const dl = Math.abs((lj % pw) - x) + Math.abs(((lj / pw) | 0) - y);
+                                const dr = Math.abs((rj % pw) - x) + Math.abs(((rj / pw) | 0) - y);
+                                const wl = dr / (dl + dr), wr = dl / (dl + dr);
+                                r2 = cd[lj*4] * wl + cd[rj*4] * wr; g2 = cd[lj*4+1] * wl + cd[rj*4+1] * wr; b2 = cd[lj*4+2] * wl + cd[rj*4+2] * wr;
+                            } else { const j = lj >= 0 ? lj : rj; r2 = cd[j*4]; g2 = cd[j*4+1]; b2 = cd[j*4+2]; }
+                            cd[i*4] = r2; cd[i*4+1] = g2; cd[i*4+2] = b2; cd[i*4+3] = 255;
+                            resolved[i] = 1;
+                        }
+                    }
+                    // misses take the nearest RESOLVED reveal colour along their row
+                    // (never figure paint — those px are the doppelganger source)
+                    if (nMiss) {
+                        for (let y = 0; y < ph; y++) { const row = y * pw;
+                            for (let x = 0; x < pw; x++) { const i = row + x;
+                                if (!disocc[i] || resolved[i]) continue;
+                                let j = -1;
+                                for (let s = 1; s <= BOUNDR; s++) {
+                                    const xl = x - s, xr = x + s;
+                                    if (xl >= 0 && resolved[row + xl]) { j = row + xl; break; }
+                                    if (xr < pw && resolved[row + xr]) { j = row + xr; break; }
+                                }
+                                if (j >= 0) { cd[i*4] = cd[j*4]; cd[i*4+1] = cd[j*4+1]; cd[i*4+2] = cd[j*4+2]; cd[i*4+3] = 255; }
+                            }
+                        }
+                    }
+                    cxP.putImageData(pxP, 0, 0);
+                    plateColorTex = new THREE.CanvasTexture(cvP);
+                    plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
+                    console.log('[QUICK-BAKE] depth-consistent plate colours: ' + nRow + ' row / ' + nCol + ' col / ' + nMiss + ' miss (' + (Date.now() - tCR0) + 'ms)');
+                } catch (eCR) { console.warn('[QUICK-BAKE] plate row-colour pass failed, wash kept:', eCR); plateColorTex = null; }
+            }
             const matQ = L.mesh.material.clone();
             matQ.uniforms.displacementMap.value = plateDT;
-            matQ.uniforms.map.value = bgColorTarget.texture;
+            matQ.uniforms.map.value = plateColorTex || bgColorTarget.texture;
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
             // A59f: the plug is hole-only (renders only where the FG is torn away),
