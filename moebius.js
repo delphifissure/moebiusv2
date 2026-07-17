@@ -6130,7 +6130,7 @@ function exportDebugContactSheet() {
         const reachStamp = document.getElementById('fgReachSlider')?.value || '120';
         const stamp = [
             MOEBIUS_DEBUG_VERSION + ' | ' + new Date().toISOString() + ' | render ' + srcW + 'x' + srcH,
-            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
+            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
         ];
         ctx.fillStyle = '#ff8';
         stamp.forEach((s, i) => ctx.fillText(s, pad, sheet.height - footerH + 20 + i * 18));
@@ -13284,10 +13284,32 @@ function _wireDebugSheetControls() {
         });
     }
     document.getElementById('sdBundleBtn')?.addEventListener('click', exportSDBundle);
+    // A71 BAKE MODE DROPDOWN (user request: the quick/v2 checkboxes were
+    // confusing — one control, one truth). The select drives the three
+    // mode flags atomically; changing it rebuilds immediately if the user
+    // has already built once (same contract as rebuild-on-new-upload).
+    // The old checkbox ids are gone from the HTML; their handlers stayed
+    // guarded so nothing breaks if an old page is cached.
+    {
+        const modeSel = document.getElementById('bgModeSel');
+        const applyBakeMode = (m) => {
+            if (m === 'quick')   { bgQuickBake = true; }
+            else if (m === 'v2') { bgQuickBake = false; bgMPIFullPlanes = true;  bgMPIMode = true; }
+            else                 { bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false; }
+            window._bgBakeMode = m;   // debug-sheet stamp
+        };
+        if (modeSel) {
+            modeSel.value = (typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick'
+                          : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1');
+            applyBakeMode(modeSel.value);
+            modeSel.addEventListener('change', () => {
+                applyBakeMode(modeSel.value);
+                if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay();
+            });
+        }
+    }
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
-    const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
     document.getElementById('bgQuickBakeChk')?.addEventListener('change', (e) => { bgQuickBake = !!e.target.checked; });
-    const _qbChk = document.getElementById('bgQuickBakeChk'); if (_qbChk) _qbChk.checked = bgQuickBake;
     // A36: SD-region highlight — preview of exactly where diffusion will
     // inpaint (depth-tinted band + bright rim on the plate, dimmed FG).
     document.getElementById('sdRegionsChk')?.addEventListener('change', (e) => {
