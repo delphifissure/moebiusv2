@@ -28,6 +28,15 @@ const ASSETS = [
   // (user-reported device regressions) -> range restored to the a63b
   // baseline; with _plateMembrane=true it measures ~23.3.
   ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
+  // TROLL = the app's SHIPPED DEFAULT (defaultImg*.png) and the one asset the
+  // a62+ sweeps never covered (harness probes overwrite its filename). These
+  // ranges PIN THE KNOWN-DEFECTIVE state (A73): the cave-tangle composition
+  // depth-connects figures to their surroundings (dark-on-dark, contacts
+  // everywhere), the ground flood swallows the figures (94.7%!), the plate
+  // sits flush at figure depth, and the plug renders as bg-extruded-to-fg
+  // (user-reported tunneling at 22deg). A73's fix MUST move these numbers —
+  // ground% far below 94.7 — and should then re-pin them at the healthy values.
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     15.0, 26.0, 90.0, 98.0],
 ];
 
 let pass = 0, fail = 0;
