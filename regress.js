@@ -24,10 +24,10 @@ const ASSETS = [
   // photo's higher SD% is the known dense-texture pocket cost of leaving
   // pocket promotion opt-in (a63b decision, made on star+warrior evidence:
   // promotion amplified painterly boundary leaks). Revisit if SD budget
-  // matters for photographic content. Range re-based at a69: the row-flank
-  // membrane removed pit-driven false flags (28.6 -> 23.3 measured; render
-  // verified clean at 0.35 offset).
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          19.0, 28.0, 58.0, 70.0],
+  // matters for photographic content. a72b: membrane back to opt-in
+  // (user-reported device regressions) -> range restored to the a63b
+  // baseline; with _plateMembrane=true it measures ~23.3.
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
 ];
 
 let pass = 0, fail = 0;

@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5864,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -6130,7 +6130,7 @@ function exportDebugContactSheet() {
         const reachStamp = document.getElementById('fgReachSlider')?.value || '120';
         const stamp = [
             MOEBIUS_DEBUG_VERSION + ' | ' + new Date().toISOString() + ' | render ' + srcW + 'x' + srcH,
-            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
+            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
         ];
         ctx.fillStyle = '#ff8';
         stamp.forEach((s, i) => ctx.fillText(s, pad, sheet.height - footerH + 20 + i * 18));
@@ -9215,8 +9215,13 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // would drag roof texture down — the exact failure the taxonomy names);
     // one-sided pixels keep the flood value; unclaimed interior pixels keep
     // plate == surface so the SD mask cannot grow into unreachable depths.
-    // Opt-out window._noPlateMembrane.
-    if (!window._noPlateMembrane && ground) {
+    // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateMembrane = true).
+    // The membrane (with its same-class gate) measured well on the warrior
+    // pits, but the user reported net regressions on device against the
+    // pre-a69 build ("steps back"), and deepened plates widen reveals — at
+    // offset that reads as tunneling through the figure, the A33/A57
+    // contract. Off until re-landed with a tunneling invariant in the suite.
+    if (window._plateMembrane === true && ground) {
         const gL = new Int32Array(pw);
         let fixed = 0;
         for (let y = 0; y < ph; y++) {
@@ -10301,9 +10306,16 @@ function buildBackgroundLayer() {
             // depth-compatible background in reach take the nearest RESOLVED
             // reveal colour in their row (never the figure). The GPU wash
             // remains the base texture only where nothing resolves.
-            // Opt-out window._noPlateRowColor.
+            // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateRowColor = true).
+            // Depth-true reveal colours paint SKY behind tall figures where
+            // the plate is legitimately at sky depth — and a sky-coloured
+            // reveal inside a figure silhouette READS as tunneling (the
+            // doppelganger, wrong as content, read as solid). The right
+            // reveal content for a figure against sky is a taxonomy call
+            // (user's court), so the wash stays the default and this pass
+            // (plus its consensus) is opt-in until that call is made.
             let plateColorTex = null;
-            if (!window._noPlateRowColor) {
+            if (window._plateRowColor === true) {
                 try {
                     const tCR0 = Date.now();
                     const cImgP = (L.elements && L.elements.color) || L.textures.color.image;
@@ -10360,6 +10372,48 @@ function buildBackgroundLayer() {
                                 if (j >= 0) { cd[i*4] = cd[j*4]; cd[i*4+1] = cd[j*4+1]; cd[i*4+2] = cd[j*4+2]; cd[i*4+3] = 255; }
                             }
                         }
+                    }
+                    // A72 VERTICAL CONSENSUS. Rows are smooth by construction but
+                    // adjacent rows anchor to different flanks, and the
+                    // row-to-row decorrelation reads as comb striping (measured
+                    // on the warrior at 0.25: the a70 colours were right, the
+                    // stripes were the new artifact — same class the v1 wash
+                    // softening answered). Masked vertical box blur over the
+                    // reveal colours only: never crosses out of the disocc
+                    // region, radius resolution-scaled; vertical gradients
+                    // (sky -> mountain -> field) span hundreds of px and survive.
+                    {
+                        const RBV = Math.max(8, Math.round(16 * ph / 1920));   // vertical: the striping axis
+                        const RBH = Math.max(3, Math.round(6 * pw / 1920));    // horizontal: soften anchor handovers mid-reveal
+                        const tr = new Uint8Array(PNq), tg = new Uint8Array(PNq), tb = new Uint8Array(PNq);
+                        for (let x = 0; x < pw; x++) {
+                            let sr = 0, sg = 0, sb = 0, sn = 0;
+                            const add = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
+                            const sub = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
+                            for (let yy = 0; yy <= Math.min(ph - 1, RBV); yy++) add(yy);
+                            for (let y = 0; y < ph; y++) {
+                                const i = y*pw + x;
+                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
+                                const yAdd = y + RBV + 1, ySub = y - RBV;
+                                if (yAdd < ph) add(yAdd);
+                                if (ySub >= 0) sub(ySub);
+                            }
+                        }
+                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
+                        for (let y = 0; y < ph; y++) { const row = y*pw;
+                            let sr = 0, sg = 0, sb = 0, sn = 0;
+                            const add = (xx) => { const j = row + xx; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
+                            const sub = (xx) => { const j = row + xx; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
+                            for (let xx = 0; xx <= Math.min(pw - 1, RBH); xx++) add(xx);
+                            for (let x = 0; x < pw; x++) {
+                                const i = row + x;
+                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
+                                const xAdd = x + RBH + 1, xSub = x - RBH;
+                                if (xAdd < pw) add(xAdd);
+                                if (xSub >= 0) sub(xSub);
+                            }
+                        }
+                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
                     }
                     cxP.putImageData(pxP, 0, 0);
                     plateColorTex = new THREE.CanvasTexture(cvP);
@@ -13284,10 +13338,32 @@ function _wireDebugSheetControls() {
         });
     }
     document.getElementById('sdBundleBtn')?.addEventListener('click', exportSDBundle);
+    // A71 BAKE MODE DROPDOWN (user request: the quick/v2 checkboxes were
+    // confusing — one control, one truth). The select drives the three
+    // mode flags atomically; changing it rebuilds immediately if the user
+    // has already built once (same contract as rebuild-on-new-upload).
+    // The old checkbox ids are gone from the HTML; their handlers stayed
+    // guarded so nothing breaks if an old page is cached.
+    {
+        const modeSel = document.getElementById('bgModeSel');
+        const applyBakeMode = (m) => {
+            if (m === 'quick')   { bgQuickBake = true; }
+            else if (m === 'v2') { bgQuickBake = false; bgMPIFullPlanes = true;  bgMPIMode = true; }
+            else                 { bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false; }
+            window._bgBakeMode = m;   // debug-sheet stamp
+        };
+        if (modeSel) {
+            modeSel.value = (typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick'
+                          : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1');
+            applyBakeMode(modeSel.value);
+            modeSel.addEventListener('change', () => {
+                applyBakeMode(modeSel.value);
+                if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay();
+            });
+        }
+    }
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
-    const _fpChk = document.getElementById('bgFullPlanesChk'); if (_fpChk) _fpChk.checked = bgMPIFullPlanes;
     document.getElementById('bgQuickBakeChk')?.addEventListener('change', (e) => { bgQuickBake = !!e.target.checked; });
-    const _qbChk = document.getElementById('bgQuickBakeChk'); if (_qbChk) _qbChk.checked = bgQuickBake;
     // A36: SD-region highlight — preview of exactly where diffusion will
     // inpaint (depth-tinted band + bright rim on the plate, dimmed FG).
     document.getElementById('sdRegionsChk')?.addEventListener('change', (e) => {
