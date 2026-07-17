@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70 (lens branch) | a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (window.setLensFov)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5864,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70 (lens branch) | a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (window.setLensFov)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
