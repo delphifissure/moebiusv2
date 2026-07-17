@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a69 | row-flank membrane on the dir plate (reveal continues its flanking surfaces; kills far-plane pits under big figures); a67 q!=P lateral-gain pin; a66 v2 pair validation. opt-out window._noPlateMembrane', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -42,6 +42,19 @@ let isSweeping = false;           // Master lock for automated sweeps
 // to the head-tracked camera position, so poses can be tested without moving
 // your head. Double-click resets. Harness: window.setViewOffset(dx, dy).
 let manualCamDX = 0, manualCamDY = 0;
+// A65 CONTENT LENS FOV (the cut-normalization constant). 90deg ~ viewer-
+// native screen space (an 18mm-ish wide feel): head motion maps at unit
+// gain, today's behavior. For a long-lens close-up cut, the same physical
+// head motion must NOT translate the camera the same way: the scene must
+// feel the same size across cuts (focal-plane content in its expected
+// screen XY) while KEEPING the lens's authored depth compression. The
+// normalization that achieves it: head motion measured in FOCAL-PLANE
+// FRAME WIDTHS is lens-invariant. Frame width at the focal plane goes as
+// 2*D*tan(fov/2); the portal projection absorbs D (the focal plane rides
+// the portal and is pinned there at every eye offset — measured under
+// reprojection, Addendum 64), leaving a pure gain: tan(fov/2)/tan(45deg).
+// Set per cut via window.setLensFov(deg); 90 = identity.
+let contentLensFovDeg = 90;
 let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // SUPPORTED VIEW CONE: the layer stack is complete out to a bounded view
 // angle; past it, content genuinely runs out (a flat capture cannot fill
@@ -5851,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a69 | row-flank membrane on the dir plate (reveal continues its flanking surfaces; kills far-plane pits under big figures); a67 q!=P lateral-gain pin; a66 v2 pair validation. opt-out window._noPlateMembrane';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9217,8 +9230,19 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 if (!claimedF[i]) continue;
                 const l = gL[x];
                 if (l < 0 || nextG < 0) continue;
+                const vL = dQ[row + l], vR = dQ[row + nextG];
+                // SAME-CLASS GATE (the part of the membrane rule the first cut
+                // dropped, and the user's device caught): the lerp is only the
+                // continuation of A surface when both flanks ARE one surface.
+                // Sky-left/plain-right across the astronaut lerped into a
+                // mid-depth shelf that glued the horizon to the figure and
+                // deepened the plate (wider reveal, exposed wash ghost). When
+                // the flanks disagree by more than a tear step, keep the
+                // flood's directional value — that case is the fold/skyline
+                // territory the flood already owns.
+                if (Math.abs(vL - vR) > tearStep) continue;
                 const dl = x - l, dr = nextG - x;
-                let v = (dQ[row + l] * dr + dQ[row + nextG] * dl) / (dl + dr);
+                let v = (vL * dr + vR * dl) / (dl + dr);
                 if (v > dQ[i]) v = dQ[i];
                 if (v < 0) v = 0;
                 if (Math.abs(v - P[i]) > 0.005) fixed++;
@@ -10264,9 +10288,89 @@ function buildBackgroundLayer() {
                     }
                 }
             }
+            // A70 DEPTH-CONSISTENT PLATE COLOURS. The GPU wash ghosted: its
+            // seed gate is a fixed-radius dilation, and figure-fringe texels
+            // reading as plate depth seeded figure tones that pull-push spread
+            // into a figure-shaped doppelganger across the reveal (measured:
+            // the plate-only render carries a blue astronaut copy — the same
+            // class v1 killed with depth-consistent continuation). The rule,
+            // ported to the quick plate: every disocc px's colour comes from
+            // REAL BACKGROUND at the px's OWN plate depth, found along its row
+            // (columns as fallback) within a resolution-scaled bound;
+            // inverse-distance blend when two-sided. Pixels with no
+            // depth-compatible background in reach take the nearest RESOLVED
+            // reveal colour in their row (never the figure). The GPU wash
+            // remains the base texture only where nothing resolves.
+            // Opt-out window._noPlateRowColor.
+            let plateColorTex = null;
+            if (!window._noPlateRowColor) {
+                try {
+                    const tCR0 = Date.now();
+                    const cImgP = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvP = document.createElement('canvas'); cvP.width = pw; cvP.height = ph;
+                    const cxP = cvP.getContext('2d', { willReadFrequently: true });
+                    cxP.drawImage(cImgP, 0, 0, pw, ph);
+                    const pxP = cxP.getImageData(0, 0, pw, ph);
+                    const cd = pxP.data;
+                    const BOUNDR = Math.max(200, Math.round(400 * pw / 1920));
+                    const TOLD = 0.06;
+                    const resolved = new Uint8Array(PNq);
+                    let nRow = 0, nCol = 0, nMiss = 0;
+                    for (let y = 0; y < ph; y++) {
+                        const row = y * pw;
+                        for (let x = 0; x < pw; x++) {
+                            const i = row + x;
+                            if (!disocc[i]) continue;
+                            const tgt = plateQ[i];
+                            let lj = -1, rj = -1;
+                            for (let s = 1; s <= BOUNDR; s++) { const xx = x - s; if (xx < 0) break;
+                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
+                            for (let s = 1; s <= BOUNDR; s++) { const xx = x + s; if (xx >= pw) break;
+                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
+                            if (lj < 0 && rj < 0) {
+                                for (let s = 1; s <= BOUNDR; s++) { const yy = y - s; if (yy < 0) break;
+                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
+                                for (let s = 1; s <= BOUNDR; s++) { const yy = y + s; if (yy >= ph) break;
+                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
+                                if (lj >= 0 || rj >= 0) nCol++; else { nMiss++; continue; }
+                            } else nRow++;
+                            let r2, g2, b2;
+                            if (lj >= 0 && rj >= 0) {
+                                const dl = Math.abs((lj % pw) - x) + Math.abs(((lj / pw) | 0) - y);
+                                const dr = Math.abs((rj % pw) - x) + Math.abs(((rj / pw) | 0) - y);
+                                const wl = dr / (dl + dr), wr = dl / (dl + dr);
+                                r2 = cd[lj*4] * wl + cd[rj*4] * wr; g2 = cd[lj*4+1] * wl + cd[rj*4+1] * wr; b2 = cd[lj*4+2] * wl + cd[rj*4+2] * wr;
+                            } else { const j = lj >= 0 ? lj : rj; r2 = cd[j*4]; g2 = cd[j*4+1]; b2 = cd[j*4+2]; }
+                            cd[i*4] = r2; cd[i*4+1] = g2; cd[i*4+2] = b2; cd[i*4+3] = 255;
+                            resolved[i] = 1;
+                        }
+                    }
+                    // misses take the nearest RESOLVED reveal colour along their row
+                    // (never figure paint — those px are the doppelganger source)
+                    if (nMiss) {
+                        for (let y = 0; y < ph; y++) { const row = y * pw;
+                            for (let x = 0; x < pw; x++) { const i = row + x;
+                                if (!disocc[i] || resolved[i]) continue;
+                                let j = -1;
+                                for (let s = 1; s <= BOUNDR; s++) {
+                                    const xl = x - s, xr = x + s;
+                                    if (xl >= 0 && resolved[row + xl]) { j = row + xl; break; }
+                                    if (xr < pw && resolved[row + xr]) { j = row + xr; break; }
+                                }
+                                if (j >= 0) { cd[i*4] = cd[j*4]; cd[i*4+1] = cd[j*4+1]; cd[i*4+2] = cd[j*4+2]; cd[i*4+3] = 255; }
+                            }
+                        }
+                    }
+                    cxP.putImageData(pxP, 0, 0);
+                    plateColorTex = new THREE.CanvasTexture(cvP);
+                    plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
+                    console.log('[QUICK-BAKE] depth-consistent plate colours: ' + nRow + ' row / ' + nCol + ' col / ' + nMiss + ' miss (' + (Date.now() - tCR0) + 'ms)');
+                } catch (eCR) { console.warn('[QUICK-BAKE] plate row-colour pass failed, wash kept:', eCR); plateColorTex = null; }
+            }
             const matQ = L.mesh.material.clone();
             matQ.uniforms.displacementMap.value = plateDT;
-            matQ.uniforms.map.value = bgColorTarget.texture;
+            matQ.uniforms.map.value = plateColorTex || bgColorTarget.texture;
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
             // A59f: the plug is hole-only (renders only where the FG is torn away),
@@ -13836,8 +13940,9 @@ function updateCameraAndProjection() {
         const effectiveDeviationX = currentCombinedX - baselineFaceTrackerOffsetX;
         const effectiveDeviationY = currentCombinedY - baselineFaceTrackerOffsetY;
         const camOff = 0.2;
-        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal;
-        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal;
+        const lensGain = Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg) / 2);   // A65: 90deg -> 1.0 (identity)
+        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * lensGain;
+        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * lensGain;
 
         let gyroCamX = 0;
         let gyroCamY = 0;
@@ -13860,8 +13965,8 @@ function updateCameraAndProjection() {
             const stablePitchDegEquivalent = stablePitchRad * radianToDegreeFactor;
             const stableRollDegEquivalent = stableRollRad * radianToDegreeFactor;
 
-            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX;
-            gyroCamY = stableRollDegEquivalent * gyroSensitivityY;
+            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * lensGain;
+            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * lensGain;
         }
 
         // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
@@ -18105,6 +18210,7 @@ function setupStaticControlListeners() {
             console.log('[VIEW] manual offset reset');
         });
         window.setViewOffset = (dx, dy) => { manualCamDX = dx || 0; manualCamDY = dy || 0; };
+        window.setLensFov = (deg) => { contentLensFovDeg = Math.max(5, Math.min(170, +deg || 90)); console.log('[LENS] content fov ' + contentLensFovDeg + 'deg, gain ' + Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg)/2).toFixed(3)); };
     }
     
     // --- NEW: Gap Accumulation Listeners ---
