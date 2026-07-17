@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a69 | row-flank membrane on the dir plate (reveal continues its flanking surfaces; kills far-plane pits under big figures); a67 q!=P lateral-gain pin; a66 v2 pair validation. opt-out window._noPlateMembrane', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70 | depth-consistent plate colours (wash doppelganger killed); a69b same-class membrane gate; a67 lateral-gain pin; a66 v2 pair validation. opt-outs window._noPlateRowColor, window._noPlateMembrane', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5851,7 +5851,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a69 | row-flank membrane on the dir plate (reveal continues its flanking surfaces; kills far-plane pits under big figures); a67 q!=P lateral-gain pin; a66 v2 pair validation. opt-out window._noPlateMembrane';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70 | depth-consistent plate colours (wash doppelganger killed); a69b same-class membrane gate; a67 lateral-gain pin; a66 v2 pair validation. opt-outs window._noPlateRowColor, window._noPlateMembrane';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
