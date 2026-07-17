@@ -24,8 +24,10 @@ const ASSETS = [
   // photo's higher SD% is the known dense-texture pocket cost of leaving
   // pocket promotion opt-in (a63b decision, made on star+warrior evidence:
   // promotion amplified painterly boundary leaks). Revisit if SD budget
-  // matters for photographic content.
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
+  // matters for photographic content. Range re-based at a69: the row-flank
+  // membrane removed pit-driven false flags (28.6 -> 23.3 measured; render
+  // verified clean at 0.35 offset).
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          19.0, 28.0, 58.0, 70.0],
 ];
 
 let pass = 0, fail = 0;
@@ -107,6 +109,69 @@ const check = (label, val, lo, hi) => {
       check(ptag + ' render lit%', r.lit, 55, 100);
       if (!r.ok) { console.log('FAIL  ' + ptag + ' buildBackgroundLayer returned false'); fail++; }
     }
+  }
+
+  // ---- a67 q!=P subject-pin invariant (quick path, star) ----
+  // Subject plane on the near dune, off-axis x=0.12, dolly pinned mid vs far,
+  // lock on: the dune crest silhouette must hold (measured 1.0px median at
+  // commit; free drifts ~7px — the second check proves the metric has teeth).
+  if (mode === 'full') {
+    fs.copyFileSync(path.join(__dirname, ASSETS[0][1]), path.join(HARNESS, 'defaultImgColor.png'));
+    fs.copyFileSync(path.join(__dirname, ASSETS[0][2]), path.join(HARNESS, 'defaultImgDepth.png'));
+    await load();
+    const dz = await page.evaluate(async () => {
+      window._rayReproject = true;
+      bgQuickBake = true; buildBackgroundLayer();
+      // subject = near dune via the app's own peek->Z mapping
+      const dImg = mediaLayers[0].textures.depth.image2d || mediaLayers[0].textures.depth.image;
+      const w = dImg.naturalWidth || dImg.width, h = dImg.naturalHeight || dImg.height;
+      const cv0 = document.createElement('canvas'); cv0.width = w; cv0.height = h;
+      const cx0 = cv0.getContext('2d'); cx0.drawImage(dImg, 0, 0, w, h);
+      const v = cx0.getImageData(Math.round(0.30*w), Math.round(0.90*h), 1, 1).data[0] / 255;
+      const rel = v - currentNormPortalPlane;
+      subjectFocalPlaneWorldZ = rel < 0
+        ? portalPlaneWorldZ - (Math.abs(rel) / Math.max(currentNormPortalPlane, 0.0001)) * outerVolumeDepth
+        : portalPlaneWorldZ + (rel / Math.max(1 - currentNormPortalPlane, 0.0001)) * innerVolumeDepth;
+      initializeSubjectLockConstant();
+      const crest = () => {   // strongest vertical luma edge per column, lower half
+        const W2 = 720, H2 = 450;   // native suite viewport: drift thresholds are calibrated in these px
+        const cv = document.createElement('canvas'); cv.width = W2; cv.height = H2;
+        const cx = cv.getContext('2d'); cx.drawImage(renderer.domElement, 0, 0, W2, H2);
+        const d = cx.getImageData(0, 0, W2, H2).data;
+        const L = (x, y) => { const i = (y*W2+x)*4; return 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; };
+        const ys = {};
+        for (let x = Math.round(0.08*W2); x < Math.round(0.55*W2); x += 3) {
+          let bg = 0, by = -1;
+          for (let y = Math.round(0.50*H2); y < Math.round(0.98*H2) - 2; y++) {
+            const g = Math.abs(L(x, y+2) - L(x, y-2));
+            if (g > bg) { bg = g; by = y; }
+          }
+          if (bg >= 12) ys[x] = by;
+        }
+        return ys;
+      };
+      const shoot = async (tval, lock) => {
+        subjectLockActive = lock; dollyZoomActive = true;
+        const pin = () => { dollyZoomTime = tval - dollyZoomSpeed * 100; };
+        isSweeping = true;
+        await new Promise(r2 => { let n = 0; const tick = () => { pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; n++; n < 8 ? requestAnimationFrame(tick) : r2(); }; requestAnimationFrame(tick); });
+        pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; render();
+        return crest();
+      };
+      const med = (a, b) => {
+        const dz2 = []; for (const x in a) if (x in b) dz2.push(Math.abs(a[x] - b[x]));
+        dz2.sort((p, q2) => p - q2);
+        return dz2.length ? dz2[(dz2.length / 2) | 0] : -1;
+      };
+      const lm = await shoot(0, true), lf = await shoot(Math.PI/2, true);
+      dollyZoomActive = false; render();
+      const fm = await shoot(0, false), ff = await shoot(Math.PI/2, false);
+      dollyZoomActive = false; render();
+      return { lock: med(lm, lf), free: med(fm, ff) };
+    });
+    // measured at commit (720px frame): lock 0-1px, free ~3.5px
+    check('dolly q!=P lock crest px', dz.lock, 0, 2);
+    check('dolly q!=P free crest px (metric teeth)', dz.free, 2, 60);
   }
 
   console.log('\n' + (fail ? 'REGRESSION: ' + fail + ' FAIL, ' + pass + ' pass' : 'ALL PASS (' + pass + ')'));

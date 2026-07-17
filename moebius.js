@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a67 (lens branch) | a67 q!=P lateral-gain pin + a66 v2 pair-validated claims + a65 content-lens FOV normalization (window.setLensFov)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a69 (lens branch) | a69 row-flank membrane + a67 lateral-gain pin + a66 v2 pair validation + a65 content-lens FOV normalization', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5864,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a67 (lens branch) | a67 q!=P lateral-gain pin + a66 v2 pair-validated claims + a65 content-lens FOV normalization (window.setLensFov)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a69 (lens branch) | a69 row-flank membrane + a67 lateral-gain pin + a66 v2 pair validation + a65 content-lens FOV normalization';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9197,6 +9197,48 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 seenP[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
             }
         }
+    }
+    // A69 ROW-FLANK MEMBRANE. Measured on the warrior (3000px): the flood
+    // left the plate at SKY depth (0.00-0.03) under figure regions whose
+    // surroundings sit at 0.35-0.75 — a far-plane pit rendering as a
+    // staircase of parallax bands. Mechanism: hop budgets scale with the
+    // boundary's depth step, so the huge figure-vs-sky boundary at the top
+    // funds fronts that outlive the small-step mountain/field flank fronts;
+    // "nearest LIVING anchor" becomes the sky. The taxonomy answer is the
+    // membrane's both-sided rule (and the user's city-roof case): each row
+    // of a reveal continues its FLANKING surfaces — sky rows stay sky,
+    // mountain rows carry mountain, the skyline behind a figure emerges row
+    // by row. For every flood-claimed pixel with real ground on both row
+    // sides, the plate takes the lerp of the two flank surfaces (== the
+    // membrane's inverse-distance blend of continuation endpoints), clamped
+    // to never sit proud of the occluder's own surface. Rows only (columns
+    // would drag roof texture down — the exact failure the taxonomy names);
+    // one-sided pixels keep the flood value; unclaimed interior pixels keep
+    // plate == surface so the SD mask cannot grow into unreachable depths.
+    // Opt-out window._noPlateMembrane.
+    if (!window._noPlateMembrane && ground) {
+        const gL = new Int32Array(pw);
+        let fixed = 0;
+        for (let y = 0; y < ph; y++) {
+            const row = y * pw;
+            let last = -1;
+            for (let x = 0; x < pw; x++) { gL[x] = (ground[row + x] ? (last = x) : last); }
+            let nextG = -1;
+            for (let x = pw - 1; x >= 0; x--) {
+                const i = row + x;
+                if (ground[i]) { nextG = x; continue; }
+                if (!claimedF[i]) continue;
+                const l = gL[x];
+                if (l < 0 || nextG < 0) continue;
+                const dl = x - l, dr = nextG - x;
+                let v = (dQ[row + l] * dr + dQ[row + nextG] * dl) / (dl + dr);
+                if (v > dQ[i]) v = dQ[i];
+                if (v < 0) v = 0;
+                if (Math.abs(v - P[i]) > 0.005) fixed++;
+                P[i] = v;
+            }
+        }
+        if (fixed) console.log('[DIR-PLATE] row-flank membrane: ' + fixed + 'px re-based to flanking-surface continuation');
     }
     return { plate: P, ground, cells: q.length, guardHit: guard >= GUARD };
 }
