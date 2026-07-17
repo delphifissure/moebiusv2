@@ -10361,6 +10361,48 @@ function buildBackgroundLayer() {
                             }
                         }
                     }
+                    // A72 VERTICAL CONSENSUS. Rows are smooth by construction but
+                    // adjacent rows anchor to different flanks, and the
+                    // row-to-row decorrelation reads as comb striping (measured
+                    // on the warrior at 0.25: the a70 colours were right, the
+                    // stripes were the new artifact — same class the v1 wash
+                    // softening answered). Masked vertical box blur over the
+                    // reveal colours only: never crosses out of the disocc
+                    // region, radius resolution-scaled; vertical gradients
+                    // (sky -> mountain -> field) span hundreds of px and survive.
+                    {
+                        const RBV = Math.max(8, Math.round(16 * ph / 1920));   // vertical: the striping axis
+                        const RBH = Math.max(3, Math.round(6 * pw / 1920));    // horizontal: soften anchor handovers mid-reveal
+                        const tr = new Uint8Array(PNq), tg = new Uint8Array(PNq), tb = new Uint8Array(PNq);
+                        for (let x = 0; x < pw; x++) {
+                            let sr = 0, sg = 0, sb = 0, sn = 0;
+                            const add = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
+                            const sub = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
+                            for (let yy = 0; yy <= Math.min(ph - 1, RBV); yy++) add(yy);
+                            for (let y = 0; y < ph; y++) {
+                                const i = y*pw + x;
+                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
+                                const yAdd = y + RBV + 1, ySub = y - RBV;
+                                if (yAdd < ph) add(yAdd);
+                                if (ySub >= 0) sub(ySub);
+                            }
+                        }
+                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
+                        for (let y = 0; y < ph; y++) { const row = y*pw;
+                            let sr = 0, sg = 0, sb = 0, sn = 0;
+                            const add = (xx) => { const j = row + xx; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
+                            const sub = (xx) => { const j = row + xx; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
+                            for (let xx = 0; xx <= Math.min(pw - 1, RBH); xx++) add(xx);
+                            for (let x = 0; x < pw; x++) {
+                                const i = row + x;
+                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
+                                const xAdd = x + RBH + 1, xSub = x - RBH;
+                                if (xAdd < pw) add(xAdd);
+                                if (xSub >= 0) sub(xSub);
+                            }
+                        }
+                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
+                    }
                     cxP.putImageData(pxP, 0, 0);
                     plateColorTex = new THREE.CanvasTexture(cvP);
                     plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
