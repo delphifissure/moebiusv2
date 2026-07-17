@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5864,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a70u | unified branch: a70 plate colours + a69b membrane gate + a67 lateral-gain pin + a66 pair validation + a65 lens FOV normalization (inert at 90deg; window.setLensFov)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9215,8 +9215,13 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // would drag roof texture down — the exact failure the taxonomy names);
     // one-sided pixels keep the flood value; unclaimed interior pixels keep
     // plate == surface so the SD mask cannot grow into unreachable depths.
-    // Opt-out window._noPlateMembrane.
-    if (!window._noPlateMembrane && ground) {
+    // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateMembrane = true).
+    // The membrane (with its same-class gate) measured well on the warrior
+    // pits, but the user reported net regressions on device against the
+    // pre-a69 build ("steps back"), and deepened plates widen reveals — at
+    // offset that reads as tunneling through the figure, the A33/A57
+    // contract. Off until re-landed with a tunneling invariant in the suite.
+    if (window._plateMembrane === true && ground) {
         const gL = new Int32Array(pw);
         let fixed = 0;
         for (let y = 0; y < ph; y++) {
@@ -10301,9 +10306,16 @@ function buildBackgroundLayer() {
             // depth-compatible background in reach take the nearest RESOLVED
             // reveal colour in their row (never the figure). The GPU wash
             // remains the base texture only where nothing resolves.
-            // Opt-out window._noPlateRowColor.
+            // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateRowColor = true).
+            // Depth-true reveal colours paint SKY behind tall figures where
+            // the plate is legitimately at sky depth — and a sky-coloured
+            // reveal inside a figure silhouette READS as tunneling (the
+            // doppelganger, wrong as content, read as solid). The right
+            // reveal content for a figure against sky is a taxonomy call
+            // (user's court), so the wash stays the default and this pass
+            // (plus its consensus) is opt-in until that call is made.
             let plateColorTex = null;
-            if (!window._noPlateRowColor) {
+            if (window._plateRowColor === true) {
                 try {
                     const tCR0 = Date.now();
                     const cImgP = (L.elements && L.elements.color) || L.textures.color.image;
