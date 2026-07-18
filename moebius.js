@@ -7913,16 +7913,45 @@ function applyLiveBake(L) {
                         if (mem.length < 24 || mem.length > N3 * 0.01) continue;   // noise / not a thin feature
                         // ring + anchor in one pass over the dilated border
                         let ringFar = 0, ringNear = 0, anchorSum = 0, anchorN = 0;
+                        const contacts = [];
                         for (const i of mem) { const x = i % w, y = (i / w) | 0;
+                            let touchesAnchor = false;
                             for (let dy = -RS; dy <= RS; dy++) for (let dx = -RS; dx <= RS; dx++) {
                                 const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
                                 const j = yy * w + xx;
                                 if (cand[j] || stroke[j]) continue;        // own ink doesn't vote
                                 if (D3[j] <= 2 * FARC) ringFar++;
                                 else { ringNear++;
-                                    if (D3[j] > FARC * 4) { anchorSum += D3[j]; anchorN++; } }
-                            } }
+                                    if (D3[j] > FARC * 4) { anchorSum += D3[j]; anchorN++; touchesAnchor = true; } }
+                            }
+                            if (touchesAnchor) contacts.push(i);
+                        }
                         if (!anchorN) continue;                            // no near attachment: far scenery ink
+                        // A75 PARALLAX-REACH BOUND (user bisect: the star's horizon
+                        // line attached itself to the astronaut starting exactly at
+                        // a63). An accessory like the ribbon lives ENTIRELY within
+                        // reach of its contact with the anchor; a horizon line
+                        // merely CROSSES the figure and runs frame-wide away from
+                        // the contact. All-or-nothing: if any member px is farther
+                        // (euclidean) than MAXD from every anchor-contact px, this
+                        // is scene linework, not an attachment — leave it at its
+                        // own far depth (the pre-a63 state for that feature).
+                        {
+                            const MAXD = Math.max(60, Math.round(150 * w / 1920));
+                            const MAXD2 = MAXD * MAXD;
+                            let overReach = false;
+                            for (const i of mem) {
+                                const x = i % w, y = (i / w) | 0;
+                                let best = Infinity;
+                                for (const c of contacts) {
+                                    const dx = x - (c % w), dy = y - ((c / w) | 0);
+                                    const d2 = dx * dx + dy * dy;
+                                    if (d2 < best) { best = d2; if (d2 <= MAXD2) break; }
+                                }
+                                if (best > MAXD2) { overReach = true; break; }
+                            }
+                            if (overReach) continue;   // horizon-line class: crosses the figure, not attached to it
+                        }
                         if (ringNear > 0.15 * (ringFar + ringNear)) {
                             // more than a contact patch of near around it: body
                             // skin / dense cluster, not an isolated thin feature
