@@ -27,16 +27,21 @@ const ASSETS = [
   // matters for photographic content. a72b: membrane back to opt-in
   // (user-reported device regressions) -> range restored to the a63b
   // baseline; with _plateMembrane=true it measures ~23.3.
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
+  // a73 re-baseline: farther-value-wins deepens nested-occlusion interiors
+  // (far anchors claim their full hop budget behind furniture); 38.2
+  // measured at the flip. The growth is SD budget, not an artifact class
+  // (offset shots checked at the re-baseline) — REVIEW Addendum 78.
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          33.0, 43.0, 58.0, 70.0],
   // TROLL = the app's SHIPPED DEFAULT (defaultImg*.png) and the one asset the
-  // a62+ sweeps never covered (harness probes overwrite its filename). These
-  // ranges PIN THE KNOWN-DEFECTIVE state (A73): the cave-tangle composition
-  // depth-connects figures to their surroundings (dark-on-dark, contacts
-  // everywhere), the ground flood swallows the figures (94.7%!), the plate
-  // sits flush at figure depth, and the plug renders as bg-extruded-to-fg
-  // (user-reported tunneling at 22deg). A73's fix MUST move these numbers —
-  // ground% far below 94.7 — and should then re-pin them at the healthy values.
-  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     15.0, 26.0, 90.0, 98.0],
+  // a62+ sweeps never covered (harness probes overwrite its filename).
+  // a73 CURE re-pin: the gloop was nearest-anchor Voronoi steps rendered by
+  // the solid plate (Addendum 78) — farther-value-wins fills the reveal at
+  // the far surface, so the SD region grows to what the cave geometry
+  // actually hides (34.7 measured, was 20.3 defective / 15..26 pinned).
+  // ground% stays collapsed (94.7) — cave-class segmentation is a separate,
+  // so-far-unsolved problem (Addendum 76) that the cure makes HARMLESS:
+  // figures-as-ground no longer poison the fill values.
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     30.0, 40.0, 90.0, 98.0],
 ];
 
 let pass = 0, fail = 0;

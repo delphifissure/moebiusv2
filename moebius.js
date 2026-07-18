@@ -9171,8 +9171,10 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             pushSeed(i, cSeed, BOOT, isFold, Math.max(BOOT, ((isFold ? gmx : omx) - cSeed) / sCone), g);   // gradient measured at the GROUND anchor
         }
     }
+    if (window._foldProbe) window._fpSeed = { seen: seenP.slice(), av: carAv.slice(), fold: foldF.slice() };   // PROBE: seed field before propagation
     const KE = 4 * (Math.max(3, Math.round(4 * pw / 1200)) + Math.max(3, Math.round(5 * pw / 1200)));   // gradient trust span ~ 4*RF
     const QUANT = 0.002;
+    const flrF = window._foldProbe ? new Uint8Array(PN2) : null;   // PROBE: claim value came from the a63b descent floor
     let h = 0, guard = 0, GUARD = PN2 * 24;
     while (h < q.length && guard++ < GUARD) {
         const i = q[h++]; const v = carry[i]; const fold = foldF[i]; const bud = hopB[i];
@@ -9197,31 +9199,55 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // selects the noisiest negative-gradient seed in range (measured:
             // a -sCone anchor at the ridge walked the plate to a clamped 0
             // across the dune, stable through three upstream fixes).
-            const v2 = Math.max(0, Math.max(av - tearStep, av + gx * dxe + gy * dye));
-            // NEAREST-ANCHOR WINS: a reveal shows the continuation of the
-            // occlusion boundary NEAREST to it. Lowest-plane-wins selected
-            // the noisiest negative-gradient anchor in budget range every
-            // time (three measured incarnations of the same zero-plate).
-            // Value is only the tiebreak at ~equal distance. Re-claims
-            // strictly reduce anchor distance -> bounded.
+            const planeV = av + gx * dxe + gy * dye;
+            const v2 = (window._noDescFloor === true) ? Math.max(0, planeV)
+                                                      : Math.max(0, Math.max(av - tearStep, planeV));
+            // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
+            // partitioned each reveal into a Voronoi of anchor planes — and
+            // the plate renders SOLID (backstop contract), so every step
+            // between wedges is a stretched wall of texture. On the shipped
+            // default (troll), ground classification collapses (94.7%) and
+            // internal detail cliffs seed fold anchors AT BODY DEPTH inside
+            // every figure; proximity handed them the reveal (measured:
+            // 30.7% of claims won by near anchors, plate fan-wedges at
+            // body-tearStep = the user's "bg extruded to fg"). A reveal is
+            // the continuation of the FAR surface; depth steps belong at
+            // silhouettes (torn), not inside the fill. Value competition is
+            // safe again because the DESCENT FLOOR above bounds every
+            // plane's bid to its anchor's measured depth minus one tear
+            // step — the runaway-to-zero that motivated nearest-anchor
+            // (three measured incarnations) cannot recur. Measured at the
+            // flip: troll near-plate claims 34.7 -> 15.4%, gloop gone at
+            // both probe cams; star renders pixel-comparable, SD 13.8 ->
+            // 15.2% (in range). Distance breaks ~equal-value ties.
+            // window._nearestAnchorWins restores the a63b law for A/B.
             const takes = (jj) => {
                 if (!claimedF[jj]) return true;
-                const dxo = xj - carAx[jj], dyo = yj - carAy[jj];
-                const d2o = dxo*dxo + dyo*dyo;
-                const dxn = xj - ax, dyn = yj - ay;
-                const d2n = dxn*dxn + dyn*dyn;
-                if (d2n < d2o - 1) return true;
-                if (d2n <= d2o + 1 && v2 < P[jj] - QUANT) return true;
+                if (window._nearestAnchorWins === true) {
+                    const dxo = xj - carAx[jj], dyo = yj - carAy[jj];
+                    const d2o = dxo*dxo + dyo*dyo;
+                    const dxn = xj - ax, dyn = yj - ay;
+                    const d2n = dxn*dxn + dyn*dyn;
+                    if (d2n < d2o - 1) return true;
+                    if (d2n <= d2o + 1 && v2 < P[jj] - QUANT) return true;
+                    return false;
+                }
+                if (v2 < P[jj] - QUANT) return true;
+                if (v2 <= P[jj] + QUANT) {
+                    const dxo2 = xj - carAx[jj], dyo2 = yj - carAy[jj];
+                    const dxn2 = xj - ax, dyn2 = yj - ay;
+                    return dxn2*dxn2 + dyn2*dyn2 < dxo2*dxo2 + dyo2*dyo2 - 1;
+                }
                 return false;
             };
             if (ground && ground[j]) {
                 if (!fold || !(dQ[j] - v2 > tearStep)) continue;
-                if (takes(j)) { P[j] = v2; claimedF[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
+                if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
                 continue;
             }
             if (!ground && !(dQ[j] - v > tearStep)) continue;
             if (v2 < dQ[j] - 0.001) {
-                if (takes(j)) { P[j] = v2; claimedF[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
+                if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
             } else if (passRem[i] > 1 && !seenP[j]) {
                 seenP[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
             }
@@ -9284,6 +9310,11 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             }
         }
         if (fixed) console.log('[DIR-PLATE] row-flank membrane: ' + fixed + 'px re-based to flanking-surface continuation');
+    }
+    if (window._foldProbe) {
+        window._fpData = { pw, ph, P: P.slice(), dQ: dQ.slice(), ground: ground ? ground.slice() : null,
+                           claimedF: claimedF.slice(), foldF: foldF.slice(), carAv: carAv.slice(),
+                           carAx: carAx.slice(), carAy: carAy.slice(), flrF, tearStep };
     }
     return { plate: P, ground, cells: q.length, guardHit: guard >= GUARD };
 }
