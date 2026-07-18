@@ -9745,6 +9745,55 @@ function buildBackgroundLayer() {
                     console.log('[DIR-PLATE] directional rising-plate continuation (' + dirR.cells + ' flood cells' + (dirR.guardHit ? ', GUARD HIT' : '') + ', ' + (dirR.ground ? 'cliff+boundary seeds' : 'cliff seeds only (no colour)') + ')');
                 }
             }
+            // ===== A72: smear-fringe snap (stretch-cut for the quick FG) =====
+            // The remaining putty at fade-cone angles is FG rubber: the
+            // estimator smears a silhouette's depth step over N px, each
+            // spanning quad presents step/N and the per-triangle tear never
+            // trips — the sheet stretches from figure to background instead
+            // of tearing (REVIEW Addendum 71/72, the frazetta column at
+            // ~36deg). The discriminator that survives the pseudo-glancing
+            // taxonomy is the plate itself: a px is smear-fringe iff
+            //   (1) it stands a tear step PROUD of its own plate
+            //       continuation (a glancing ramp has plate == surface and
+            //       is untouched by construction),
+            //   (2) a genuinely NEARER surface exists inside the smear
+            //       window (the px is in transit between two real sides),
+            //   (3) NO real cliff exists in that window — the proudness is
+            //       carried entirely by a sub-cliff ramp (span/N physics);
+            //       where a hard step already exists the tear owns it, and
+            //       a real mid-depth surface beside a genuine cliff must
+            //       not be eaten.
+            // Snap to whichever real side is closer. The step
+            // re-concentrates, the per-triangle tear trips, and orphans
+            // ship as cap cards at REAL depths and colours — snapping
+            // first is what makes tearing safe (tearing raw smear quads
+            // would splat fringe colours at fringe depths).
+            // window._noSmearSnap reverts for A/B.
+            if (_dirPlateOn && window._noSmearSnap !== true) {
+                const RS = 2 * Math.max(3, Math.round(4 * pw / 1200));   // full smear width = 2x the barrier half-window
+                const wmaxS = bgSlide2D(dQ, pw, ph, RS, false);
+                const stpS = new Float32Array(PNq);
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                    let s = 0, d;
+                    if (x > 0    && (d = Math.abs(dQ[i]-dQ[i-1]))  > s) s = d;
+                    if (x < pw-1 && (d = Math.abs(dQ[i]-dQ[i+1]))  > s) s = d;
+                    if (y > 0    && (d = Math.abs(dQ[i]-dQ[i-pw])) > s) s = d;
+                    if (y < ph-1 && (d = Math.abs(dQ[i]-dQ[i+pw])) > s) s = d;
+                    stpS[i] = s;
+                }
+                const stpMaxS = bgSlide2D(stpS, pw, ph, RS, false);
+                let nSnap = 0;
+                for (let i = 0; i < PNq; i++) {
+                    if (stpMaxS[i] > fgTearStep) continue;
+                    const proud = dQ[i] - plateQ[i];
+                    if (proud <= fgTearStep) continue;
+                    const rise = wmaxS[i] - dQ[i];
+                    if (rise <= fgTearStep) continue;
+                    dQ[i] = (rise <= proud) ? wmaxS[i] : plateQ[i];
+                    nSnap++;
+                }
+                if (nSnap) { dqDirty = true; console.log('[QUICK-BAKE] smear snap: ' + nSnap + 'px of silhouette smear re-concentrated (fringe -> nearest real side)'); }
+            }
             // A54 RIGIDIFY — connectivity is a spatial regularizer, and a
             // bake that disconnects (tears + cards) loses it: over the
             // party the estimator's depth is shattered, and per-pixel
