@@ -5,7 +5,7 @@ const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
-const [color, depth, outPng, camX, camY] = process.argv.slice(2);
+const [color, depth, outPng, camX, camY, noRec] = process.argv.slice(2);
 fs.copyFileSync(color, 'defaultImgColor.png');
 fs.copyFileSync(depth, 'defaultImgDepth.png');
 (async () => {
@@ -17,8 +17,10 @@ fs.copyFileSync(depth, 'defaultImgDepth.png');
   page.on('pageerror', e => console.log('  [PAGEERR] '+e.message.slice(0,120)));
   await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
   for (let t = 0; t < 40; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
+  if (noRec === 'norec') await page.evaluate(() => { window.__norec = true; });
   const res = await page.evaluate(() => {
     window._srCapture = true; window._rayReproject = true;
+    if (window.__norec) { try { bandOfRecordImg = null; sharpOfRecordImg = null; edgeMaskOfRecordImg = null; } catch (e) {} }
     bgQuickBake = true;
     let ok = true;
     try { ok = buildBackgroundLayer() !== false; } catch (e) { return { err: String(e).slice(0, 120) }; }
