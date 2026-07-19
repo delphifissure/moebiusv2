@@ -9978,6 +9978,71 @@ function buildBackgroundLayer() {
                 for (let i = 0; i < PNq; i++) if (disocc[i] && bud[i] <= 0) { disocc[i] = 0; nRamp++; }
                 if (nRamp) { nD -= nRamp; console.log('[QUICK-BAKE] cliff gate: ' + nRamp + 'px of attached-ramp departure dropped from the SD mask'); }
             }
+            // A80 EXACT ALL-VIEWPOINT SCAN (user directive: "scan all
+            // possible head positions within a range"). Every analytic mask
+            // so far — cone envelope, claim set, prominence bound — is an
+            // APPROXIMATION of one physical set: the union over the
+            // supported head range of plate texels the moving FG actually
+            // uncovers. Compute that set directly: for sampled offsets
+            // (8 directions x 4 magnitudes; t = 1 is the SAME max-offset
+            // the sCone slope already encodes, no new constants), forward-
+            // warp the FG depth into a z-buffer (2x2 splat kills pinholes)
+            // and test each claimed plate texel at its own shifted
+            // position — visible iff nothing nearer lands on it. A texel
+            // no sampled pose can expose is not a disocclusion, whatever
+            // the plate thinks: drop it from the SD mask (plate geometry
+            // keeps its depth — this prunes the INPAINT set, not the
+            // fill). Ink closure runs after, so ink joins only visible
+            // reveals. window._noVpScan reverts.
+            if (window._noVpScan !== true) {
+                const t0s = Date.now();
+                const scanVis = new Uint8Array(PNq);
+                const zbuf = new Float32Array(PNq);
+                const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[0.7071,0.7071],[0.7071,-0.7071],[-0.7071,0.7071],[-0.7071,-0.7071]];
+                // RANGE: t = 1 is the sCone-encoded maximum (~2x the fade
+                // cone's supported offset — measured against the device
+                // sheets). window._scanRange rescales the sweep so the SD
+                // mask serves exactly the pose range the fade cone keeps
+                // visible; calibration pins the default (Addendum 83).
+                const tMaxS = (typeof window._scanRange === 'number') ? window._scanRange : 1.0;
+                const TS = [0.3, 0.55, 0.8, 1.0].map(t => t * tMaxS);
+                const invS = 1 / sCone;
+                // Anchor shifts at the scene's dominant plane (median depth
+                // ~ the portal-stationary plane). Occlusion is invariant to
+                // a constant shift of every pixel EXCEPT at the frame
+                // boundary — anchored at 0, the whole frame translates by
+                // hundreds of px, the z-buffer empties, and everything
+                // tests visible (measured: scan dropped ~0 on star).
+                const dSrt = dQ.slice().sort();
+                const dRefS = dSrt[dSrt.length >> 1];
+                for (const [ux, uy] of DIRS) for (const t of TS) {
+                    zbuf.fill(-1);
+                    const kx = ux * t * invS, ky = uy * t * invS;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                        const d = dQ[i] - dRefS;
+                        const xx = x + kx * d, yy = y + ky * d;
+                        const x0 = xx | 0, y0 = yy | 0;
+                        for (let dy2 = 0; dy2 <= 1; dy2++) for (let dx2 = 0; dx2 <= 1; dx2++) {
+                            const xq = x0 + dx2, yq = y0 + dy2;
+                            if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
+                            const q = yq*pw + xq;
+                            if (d > zbuf[q]) zbuf[q] = d;
+                        }
+                    }
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
+                        if (!disocc[i] || scanVis[i]) continue;
+                        const p = plateQ[i];
+                        const xq = Math.round(x + kx * (p - dRefS)), yq = Math.round(y + ky * (p - dRefS));
+                        if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
+                        if (zbuf[yq*pw + xq] <= p + 0.02) scanVis[i] = 1;
+                    }
+                }
+                let nScan = 0;
+                for (let i = 0; i < PNq; i++) if (disocc[i] && !scanVis[i]) { disocc[i] = 0; nScan++; }
+                nD -= nScan;
+                console.log('[QUICK-BAKE] viewpoint scan: ' + nScan + 'px of claim-mask never exposed by any head pose in range — dropped (' +
+                            (Date.now() - t0s) + 'ms, ' + DIRS.length * TS.length + ' poses)');
+            }
             // A62b INK-ADJACENCY CLOSURE. Silhouette ink whose estimator depth
             // dipped to (or past) the far level is invisible to a depth-
             // trusting mask: plate == its own depth, so it never flags — the
