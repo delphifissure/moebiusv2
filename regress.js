@@ -27,21 +27,22 @@ const ASSETS = [
   // matters for photographic content. a72b: membrane back to opt-in
   // (user-reported device regressions) -> range restored to the a63b
   // baseline; with _plateMembrane=true it measures ~23.3.
-  // a73 re-baseline: farther-value-wins deepens nested-occlusion interiors
-  // (far anchors claim their full hop budget behind furniture); 38.2
-  // measured at the flip. The growth is SD budget, not an artifact class
-  // (offset shots checked at the re-baseline) — REVIEW Addendum 78.
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          33.0, 43.0, 58.0, 70.0],
+  // a78: the prominence bound trims the a76 budget spill back out of the
+  // mask (29.1 measured) — the ORIGINAL a63b range is restored. If this
+  // drifts high again, claims are spilling past their own physics
+  // (REVIEW Addenda 78, 80, 81).
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
   // TROLL = the app's SHIPPED DEFAULT (defaultImg*.png) and the one asset the
   // a62+ sweeps never covered (harness probes overwrite its filename).
-  // a73 CURE re-pin: the gloop was nearest-anchor Voronoi steps rendered by
-  // the solid plate (Addendum 78) — farther-value-wins fills the reveal at
-  // the far surface, so the SD region grows to what the cave geometry
-  // actually hides (34.7 measured, was 20.3 defective / 15..26 pinned).
-  // ground% stays collapsed (94.7) — cave-class segmentation is a separate,
-  // so-far-unsolved problem (Addendum 76) that the cure makes HARMLESS:
-  // figures-as-ground no longer poison the fill values.
-  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     30.0, 40.0, 90.0, 98.0],
+  // a73 cure + a78 prominence bound: farther-value-wins fills reveals at
+  // the far surface (gloop killed, Addendum 78) and the per-pixel
+  // prominence bound trims the isotropic budget spill that the value flip
+  // exposed (diamond blocks / sawtooth bands — the user's false
+  // disocclusions, Addenda 80-81). 23.5 measured: the mask is
+  // figure-shaped again. ground% stays collapsed (94.7) — cave-class
+  // segmentation is a separate unsolved problem (Addendum 76) that the
+  // value law makes HARMLESS.
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     19.0, 29.0, 90.0, 98.0],
 ];
 
 let pass = 0, fail = 0;
