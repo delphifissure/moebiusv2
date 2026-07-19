@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a77 | a76 farther-value-wins fill claims + a77 smear-fringe snap; conservative defaults kept (membrane/row-colours OPT-IN); a66 pair validation, a67 pin, a71 bake dropdown, a75 reach bound', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5864,7 +5864,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a72b | CONSERVATIVE DEFAULTS: plate = pre-a69 behavior (membrane + row-colours OPT-IN via window._plateMembrane / window._plateRowColor); keeps a66 pair validation, a67 pin, a71 bake dropdown, a65 lens (inert)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a77 | a76 farther-value-wins fill claims + a77 smear-fringe snap; conservative defaults kept (membrane/row-colours OPT-IN); a66 pair validation, a67 pin, a71 bake dropdown, a75 reach bound';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9240,13 +9240,33 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 }
                 return false;
             };
+            // A78 PROMINENCE BOUND: a revealed pixel funds its OWN reach.
+            // The hop budget bounds extent by the LIP's window step, swept
+            // isotropically — under a76's value competition that spilled as
+            // diamond-shaped claim blocks over plain walls and a sawtooth
+            // band across the near floor (chamfer geometry, visible in no
+            // image feature; user-reported as false disocclusions in the
+            // SD view). Physical rule: a claim at distance d from its lip
+            // is valid iff d*sCone <= (dQ[j] - fill) — the pixel's own
+            // prominence over the fill is what a head move must overcome
+            // to uncover it. Minimum reach tearStep/sCone (~24px) keeps
+            // small figures' bands; a 0.35-prominent figure keeps its
+            // full band by construction. window._noPromBound reverts.
+            const promOK = (jj) => {
+                if (window._noPromBound === true) return true;
+                const pr = dQ[jj] - v2;
+                if (pr <= 0) return false;
+                const dxp = (jj % pw) - ax, dyp = ((jj / pw) | 0) - ay;
+                return (dxp*dxp + dyp*dyp) * sCone * sCone <= pr * pr;
+            };
             if (ground && ground[j]) {
                 if (!fold || !(dQ[j] - v2 > tearStep)) continue;
+                if (!promOK(j)) continue;
                 if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
                 continue;
             }
             if (!ground && !(dQ[j] - v > tearStep)) continue;
-            if (v2 < dQ[j] - 0.001) {
+            if (v2 < dQ[j] - 0.001 && promOK(j)) {
                 if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
             } else if (passRem[i] > 1 && !seenP[j]) {
                 seenP[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
