@@ -1437,8 +1437,20 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // triangle, so this catches the WHOLE rubber band — including
                 // the near half, where the depth mismatch is zero by
                 // construction). u_bandCutUvRate = fraction-of-expected rate.
+                // A81: rubber from LATERAL parallax stretches ONE axis only —
+                // max() of the two rates is blind to it (a horizontally
+                // stretched filament keeps a normal vertical rate), which is
+                // how 1-2px streak filaments trailed every silhouette
+                // through every threshold tightening. Test the minor axis
+                // too, but only for EXTREME single-axis stretch: filament
+                // rubber runs 10-50x, while glancing walls and mild
+                // anamorphic content (the protected realtime look) sit at
+                // 1.5-2.5x — a 0.5 factor speckled the troll walls white
+                // (measured); 0.3 (cut past ~3x) separates the classes.
                 float uvRate = max(length(dFdx(vUv)), length(dFdy(vUv)));
-                bool stretched = (u_bandCutUvRate > 0.0) && (uvRate < u_bandCutUvRate);
+                float uvRateMin = min(length(dFdx(vUv)), length(dFdy(vUv)));
+                bool stretched = (u_bandCutUvRate > 0.0) &&
+                                 (uvRate < u_bandCutUvRate || uvRateMin < u_bandCutUvRate * 0.3);
                 // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
                 // gated to slow ramps so rest-state cliffs are exempt.
                 bool torn = abs(center - vNormalizedDepth) > u_bandCutMismatch &&
