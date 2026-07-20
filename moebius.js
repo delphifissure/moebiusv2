@@ -1437,20 +1437,24 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // triangle, so this catches the WHOLE rubber band — including
                 // the near half, where the depth mismatch is zero by
                 // construction). u_bandCutUvRate = fraction-of-expected rate.
-                // A81: rubber from LATERAL parallax stretches ONE axis only —
-                // max() of the two rates is blind to it (a horizontally
-                // stretched filament keeps a normal vertical rate), which is
-                // how 1-2px streak filaments trailed every silhouette
-                // through every threshold tightening. Test the minor axis
-                // too, but only for EXTREME single-axis stretch: filament
-                // rubber runs 10-50x, while glancing walls and mild
-                // anamorphic content (the protected realtime look) sit at
-                // 1.5-2.5x — a 0.5 factor speckled the troll walls white
-                // (measured); 0.3 (cut past ~3x) separates the classes.
-                float uvRate = max(length(dFdx(vUv)), length(dFdy(vUv)));
-                float uvRateMin = min(length(dFdx(vUv)), length(dFdy(vUv)));
+                // A81/A82: rubber from parallax stretches ONE direction —
+                // max() of the two axis rates is blind to it (a stretched
+                // filament keeps a normal rate on the other axis), and
+                // min() of the axis LENGTHS is still blind when the
+                // stretch is DIAGONAL (the warrior's helmet spoke-rays:
+                // both screen-aligned lengths read mid-magnitude). The
+                // rotation-free invariant is the minor SINGULAR VALUE of
+                // the UV Jacobian, sv_min = |det| / sv_max, which
+                // collapses for extreme stretch in ANY direction. Cut past
+                // ~3x: filament and spoke rubber run 10-50x, glancing
+                // walls and mild anamorphic content (the protected
+                // realtime look) sit at 1.5-2.5x (a 2x cut speckled the
+                // troll walls white — measured, Addendum 85).
+                vec2 jxS = dFdx(vUv), jyS = dFdy(vUv);
+                float uvRate = max(length(jxS), length(jyS));
+                float svMinS = abs(jxS.x * jyS.y - jxS.y * jyS.x) / max(uvRate, 1e-9);
                 bool stretched = (u_bandCutUvRate > 0.0) &&
-                                 (uvRate < u_bandCutUvRate || uvRateMin < u_bandCutUvRate * 0.3);
+                                 (uvRate < u_bandCutUvRate || svMinS < u_bandCutUvRate * 0.3);
                 // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
                 // gated to slow ramps so rest-state cliffs are exempt.
                 bool torn = abs(center - vNormalizedDepth) > u_bandCutMismatch &&
