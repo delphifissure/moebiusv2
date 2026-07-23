@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a77 | a76 farther-value-wins fill claims + a77 smear-fringe snap; conservative defaults kept (membrane/row-colours OPT-IN); a66 pair validation, a67 pin, a71 bake dropdown, a75 reach bound', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a81 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80/a81 stretch cuts (axis + rotation-free); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5880,7 +5880,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a77 | a76 farther-value-wins fill claims + a77 smear-fringe snap; conservative defaults kept (membrane/row-colours OPT-IN); a66 pair validation, a67 pin, a71 bake dropdown, a75 reach bound';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a81 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80/a81 stretch cuts (axis + rotation-free); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
