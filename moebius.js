@@ -1453,8 +1453,19 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 vec2 jxS = dFdx(vUv), jyS = dFdy(vUv);
                 float uvRate = max(length(jxS), length(jyS));
                 float svMinS = abs(jxS.x * jyS.y - jxS.y * jyS.x) / max(uvRate, 1e-9);
+                // A83: GRADED cut. A binary threshold at 3x oscillates on
+                // terraced grazing walls at beyond-fade poses — the wall's
+                // stretch crosses the line row by row and the discard
+                // renders as comb banding (measured at troll 0.358: comb
+                // with the cut, none without). Keep the hard cut for true
+                // rubber (>5x), dither-fade the 5x..2.8x band so the edge
+                // has no line to comb along; in-band content (<=2.5x)
+                // untouched. u_bandCutUvRate = 0 still disables entirely.
+                float svRatio = svMinS / max(u_bandCutUvRate, 1e-9);
+                float svCutProb = clamp(1.0 - (svRatio - 0.2) / 0.16, 0.0, 1.0);
+                float svDith = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
                 bool stretched = (u_bandCutUvRate > 0.0) &&
-                                 (uvRate < u_bandCutUvRate || svMinS < u_bandCutUvRate * 0.3);
+                                 (uvRate < u_bandCutUvRate || (svCutProb > 0.0 && svDith < svCutProb));
                 // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
                 // gated to slow ramps so rest-state cliffs are exempt.
                 bool torn = abs(center - vNormalizedDepth) > u_bandCutMismatch &&
