@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a97 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a99 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 FLOAT DEPTH INGEST (16-bit PNG decode); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -143,6 +143,77 @@ let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
+}
+// ===================== A99: FLOAT DEPTH INGEST =====================
+// Depth has always entered through a canvas getImageData, which is 8-bit BY
+// CONSTRUCTION — so no matter what a file contains, the pipeline saw 255
+// levels. Measured consequence (Addendum 105): one 8-bit level is 1/255 =
+// 0.00392, while the largest depth change a single texel can carry without
+// FOLDING is 1/k — 0.00253 at a 1920-px source and 0.00162 at 3000. Above
+// ~1250 px a single quantisation step therefore exceeds the fold limit, so
+// 8-bit depth is intrinsically fold-generating at the resolutions this
+// project ships, and a86's dequantiser is a reconstruction of information
+// the ingest threw away rather than a cure.
+// This reads 16-bit PNG depth directly: parse the chunks, inflate IDAT with
+// DecompressionStream (no library), reverse the PNG filters, and take the
+// 16-bit samples as float. 65535 levels puts the quantum at 1.5e-5 —
+// 100x below the fold limit even at 3000 px — so the artefact class
+// disappears at the source instead of being reconstructed downstream.
+// Returns null for 8-bit, interlaced or non-PNG input; the caller then uses
+// the existing path unchanged.
+async function bgDecodeDepth16(url) {
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        if (!(buf[0] === 137 && buf[1] === 80 && buf[2] === 78 && buf[3] === 71)) return null;
+        let p = 8, w = 0, h = 0, bd = 0, ct = 0; const idat = [];
+        const be32 = (o) => ((buf[o] << 24) | (buf[o+1] << 16) | (buf[o+2] << 8) | buf[o+3]) >>> 0;
+        while (p + 8 <= buf.length) {
+            const len = be32(p);
+            const type = String.fromCharCode(buf[p+4], buf[p+5], buf[p+6], buf[p+7]);
+            const off = p + 8;
+            if (type === 'IHDR') {
+                w = be32(off); h = be32(off + 4); bd = buf[off + 8]; ct = buf[off + 9];
+                if (buf[off + 12] !== 0) return null;          // interlaced: not handled
+            } else if (type === 'IDAT') { idat.push(buf.subarray(off, off + len)); }
+            else if (type === 'IEND') break;
+            p = off + len + 4;
+        }
+        if (bd !== 16 || !w || !h) return null;                 // 8-bit: caller keeps its path
+        const ch = { 0: 1, 2: 3, 4: 2, 6: 4 }[ct];
+        if (!ch || typeof DecompressionStream === 'undefined') return null;
+        let total = 0; for (const c of idat) total += c.length;
+        const z = new Uint8Array(total); let q = 0;
+        for (const c of idat) { z.set(c, q); q += c.length; }
+        const raw = new Uint8Array(await new Response(
+            new Blob([z]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+        const bpp = ch * 2, stride = w * bpp;
+        if (raw.length < h * (stride + 1)) return null;
+        const out = new Float32Array(w * h);
+        let prev = new Uint8Array(stride), cur = new Uint8Array(stride), rp = 0;
+        for (let y = 0; y < h; y++) {
+            const ft = raw[rp++];
+            cur.set(raw.subarray(rp, rp + stride)); rp += stride;
+            for (let i = 0; i < stride; i++) {                  // reverse PNG filters
+                const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+                let v = cur[i];
+                if (ft === 1) v += a;
+                else if (ft === 2) v += b;
+                else if (ft === 3) v += (a + b) >> 1;
+                else if (ft === 4) {
+                    const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+                    v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+                }
+                cur[i] = v & 255;
+            }
+            for (let x = 0; x < w; x++) { const o = x * bpp; out[y * w + x] = ((cur[o] << 8) | cur[o + 1]) / 65535; }
+            const t = prev; prev = cur; cur = t;
+        }
+        console.log('[A99] float depth ingest: 16-bit PNG decoded (' + w + 'x' + h + '), quantum 1/65535 — ' +
+                    (1 / 65535 / (1 / (396 * w / 1920))).toFixed(3) + 'x the per-texel fold limit');
+        return { data: out, w, h };
+    } catch (e) { console.warn('[A99] float depth ingest failed, using 8-bit path: ' + e.message); return null; }
 }
 function bgConeSlopePerPx(pwArg) {
     const pwv = Math.max(1, pwArg | 0);
@@ -2606,6 +2677,17 @@ async function applyLayersFromModal() {
             if (alphaEl) { layer.textures.alpha = (alphaEl.tagName === 'VIDEO') ? new THREE.VideoTexture(alphaEl) : new THREE.Texture(alphaEl); }
             if (!isVideo && layer.textures.color) layer.textures.color.needsUpdate = true;
             if (layer.textures.depth && depthEl && depthEl.tagName !== 'VIDEO') layer.textures.depth.needsUpdate = true;
+            // A99: try the float ingest alongside the 8-bit element. Non-blocking
+            // for the render path; the bake picks it up if it arrived and the
+            // dimensions match, otherwise nothing changes.
+            if (depthEl && depthEl.tagName !== 'VIDEO' && depthEl.src && window._noFloatDepth !== true) {
+                // AWAITED, not fire-and-forget: the bake is synchronous, so a
+                // dangling promise means the first bake silently uses the 8-bit
+                // path and the float ingest only takes effect on a later
+                // re-bake (measured: the decode logged, the bake never saw it).
+                const r16 = await bgDecodeDepth16(depthEl.src);
+                if (r16) layer._depth16 = r16;
+            }
             if (layer.textures.alpha && alphaEl && alphaEl.tagName !== 'VIDEO') layer.textures.alpha.needsUpdate = true;
 
             // Get dimensions
@@ -6024,7 +6106,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a97 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step; conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a99 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 FLOAT DEPTH INGEST (16-bit PNG decode); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9933,7 +10015,12 @@ function buildBackgroundLayer() {
             const dpxQ = cxQ.getImageData(0, 0, pw, ph).data;
             const PNq = pw * ph;
             const dQ = new Float32Array(PNq);
-            for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+            if (L._depth16 && L._depth16.w === pw && L._depth16.h === ph) {
+                dQ.set(L._depth16.data);                        // A99: float ingest, 65535 levels
+                console.log('[QUICK-BAKE] a99: depth read at 16-bit precision (quantum 1/65535)');
+            } else {
+                for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+            }
             // A86 DEQUANTIZE — the source depth is an 8-BIT PNG: every
             // smooth slope arrives as a staircase of exact 1/255 terraces
             // (measured on the warrior pile: median run 3px, p90 22px,
