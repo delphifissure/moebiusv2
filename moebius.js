@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a91 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 DERIVED per-cell tear (fold limit T=1, cited); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a93 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions (resolution invariance); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6006,7 +6006,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a91 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 DERIVED per-cell tear (fold limit T=1, cited); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a93 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions (resolution invariance); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9086,7 +9086,18 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     const remB = new Float32Array(PN2);
     const carry = new Float32Array(PN2);
     const q = [];
-    const RWD = Math.max(3, Math.round(4 * pw / 1200));   // depth-window radius (smear scale) — also couples RF below
+    // A93 WINDOW FLOORS ARE CONSTANTS TOO. Every window here is a fraction of
+    // frame width (4/1200 = 0.33%), but the Math.max floors pinned them to a
+    // fixed TEXEL count at small sources: measured RWD = 3 texels at both 425
+    // and 851 px, i.e. 0.71% vs 0.35% of the frame — the same window covering
+    // 2x different physical spans, which is the residual resolution drift of
+    // Addendum 99/100 (mask 19.7%, fold 27.1%). The only defensible floor is
+    // ONE TEXEL: below that there is no information to sample. The 0.33%
+    // fraction itself is unchanged and still carries its original derivation
+    // (the measured smear width of painterly silhouettes at the calibration
+    // width). window._winFloorLegacy restores the old floors.
+    const _wFloor = (window._winFloorLegacy === true) ? 3 : 1;
+    const RWD = Math.max(_wFloor, Math.round(4 * pw / 1200));   // depth-window radius (smear scale) — also couples RF below
     let ground = null;
     if (cImg && !window._noGroundStop) {
         const ccQ = document.createElement('canvas'); ccQ.width = pw; ccQ.height = ph;
@@ -9138,7 +9149,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // nothing. All constants are existing geometry constants.
         const FARE = tearStep;
         const RECC = tearStep / 2;
-        const KWALK = Math.max(16, Math.round(48 * pw / 1200));
+        const KWALK = Math.max((window._winFloorLegacy === true) ? 16 : 4, Math.round(48 * pw / 1200));   // A93: floor = information limit, not a fixed texel count
         const SMOOTH = tearStep;   // walkable = not a cliff at window scale (window now resolution-scaled)
         const recedes = (i) => {
             if (dQ[i] <= FARE) return true;
@@ -9237,7 +9248,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // far-side local gradient, windowed; zeroed across structure (a
         // sample pair spanning a cliff is not a surface gradient)
         const x = p2 % pw, y = (p2 / pw) | 0;
-        const R = Math.max(2, Math.round(3 * pw / 1200));
+        const R = Math.max((window._winFloorLegacy === true) ? 2 : 1, Math.round(3 * pw / 1200));   // A93
         let gx = 0, gy = 0;
         const xa = Math.max(0, x - R), xb = Math.min(pw - 1, x + R);
         const dxs = dQ[y * pw + xb] - dQ[y * pw + xa];
@@ -9256,7 +9267,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         carAx[i] = i % pw; carAy[i] = (i / pw) | 0; carAv[i] = v;
         q.push(i);
     };
-    const BOOT = Math.max(4, Math.round(6 * pw / 1200));
+    const BOOT = Math.max((window._winFloorLegacy === true) ? 4 : 1, Math.round(6 * pw / 1200));   // A93
     // A92 REVERTED (falsified): expressing the lip threshold as a reveal
     // width in px (SEED_REVEAL_PX * sCone) is unit-correct, but it was NOT
     // the dominant invariance term. Measured on the troll pair (851 vs 425):
@@ -9272,8 +9283,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         if (y > 0    && dQ[i-pw] - dQ[i] > s) { s = dQ[i-pw] - dQ[i]; nearJ = i-pw; }
         if (y < ph-1 && dQ[i+pw] - dQ[i] > s) { s = dQ[i+pw] - dQ[i]; nearJ = i+pw; }
         if (s <= tearStep) continue;
+        // A93: this budget window was a FIXED +-3 texels — not scaled at all,
+        // so the lip's measured prominence spanned 1.4% of the frame at 425 px
+        // and 0.2% at 3000 px. Use the same smear-scale radius the barrier
+        // test uses (RWD), which is the quantity it is trying to measure.
         let wmn = dQ[i], wmx = dQ[i];
-        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+        for (let dy = -RWD; dy <= RWD; dy++) for (let dx = -RWD; dx <= RWD; dx++) {
             const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=pw||yy>=ph) continue;
             const v = dQ[yy*pw+xx]; if (v < wmn) wmn = v; if (v > wmx) wmx = v;
         }
@@ -9294,7 +9309,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // fold seeds vanish and the crest/ridge reveal band with them
         // (measured: star SD halved, 13.2% -> 6.6%, when RWD grew to 6 with
         // RF still 8). RF = RWD + stroke term keeps them coupled.
-        const RF = RWD + Math.max(3, Math.round(5 * pw / 1200));
+        const RF = RWD + Math.max(_wFloor, Math.round(5 * pw / 1200));   // A93
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
             if (ground[i]) continue;
             let g = -1;
