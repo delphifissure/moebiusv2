@@ -9156,6 +9156,10 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         const dwMx = bgSlide2D(dQ, pw, ph, RWD, false), dwMn = bgSlide2D(dQ, pw, ph, RWD, true);
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
             if (dwMx[i] - dwMn[i] > tearStep) { isEdge[i] = 1; continue; }
+            // A98 TRIED AND REVERTED: normalising this luma step by texel scale
+            // is unit-correct in the same way a91 was, but measured on the
+            // analytic pair it moved fold drift 16.1% -> 16.6% (no better).
+            // The ground barrier is not where the residual lives.
             if (x < pw-1 && Math.abs(lumaQ[i+1]-lumaQ[i]) > EDGE) { isEdge[i]=1; isEdge[i+1]=1; }
             if (y < ph-1 && Math.abs(lumaQ[i+pw]-lumaQ[i]) > EDGE) { isEdge[i]=1; isEdge[i+pw]=1; }
         }
