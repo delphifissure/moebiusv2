@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a93 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions (resolution invariance); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a94 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -122,8 +122,26 @@ let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 // survives, by construction, which is the user's stated contract
 // ("ZERO tunneling / extrusion visible").  window._foldFactor overrides
 // for A/B; window._noFoldTear restores the fixed 0.06.
+// A94 CELL EXTENT, not a margin. The threshold above was 1.0*sCone — the
+// fold limit for an AXIS-ALIGNED step of one texel. But a mesh cell is a
+// TRIANGLE whose extent is (1,1) texels, and the fill produces surfaces AT
+// sCone by design (sCone IS the grazing limit; the cone fill is as steep as
+// a surface can be without folding). A planar patch of slope s presents to
+// one triangle:
+//     axis edge        s * 1      = 1.00 * sCone
+//     diagonal extent  s * sqrt2  = 1.41 * sCone
+//     far quad corner  s * (1+1)  = 2.00 * sCone
+// so a 1.00 threshold TEARS THE FILL'S OWN LEGITIMATE OUTPUT wherever the
+// cone ramps diagonally — measured on the analytic scene: 107,835 plate
+// triangles (5.0% of the plate) dropped at pw=1200, and knife-edge
+// sensitive because the population sits exactly ON the threshold, which is
+// the 30.3% resolution drift the synthetic test reported.
+// The separation is geometric, not a fudge: the FILL is capped at the
+// grazing limit; the TEAR sits at the largest span a NON-folding plane can
+// present to a triangle, its diagonal extent sqrt(2)*sCone. Anything above
+// that cannot be a legitimate plane at or below the grazing slope.
 function bgFoldStepPerCell(pwArg) {
-    const T = (typeof window._foldFactor === 'number') ? window._foldFactor : 1.0;
+    const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
 }
 function bgConeSlopePerPx(pwArg) {
@@ -6006,7 +6024,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a93 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions (resolution invariance); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a94 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent; conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
