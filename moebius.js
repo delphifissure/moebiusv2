@@ -10856,6 +10856,57 @@ function buildBackgroundLayer() {
                 gQ.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex.slice(), 1));
                 gQ.userData = {};
                 console.log('[QUICK-BAKE] plate geometry decoupled from pre-torn FG (full index restored)');
+                // A87 PLATE TEAR AT ITS OWN CLIFFS. A50 restored the FULL
+                // index because the plate must not inherit the FG's holes
+                // (lifted ink strokes are cliffs; the plate re-drew the
+                // figure's line work as through-holes). But "full index"
+                // also means the plate spans ITS OWN cliffs — and the
+                // plate's cliffs are real: measured on the warrior, 93.2%
+                // of plate steps > tearStep sit exactly on the
+                // claimed/unclaimed frontier, where a ground continuation
+                // (0.35) abuts visible sky (0.00). Rendered solid, that
+                // 0.35 step stretches ~290px at the user's cam: the sheet
+                // that covers the disocclusion instead of leaving it open
+                // ("stretching / tunneling connecting bg to fg", the mesh
+                // footprint panel white across the whole reveal).
+                // The tear law is the same one the FG obeys and the same
+                // physics the fill obeys (a76): depth steps belong at
+                // silhouettes, which tear — never inside a rendered
+                // surface. What lies behind a torn plate cliff is a
+                // genuine reveal of a reveal: no capture carries it, the
+                // SD mask already covers it (the flood claimed it), and
+                // absence is the honest answer until SD paints. Measured
+                // cost (CPU warp, warrior at the user's cam): canvas
+                // coverage 98.8% -> 98.7% — the far side of each cliff
+                // covers its own hole; the streaked sheets disappear.
+                // The FG's ink exemption does not apply: this index is
+                // built from the PLATE's own depth (P), where adopted ink
+                // was never a cliff. window._noPlateTear reverts to a50.
+                if (window._noPlateTear !== true) {
+                    const gpP = L.mesh.geometry.parameters || {};
+                    const vwP = (gpP.widthSegments || 0) + 1, vhP = (gpP.heightSegments || 0) + 1;
+                    const srcP = gQ.index.array;
+                    if (vwP > 1 && vhP > 1 && plateQ) {
+                        const sxP = (pw - 1) / Math.max(1, vwP - 1), syP = (ph - 1) / Math.max(1, vhP - 1);
+                        const tiP = (vi) => {
+                            const vx = vi % vwP, vy = (vi / vwP) | 0;
+                            const px = Math.min(pw - 1, Math.round(vx * sxP));
+                            const py = Math.min(ph - 1, Math.round(vy * syP));
+                            return py * pw + px;
+                        };
+                        const outP = new srcP.constructor(srcP.length);
+                        let nP = 0, dropP = 0;
+                        for (let t = 0; t + 2 < srcP.length; t += 3) {
+                            const a0 = plateQ[tiP(srcP[t])], a1 = plateQ[tiP(srcP[t + 1])], a2 = plateQ[tiP(srcP[t + 2])];
+                            const mxP = Math.max(a0, Math.max(a1, a2)), mnP = Math.min(a0, Math.min(a1, a2));
+                            if (mxP - mnP > fgTearStep) { dropP++; continue; }
+                            outP[nP++] = srcP[t]; outP[nP++] = srcP[t + 1]; outP[nP++] = srcP[t + 2];
+                        }
+                        gQ.setIndex(new THREE.BufferAttribute(outP.subarray(0, nP), 1));
+                        console.log('[QUICK-BAKE] a87 plate tear: ' + dropP + ' spanning triangles dropped at plate cliffs (' +
+                                    (100 * dropP / Math.max(1, srcP.length / 3)).toFixed(2) + '% of the plate)');
+                    }
+                }
             }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
             bgLayerMesh.position.copy(L.mesh.position);
