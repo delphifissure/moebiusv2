@@ -9257,6 +9257,14 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         q.push(i);
     };
     const BOOT = Math.max(4, Math.round(6 * pw / 1200));
+    // A92 REVERTED (falsified): expressing the lip threshold as a reveal
+    // width in px (SEED_REVEAL_PX * sCone) is unit-correct, but it was NOT
+    // the dominant invariance term. Measured on the troll pair (851 vs 425):
+    // mask drift 19.7% -> 17.0% (slightly better) but fold drift 27.1% ->
+    // 30.4% (worse). The residual is spread across the many other per-texel
+    // depth comparisons in this file, not concentrated here. Restored to the
+    // shipped test; the finding is recorded in Addendum 100 rather than
+    // carried as an unverified change.
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
         let s = 0, nearJ = -1;
         if (x > 0    && dQ[i-1]  - dQ[i] > s) { s = dQ[i-1]  - dQ[i]; nearJ = i-1; }
