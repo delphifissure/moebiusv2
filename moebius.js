@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a88 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 plate tear + a88 RESOLUTION-CORRECT CONE SLOPE (fill no longer folds); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a89 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 INVARIANCE PASS (euclidean cone, detected depth quantum, derived tie-break); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5923,7 +5923,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a88 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 plate tear + a88 RESOLUTION-CORRECT CONE SLOPE (fill no longer folds); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a89 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 INVARIANCE PASS (euclidean cone, detected depth quantum, derived tie-break); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9232,7 +9232,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     }
     if (window._foldProbe) window._fpSeed = { seen: seenP.slice(), av: carAv.slice(), fold: foldF.slice() };   // PROBE: seed field before propagation
     const KE = 4 * (Math.max(3, Math.round(4 * pw / 1200)) + Math.max(3, Math.round(5 * pw / 1200)));   // gradient trust span ~ 4*RF
-    const QUANT = 0.002;
+    // A89: the tie-break epsilon is a QUANTISATION artefact guard, so it must
+    // follow the source's own quantum, not a hardcoded 0.002 (= half an 8-bit
+    // level; on a 16-bit source that is 131 quanta and real value differences
+    // would be swallowed as ties). Derived from tearStep so it also scales
+    // with any depth-range renormalisation: one part in 32 of a tear step.
+    const QUANT = tearStep / 32;
     const flrF = window._foldProbe ? new Uint8Array(PN2) : null;   // PROBE: claim value came from the a63b descent floor
     let h = 0, guard = 0, GUARD = PN2 * 24;
     while (h < q.length && guard++ < GUARD) {
@@ -9280,7 +9285,19 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // included: distance crossed over near content still costs —
             // the head must clear it). window._noConeFill restores a84.
             const coneF = (foldF[i] === 0) && (window._noConeFill !== true);
-            const v2 = coneF ? carry[i] + sCone
+            // A89 METRIC FIX. a85 accumulated the cone rise PER HOP over a
+            // 4-connected flood — that is a MANHATTAN metric, while both the
+            // prominence bound (dxp*dxp + dyp*dyp, line ~9343) and the
+            // physical fold limit are EUCLIDEAN. A diagonal path pays
+            // 2*sCone per sqrt(2) px, so the effective slope is 1.414x the
+            // intended cone and diagonal fill still folds at ex = 0.141 even
+            // after a88's resolution fix. Evaluate the cone from the carried
+            // ANCHOR instead: v = av + sCone * |p - a|. This is isotropic,
+            // path-independent (no zig-zag can inflate it, the disease that
+            // motivated the a63b descent floor) and uses the same metric as
+            // the bound it replaced.
+            const _dxc = xj - ax, _dyc = yj - ay;
+            const v2 = coneF ? av + sCone * Math.sqrt(_dxc * _dxc + _dyc * _dyc)
                              : ((window._noDescFloor === true) ? Math.max(0, planeV)
                                                                : Math.max(0, Math.max(av - tearStep, planeV)));
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
@@ -9769,9 +9786,30 @@ function buildBackgroundLayer() {
             // (dqDirty declared here — despeckle/smear/rigidify below
             // share it and the ship-back at the end reads it.)
             let dqDirty = false;
-            if (window._noDequant !== true) {
-                const lvQ = new Int16Array(PNq);
-                for (let i = 0; i < PNq; i++) lvQ[i] = Math.round(dQ[i] * 255);
+            // A89: DETECT the source quantum instead of assuming 8 bits. The
+            // dequantiser's whole premise is "runs one quantum apart are one
+            // sloped surface"; hardcoding 1/255 makes it a silent NO-OP on a
+            // 16-bit depth PNG (every real step is far more than one 8-bit
+            // level apart) and, worse, would treat genuinely smooth sub-1/255
+            // slopes as quantisation. Measure the grid the data actually
+            // sits on: the smallest grid whose levels the samples land on.
+            let _qStep = 0;
+            {
+                const CAND = [255, 4095, 65535];
+                for (const g of CAND) {
+                    let ok = true;
+                    for (let i = 0; i < PNq && ok; i += Math.max(1, (PNq / 20000) | 0)) {
+                        if (Math.abs(dQ[i] * g - Math.round(dQ[i] * g)) > 1e-3) ok = false;
+                    }
+                    if (ok) { _qStep = 1 / g; break; }
+                }
+                if (!_qStep) console.log('[QUICK-BAKE] a89: depth is continuous (no quantisation grid found) — dequantise skipped');
+                else console.log('[QUICK-BAKE] a89: source depth quantum = 1/' + Math.round(1 / _qStep) + (Math.round(1/_qStep) === 255 ? ' (8-bit)' : ''));
+            }
+            if (window._noDequant !== true && _qStep > 0) {
+                const _qDen = Math.round(1 / _qStep);
+                const lvQ = new Int32Array(PNq);
+                for (let i = 0; i < PNq; i++) lvQ[i] = Math.round(dQ[i] * _qDen);
                 const outA = new Float32Array(PNq);
                 const passAxis = (horiz) => {
                     const outer = horiz ? ph : pw, inner = horiz ? pw : ph;
@@ -9783,13 +9821,13 @@ function buildBackgroundLayer() {
                         let nr = 0, r0 = 0;
                         for (let k = 1; k <= inner; k++) {
                             if (k === inner || lvQ[base + k*stride] !== lvQ[base + r0*stride]) {
-                                cts[nr] = (r0 + k - 1) / 2; vls[nr] = lvQ[base + r0*stride] / 255;
+                                cts[nr] = (r0 + k - 1) / 2; vls[nr] = lvQ[base + r0*stride] * _qStep;
                                 st[nr] = r0; en[nr] = k - 1; nr++; r0 = k;
                             }
                         }
                         for (let r = 0; r < nr; r++) {
-                            const cL = (r > 0 && Math.abs(vls[r] - vls[r-1]) <= 1.001/255);
-                            const cR = (r < nr-1 && Math.abs(vls[r+1] - vls[r]) <= 1.001/255);
+                            const cL = (r > 0 && Math.abs(vls[r] - vls[r-1]) <= 1.001 * _qStep);
+                            const cR = (r < nr-1 && Math.abs(vls[r+1] - vls[r]) <= 1.001 * _qStep);
                             for (let k = st[r]; k <= en[r]; k++) {
                                 const i = base + k*stride;
                                 let v = vls[r];
