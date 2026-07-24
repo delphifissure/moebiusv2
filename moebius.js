@@ -9259,8 +9259,30 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // a -sCone anchor at the ridge walked the plate to a clamped 0
             // across the dune, stable through three upstream fixes).
             const planeV = av + gx * dxe + gy * dye;
-            const v2 = (window._noDescFloor === true) ? Math.max(0, planeV)
-                                                      : Math.max(0, Math.max(av - tearStep, planeV));
+            // A85 CONE-ENVELOPE FILL (object fronts). The staircase/silk/
+            // banding family is not value competition (the lower envelope
+            // of competing floored planes is continuous) — it is CLAIM
+            // FRONTIERS: where a deep plane's reach dies (prominence bound,
+            // hop budget), the next-shallower holder is a full step up, and
+            // the solid plate renders every step as a stretched wall
+            // (measured: warrior terrace cascade at (0.366,0.008); star
+            // boot wisps plate-attributed by layer isolation). Fix: the
+            // prominence physics BECOMES the value law — an object front's
+            // bid rises at the cone slope with path distance from its
+            // anchor, v = av + sCone*d. The field is then Lipschitz(sCone)
+            // by construction (steps impossible), claims expire exactly
+            // where the envelope meets the local surface (flush = plate
+            // invisible = seamless edge, no spill), and descent below the
+            // anchor cannot occur (no runaway-to-zero). Fold/ground fronts
+            // keep the a63b measured-gradient continuation — receding
+            // ground legitimately descends; the cone rise is wrong for it.
+            // carry[] accumulates the path term per hop (passRem traversal
+            // included: distance crossed over near content still costs —
+            // the head must clear it). window._noConeFill restores a84.
+            const coneF = (foldF[i] === 0) && (window._noConeFill !== true);
+            const v2 = coneF ? carry[i] + sCone
+                             : ((window._noDescFloor === true) ? Math.max(0, planeV)
+                                                               : Math.max(0, Math.max(av - tearStep, planeV)));
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
             // partitioned each reveal into a Voronoi of anchor planes — and
             // the plate renders SOLID (backstop contract), so every step
@@ -9312,6 +9334,10 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // small figures' bands; a 0.35-prominent figure keeps its
             // full band by construction. window._noPromBound reverts.
             const promOK = (jj) => {
+                // A85: for cone fronts the bound is subsumed — the bid
+                // rises at sCone per px, so "d*sCone <= prominence" is
+                // exactly "v2 < dQ", the claim condition itself.
+                if (coneF) return true;
                 if (window._noPromBound === true) return true;
                 const pr = dQ[jj] - v2;
                 if (pr <= 0) return false;
@@ -9725,6 +9751,68 @@ function buildBackgroundLayer() {
             const PNq = pw * ph;
             const dQ = new Float32Array(PNq);
             for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+            // A86 DEQUANTIZE — the source depth is an 8-BIT PNG: every
+            // smooth slope arrives as a staircase of exact 1/255 terraces
+            // (measured on the warrior pile: median run 3px, p90 22px,
+            // deviation from the 8-bit grid 0.000000). One level is
+            // sub-pixel parallax near rest and a 2-4px jump at large
+            // offsets — the "3d banding with gaps", in BOTH layers,
+            // upstream of every fill/tear/scan law (a85's cone fill left
+            // the render 93% unchanged because the staircase is in the
+            // INPUT). Reconstruct the continuous signal the quantizer
+            // saw: along each axis, adjacent constant runs differing by
+            // EXACTLY one level are one sloped surface — interpolate
+            // linearly between run centers; runs differing by >= 2 levels
+            // keep their hard break (real cliffs are >= tearStep = 15
+            // levels; thin features are several levels proud). The two
+            // axis passes average. window._noDequant reverts.
+            // (dqDirty declared here — despeckle/smear/rigidify below
+            // share it and the ship-back at the end reads it.)
+            let dqDirty = false;
+            if (window._noDequant !== true) {
+                const lvQ = new Int16Array(PNq);
+                for (let i = 0; i < PNq; i++) lvQ[i] = Math.round(dQ[i] * 255);
+                const outA = new Float32Array(PNq);
+                const passAxis = (horiz) => {
+                    const outer = horiz ? ph : pw, inner = horiz ? pw : ph;
+                    const stride = horiz ? 1 : pw;
+                    const cts = new Float32Array(inner), vls = new Float32Array(inner),
+                          st = new Int32Array(inner), en = new Int32Array(inner);
+                    for (let o = 0; o < outer; o++) {
+                        const base = horiz ? o * pw : o;
+                        let nr = 0, r0 = 0;
+                        for (let k = 1; k <= inner; k++) {
+                            if (k === inner || lvQ[base + k*stride] !== lvQ[base + r0*stride]) {
+                                cts[nr] = (r0 + k - 1) / 2; vls[nr] = lvQ[base + r0*stride] / 255;
+                                st[nr] = r0; en[nr] = k - 1; nr++; r0 = k;
+                            }
+                        }
+                        for (let r = 0; r < nr; r++) {
+                            const cL = (r > 0 && Math.abs(vls[r] - vls[r-1]) <= 1.001/255);
+                            const cR = (r < nr-1 && Math.abs(vls[r+1] - vls[r]) <= 1.001/255);
+                            for (let k = st[r]; k <= en[r]; k++) {
+                                const i = base + k*stride;
+                                let v = vls[r];
+                                if (k < cts[r] && cL) {
+                                    const t = (k - cts[r-1]) / (cts[r] - cts[r-1]);
+                                    v = vls[r-1] + (vls[r] - vls[r-1]) * t;
+                                } else if (k > cts[r] && cR) {
+                                    const t = (k - cts[r]) / (cts[r+1] - cts[r]);
+                                    v = vls[r] + (vls[r+1] - vls[r]) * t;
+                                }
+                                outA[i] += 0.5 * v;
+                            }
+                        }
+                    }
+                };
+                passAxis(true); passAxis(false);
+                let nDeq = 0;
+                for (let i = 0; i < PNq; i++) {
+                    if (Math.abs(outA[i] - dQ[i]) > 1e-6) nDeq++;
+                    dQ[i] = outA[i];
+                }
+                if (nDeq) { dqDirty = true; console.log('[QUICK-BAKE] a86 dequantize: ' + nDeq + 'px of 8-bit staircase reconstructed to continuous slope'); }
+            }
             // A52 DESPECKLE — the comb source. Depth estimators fragment
             // SMALL figures into interleaved 1-2px flecks of figure depth
             // and ground depth (measured on the star party: the raw map
@@ -9738,7 +9826,6 @@ function buildBackgroundLayer() {
             // (the staff) keep >=2 along-stroke agreeing neighbours and
             // are untouched; real silhouette steps are majority-coherent
             // on both sides and unaffected.
-            let dqDirty = false;
             {
                 const TOLd = 0.02;
                 let nFleck = 0;
@@ -9960,14 +10047,40 @@ function buildBackgroundLayer() {
                     for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                         for (let x = 0; x < pw; x++) sf2[d2+x] = dQ[s+x]; }
                     dtex.needsUpdate = true;
-                }
-                const c2 = dtex && dtex.image2d;
-                if (c2 && c2.getContext) {
-                    const cx2 = c2.getContext('2d');
-                    const id2 = cx2.getImageData(0, 0, pw, ph);
+                    const c2 = dtex.image2d;
+                    if (c2 && c2.getContext) {
+                        const cx2 = c2.getContext('2d');
+                        const id2 = cx2.getImageData(0, 0, pw, ph);
+                        for (let i = 0; i < PNq; i++) { const v = Math.max(0, Math.min(255, Math.round(dQ[i] * 255)));
+                            id2.data[i*4] = v; id2.data[i*4+1] = v; id2.data[i*4+2] = v; }
+                        cx2.putImageData(id2, 0, 0);
+                    }
+                } else {
+                    // A86: on a fresh load the depth texture is the plain
+                    // 8-bit PNG Texture — the in-place branch above silently
+                    // SKIPPED and the mesh kept rendering the quantized
+                    // staircase while the bake used the cleaned field
+                    // (measured: dequantized bake, banded render). Promote
+                    // to a float DataTexture (same recipe as the v1
+                    // despeckle ship-back) so the mesh renders what the
+                    // plate/SD/scan were computed from.
+                    const hf2 = new Float32Array(PNq);
+                    for (let y = 0; y < ph; y++) { const s2 = y*pw, d2 = (ph-1-y)*pw;
+                        for (let x = 0; x < pw; x++) hf2[d2+x] = dQ[s2+x]; }
+                    const hc2 = document.createElement('canvas'); hc2.width = pw; hc2.height = ph;
+                    const hx2 = hc2.getContext('2d'); const hid2 = hx2.createImageData(pw, ph);
                     for (let i = 0; i < PNq; i++) { const v = Math.max(0, Math.min(255, Math.round(dQ[i] * 255)));
-                        id2.data[i*4] = v; id2.data[i*4+1] = v; id2.data[i*4+2] = v; }
-                    cx2.putImageData(id2, 0, 0);
+                        hid2.data[i*4] = v; hid2.data[i*4+1] = v; hid2.data[i*4+2] = v; hid2.data[i*4+3] = 255; }
+                    hx2.putImageData(hid2, 0, 0);
+                    const hTexQ = new THREE.DataTexture(hf2, pw, ph, THREE.RedFormat, THREE.FloatType);
+                    hTexQ.needsUpdate = true; hTexQ.flipY = false;
+                    hTexQ.minFilter = THREE.LinearFilter; hTexQ.magFilter = THREE.LinearFilter;
+                    hTexQ.generateMipmaps = false;
+                    if ('colorSpace' in hTexQ) hTexQ.colorSpace = THREE.NoColorSpace;
+                    hTexQ.image2d = hc2;
+                    L.textures.depth = hTexQ;
+                    if (L.mesh?.material?.uniforms?.displacementMap) L.mesh.material.uniforms.displacementMap.value = hTexQ;
+                    console.log('[QUICK-BAKE] a86: depth texture promoted to float (mesh now renders the cleaned field)');
                 }
             }
             if (window._srCapture) window._qbDbg = { plate: plateQ.slice(), d: dQ.slice(), pw, ph };
