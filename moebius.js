@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a99 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 FLOAT DEPTH INGEST (16-bit PNG decode); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.20-a101 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 PER-DEPTH CONE SLOPE (k measured as a field, 19x range); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -140,6 +140,44 @@ let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 // grazing limit; the TEAR sits at the largest span a NON-folding plane can
 // present to a triangle, its diagonal extent sqrt(2)*sCone. Anything above
 // that cannot be a legitimate plane at or below the grazing slope.
+// A101 PER-DEPTH CONE SLOPE. Measured (harness/measure_k.js, Addendum 108):
+// k — px of screen shift per unit depth at the fade end — VARIES 19x across
+// the depth range (79 px at the portal plane, 1497 px in the near half) and
+// its mean is 1.93x the value the scalar law assumed. A scalar sCone is
+// therefore wrong almost everywhere BY CONSTRUCTION, and specifically far too
+// permissive in the near half, where it lets surfaces sit at about twice the
+// folding slope — folding INSIDE the supported cone.
+// k(d) is not empirical: it is the exact derivative of this file's own vertex
+// displacement law.
+//     zOff(d)  = smoothstep halves between -outer .. 0 .. +inner about pn
+//     shift(z) = -ex * z / (D - z),  ex = D * tan(fadeEnd)        [world]
+//     k(d)     = |dshift/dz| * |dzOff/dd| * pxPerWorld
+//              = [ex*D/(D-z)^2] * g(d) * (pw / layerWidth)
+//     g(d)     = outer * S'(d/pn)/pn          for d < pn
+//              = inner * S'((d-pn)/(1-pn))/(1-pn) otherwise,  S'(t) = 6t(1-t)
+// CEILING: at the portal plane g -> 0, so k -> 0 and the permitted slope is
+// unbounded. That is physically right — content that does not move cannot
+// fold — but useless as a fill law, so clamp to tearStep: steeper than one
+// tear step per texel is not a surface, it is a discontinuity, and
+// discontinuities belong to the tear, not the fill.
+// window._noPerPixelCone reverts to the scalar.
+function bgConeSlopeAtDepth(pwArg, phArg, d, tearStepArg) {
+    if (window._noPerPixelCone === true) return bgConeSlopePerPx(pwArg);
+    const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
+    const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
+    const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
+    const pxPerWorld = pwv / Math.max(1e-6, layerW);
+    const D = 0.2, ex = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    const pn = 0.5, outer = outerVolumeDepth, inner = innerVolumeDepth;
+    const dc = Math.min(1, Math.max(0, d));
+    let z, g;
+    if (dc < pn) { const t = dc / pn;          z = -outer + outer * (t*t*(3-2*t)); g = outer * (6*t*(1-t)) / pn; }
+    else         { const t = (dc-pn)/(1-pn);   z =  inner * (t*t*(3-2*t));         g = inner * (6*t*(1-t)) / (1-pn); }
+    const k = (ex * D / Math.pow(Math.max(1e-4, D - z), 2)) * g * pxPerWorld;
+    const ceil = (typeof tearStepArg === 'number') ? tearStepArg : 0.06;
+    if (!(k > 1e-6)) return ceil;
+    return Math.min(ceil, 1 / k);
+}
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
@@ -6106,7 +6144,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a99 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 FLOAT DEPTH INGEST (16-bit PNG decode); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.20-a101 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 PER-DEPTH CONE SLOPE (k measured as a field, 19x range); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9596,7 +9634,9 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // motivated the a63b descent floor) and uses the same metric as
             // the bound it replaced.
             const _dxc = xj - ax, _dyc = yj - ay;
-            const v2 = coneF ? av + sCone * Math.sqrt(_dxc * _dxc + _dyc * _dyc)
+            // A101: the cone rises at the slope permitted AT THE ANCHOR'S DEPTH
+            const _sc = coneF ? bgConeSlopeAtDepth(pw, ph, av, tearStep) : sCone;
+            const v2 = coneF ? av + _sc * Math.sqrt(_dxc * _dxc + _dyc * _dyc)
                              : ((window._noDescFloor === true) ? Math.max(0, planeV)
                                                                : Math.max(0, Math.max(av - tearStep, planeV)));
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
@@ -10974,7 +11014,10 @@ function buildBackgroundLayer() {
                             const d0 = dQ[t0i], d1 = dQ[t1i], d2 = dQ[t2i];
                             let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
                             let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
-                            if (mx - mn > _cellTearStep) { droppedT++; continue; }
+                            // A101: the fold limit is per-DEPTH, so the tear is too
+                            const _ct = (window._noPerPixelCone === true) ? _cellTearStep
+                                      : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep);
+                            if (mx - mn > _ct) { droppedT++; continue; }
                             cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
