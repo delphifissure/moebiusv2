@@ -42,7 +42,19 @@ const ASSETS = [
   // figure-shaped again. ground% stays collapsed (94.7) — cave-class
   // segmentation is a separate unsolved problem (Addendum 76) that the
   // value law makes HARMLESS.
-  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',     19.0, 29.0, 90.0, 98.0],
+  // A88 RE-PIN (troll SD 19..29 -> 9..18). The old band encoded the unscaled-sCone
+  // bug: sCone is a slope per PIXEL, and as a fixed 0.0025 it made the fill's reach
+  // scale as 1/pw, so every asset was wrong by (1920/pw) and the troll (851 px, the
+  // smallest) carried the most inflated mask. Isolated by A/B: forcing sCone back to
+  // the fixed value returns the troll mask to 23.4% exactly, while disabling a95's
+  // seed threshold does not move it at all — the change is a88 alone. Every asset
+  // moved as the theory predicts:
+  //     troll   851  2.26x too big   23.5 -> 13.0
+  //     star   1920  correct         14.1 -> 13.6
+  //     photo  2047  1.07x too small 28.7 -> 27.5
+  //     warrior 3000 1.56x too small  8.7 ->  9.3
+  // Re-pinned to the corrected behaviour, not widened to accommodate it.
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',      9.0, 18.0, 90.0, 98.0],
 ];
 
 let pass = 0, fail = 0;
