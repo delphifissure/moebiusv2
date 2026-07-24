@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a81 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80/a81 stretch cuts (axis + rotation-free); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a84 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts (SV graded, mask-gated) + a84 contact-rubber exemption; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -1354,6 +1354,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_bandCutMismatch: { value: 0.01 },
         u_bandCutMaxGrad: { value: 0.04 },
         u_bandCutUvRate: { value: 0.0 }, // 0 = stretch test off until armed
+        u_cutContactRamp: { value: 1.0 }, // A84: contact-rubber exemption from the mask gate
         // --------------------------------
 
         u_alphaMap: { value: alphaTexture },
@@ -1394,6 +1395,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform bool u_bandCutAll;
         uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
         uniform float u_bandCutUvRate;
+        uniform float u_cutContactRamp;
 
         varying vec2 vUv;
         varying float vNormalizedDepth;
@@ -1472,6 +1474,28 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // proved a genuine reveal behind them may discard. Ground
                 // stretch outside the mask is the legitimate realtime look.
                 bool svBacked = texture2D(u_sdMask, vUv).r > 0.25;
+                // A84: the mask gate has a blind class — CONTACT RUBBER.
+                // Sub-tear source ramps (figure-ground contacts; measured
+                // at the astronaut boot: 0.016..0.024 depth per texel vs
+                // 0.002..0.004 on open ground) never tear, never
+                // disocclude, and so never enter the SD mask at any
+                // dilation radius — the gate protects their streamers
+                // unconditionally. A fragment that is BOTH hard-stretched
+                // (>=5x, the true-rubber class; the dithered 2.8..5x band
+                // is what speckled legitimate grazing ground pre-a84 and
+                // stays strictly mask-gated) AND sits on a cliff-scale
+                // source ramp is rubber by construction: it may cut
+                // without mask backing. Ramp threshold reuses
+                // u_bandCutMismatch (0.01), the midpoint of the measured
+                // class gap and this block's existing cliff scale.
+                if (!svBacked && u_cutContactRamp > 0.5 &&
+                    (uvRate < u_bandCutUvRate || svRatio <= 0.2)) {
+                    float rampX = abs(getDepth(vUv + vec2(u_sdMaskTexel.x, 0.0)) -
+                                      getDepth(vUv - vec2(u_sdMaskTexel.x, 0.0)));
+                    float rampY = abs(getDepth(vUv + vec2(0.0, u_sdMaskTexel.y)) -
+                                      getDepth(vUv - vec2(0.0, u_sdMaskTexel.y)));
+                    if (0.5 * max(rampX, rampY) > u_bandCutMismatch) svBacked = true;
+                }
                 bool stretched = (u_bandCutUvRate > 0.0) && svBacked &&
                                  (uvRate < u_bandCutUvRate || (svCutProb > 0.0 && svDith < svCutProb));
                 // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
@@ -5899,7 +5923,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a81 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80/a81 stretch cuts (axis + rotation-free); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a84 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts (SV graded, mask-gated) + a84 contact-rubber exemption; conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -10678,7 +10702,8 @@ function buildBackgroundLayer() {
                 mu.u_bandMask.value = null;
                 mu.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mu.u_bandCutMaxGrad) mu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
-                if (mu.u_bandCutUvRate) mu.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); };
+                if (mu.u_bandCutUvRate) mu.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w);
+                if (mu.u_cutContactRamp) mu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0; };
             // FG cuts its rubber and reveals the wash; the PLATE renders
             // SOLID — it is the only fill in quick mode, and discarding the
             // backstop opens naked holes (double-discard speckle). Its own
@@ -12053,6 +12078,7 @@ function buildBackgroundLayer() {
                         // canvas width; a rubber triangle runs at a small fraction of it
                         const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
                         if (fu.u_bandCutUvRate) fu.u_bandCutUvRate.value = _uvRateThr;
+                        if (fu.u_cutContactRamp) fu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
                         _mark('bandcut-bake');
                         console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
                     }
@@ -13349,6 +13375,7 @@ function buildBackgroundLayer() {
                 mat.uniforms.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mat.uniforms.u_bandCutMaxGrad) mat.uniforms.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                 if (mat.uniforms.u_bandCutUvRate) mat.uniforms.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w);
+                if (mat.uniforms.u_cutContactRamp) mat.uniforms.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
             } else {
                 mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null;
             }
