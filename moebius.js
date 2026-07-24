@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a95 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as a reveal width (a92 re-tested and REINSTATED on a clean instrument); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a96 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 FLOAT plug depth (8-bit round-trip removed); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6024,7 +6024,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a95 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as a reveal width (a92 re-tested and REINSTATED on a clean instrument); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a96 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 FLOAT plug depth (8-bit round-trip removed); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -7186,7 +7186,7 @@ function bgOtsuThreshold(values, skip) {
 // Pull-push (pyramid) fill: diffuse the color of `valid` pixels into the rest,
 // streak-free (used to fill plug holes). cpx = RGBA source bytes, valid = Uint8
 // mask of usable source pixels. Returns a Uint8Array RGB (all pixels filled).
-function bgPullPushFill(cpx, valid, W, H) {
+function bgPullPushFill(cpx, valid, W, H, wantFloat) {
     let levels = [];
     let cw = new Float32Array(W*H*3), ww = new Float32Array(W*H);
     for (let i=0;i<W*H;i++){ if(valid[i]){ ww[i]=1; cw[i*3]=cpx[i*4]; cw[i*3+1]=cpx[i*4+1]; cw[i*3+2]=cpx[i*4+2]; } }
@@ -7216,6 +7216,20 @@ function bgPullPushFill(cpx, valid, W, H) {
         for (let y=0;y<fine.H;y++) for (let x=0;x<fine.W;x++){ const o=y*fine.W+x;
             if (fine.ww[o] < 0.999){ const s=sample(coarse,(x-0.5)/2,(y-0.5)/2); if(s){ const a=fine.ww[o];
                 fine.cw[o*3]+=s[0]*(1-a); fine.cw[o*3+1]+=s[1]*(1-a); fine.cw[o*3+2]+=s[2]*(1-a); fine.ww[o]=1; } } }
+    }
+    // A96: the pyramid is Float32 THROUGHOUT; only this final write and the
+    // caller's input encoding quantise. For DEPTH that loss is not cosmetic:
+    // one 8-bit level is 1/255 = 0.00392, while the entire per-texel depth
+    // budget (the cone slope, the largest non-folding step) is 0.0040 at the
+    // 1200-px reference, 0.0025 at 1920 and 0.0016 at 3000 — so a single
+    // quantisation step is 0.98x / 1.57x / 2.45x the fold limit, and the plug
+    // field arrives as a staircase whose every terrace edge is at or beyond
+    // folding, WORSE at higher resolution. Callers filling COLOUR keep the
+    // Uint8 path; callers filling depth pass wantFloat.
+    if (wantFloat) {
+        const outF = new Float32Array(W*H*3), Lf = levels[0];
+        for (let i=0;i<W*H;i++){ const w=Lf.ww[i]||1; outF[i*3]=Lf.cw[i*3]/w; outF[i*3+1]=Lf.cw[i*3+1]/w; outF[i*3+2]=Lf.cw[i*3+2]/w; }
+        return outF;
     }
     const out=new Uint8Array(W*H*3), L0=levels[0];
     for (let i=0;i<W*H;i++){ const w=L0.ww[i]||1; out[i*3]=Math.max(0,Math.min(255,L0.cw[i*3]/w)); out[i*3+1]=Math.max(0,Math.min(255,L0.cw[i*3+1]/w)); out[i*3+2]=Math.max(0,Math.min(255,L0.cw[i*3+2]/w)); }
@@ -10553,11 +10567,18 @@ function buildBackgroundLayer() {
                 // against sky it blends toward the far sky, so the plug sits a
                 // little too far back inside the silhouette (see a59d above for
                 // the intended ground-continuation fix, still WIP).
-                const cpxD = new Uint8Array(PNq*4), valD = new Uint8Array(PNq);
+                // A96: FLOAT depth in, float depth out. The old path rounded dQ
+                // into 8 bits here and divided by 255 on the way back, so the
+                // plug — the plate everywhere inside the SD region — was
+                // quantised to steps of 0.00392, comparable to or larger than
+                // the whole per-texel budget (see bgPullPushFill). The pyramid
+                // itself was always Float32; only this encoding threw the
+                // precision away.
+                const cpxD = new Float32Array(PNq*4), valD = new Uint8Array(PNq);
                 for (let i = 0; i < PNq; i++) { if (disocc[i]) continue;
-                    const v = Math.max(0, Math.min(255, Math.round(dQ[i]*255)));
+                    const v = dQ[i]*255;
                     cpxD[i*4] = v; cpxD[i*4+1] = v; cpxD[i*4+2] = v; cpxD[i*4+3] = 255; valD[i] = 1; }
-                const filledD = bgPullPushFill(cpxD, valD, pw, ph);
+                const filledD = bgPullPushFill(cpxD, valD, pw, ph, true);
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const i = s+x; if (disocc[i]) plateF[d2+x] = filledD[i*3] / 255; } }
             }
