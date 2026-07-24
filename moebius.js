@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a94 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a95 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as a reveal width (a92 re-tested and REINSTATED on a clean instrument); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6024,7 +6024,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a94 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent; conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a95 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as a reveal width (a92 re-tested and REINSTATED on a clean instrument); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9300,7 +9300,16 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         if (x < pw-1 && dQ[i+1]  - dQ[i] > s) { s = dQ[i+1]  - dQ[i]; nearJ = i+1; }
         if (y > 0    && dQ[i-pw] - dQ[i] > s) { s = dQ[i-pw] - dQ[i]; nearJ = i-pw; }
         if (y < ph-1 && dQ[i+pw] - dQ[i] > s) { s = dQ[i+pw] - dQ[i]; nearJ = i+pw; }
-        if (s <= tearStep) continue;
+        // A95 (re-test of a92 with a clean instrument): the lip threshold as a
+        // REVEAL WIDTH. step*k is what the lip actually uncovers in px at the
+        // fade end; the fixed 0.06 means 10.5 px on the troll and 37.1 px on
+        // the warrior — the same test meaning 3.5x different things. a92
+        // rejected this using a RESAMPLED input and an area-normalised fold
+        // metric, both since shown faulty (Addenda 101/102), so the rejection
+        // is being re-examined rather than assumed.
+        const _seedThr = (window._noSeedReveal === true) ? tearStep
+                       : ((typeof window._seedRevealPx === 'number') ? window._seedRevealPx : 24) * sCone;
+        if (s <= _seedThr) continue;
         // A93: this budget window was a FIXED +-3 texels — not scaled at all,
         // so the lip's measured prominence spanned 1.4% of the frame at 425 px
         // and 0.2% at 3000 px. Use the same smear-scale radius the barrier
