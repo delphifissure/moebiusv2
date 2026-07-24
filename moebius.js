@@ -1464,7 +1464,15 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 float svRatio = svMinS / max(u_bandCutUvRate, 1e-9);
                 float svCutProb = clamp(1.0 - (svRatio - 0.2) / 0.16, 0.0, 1.0);
                 float svDith = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-                bool stretched = (u_bandCutUvRate > 0.0) &&
+                // A84: the cut's safety premise — "the plate backs every
+                // reveal" — is FALSE on un-revealed ground and at frame
+                // margins, where a discard is a naked pixel (user-reported
+                // speckle field across the near dune at +y poses). Gate the
+                // directional cut by the SD mask: only fragments whose bake
+                // proved a genuine reveal behind them may discard. Ground
+                // stretch outside the mask is the legitimate realtime look.
+                bool svBacked = texture2D(u_sdMask, vUv).r > 0.25;
+                bool stretched = (u_bandCutUvRate > 0.0) && svBacked &&
                                  (uvRate < u_bandCutUvRate || (svCutProb > 0.0 && svDith < svCutProb));
                 // (b) MISMATCH: sampled-vs-interpolated depth disagreement,
                 // gated to slow ramps so rest-state cliffs are exempt.
@@ -10654,6 +10662,9 @@ function buildBackgroundLayer() {
             // the FG). Default to matching the FG (0); window._plugZBias restores it.
             matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) + (window._plugZBias ? -0.004 : 0);
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
+            // A84: the FG material needs the mask too — the stretch cut is
+            // gated by reveal backing (see the fragment shader).
+            if (L.mesh.material.uniforms.u_sdMask) { L.mesh.material.uniforms.u_sdMask.value = maskDT; L.mesh.material.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
             // A58: the plate is hole-only — render only inside the dilated
             // disocclusion band (islands), transparent everywhere the FG stays
             // intact. window._noBgIslands reverts to the solid full clone.
