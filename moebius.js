@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a89 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 INVARIANCE PASS (euclidean cone, detected depth quantum, derived tie-break); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a90 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 ONE cone-slope definition (5 sites, 3 reference widths, unified); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -62,6 +62,54 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
 // design statement instead of an artifact.
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+
+// ===================== CONE SLOPE: ONE DEFINITION =====================
+// A90. The plate's maximum rise per source pixel. Five call sites had
+// grown FIVE definitions against THREE reference widths — 1920 (the
+// star's), 851 (the troll's) and a separate 0.0015 family — so the same
+// physical slope differed by up to 2.3x depending on which function you
+// were standing in, and a88 only fixed the sites it touched. All 0.0025
+// sites now route here.
+//
+// UNITS: depth per SOURCE pixel. It must therefore scale with pw (a88):
+// a pixel is not a fixed angle.
+//
+// MAGNITUDE IS NOT SETTLED — deliberately kept at the empirically
+// anchored value while the disagreement is open, so this change is a
+// pure de-duplication:
+//   * empirical anchor (what the renders have been calibrated against):
+//     ~400 px of reprojection per depth unit at a 1920-px source, giving
+//     1/400 = 0.0025 at pw=1920.
+//   * first-principles derivation from this file's own geometry
+//     (terrarium 0.16x0.09, volume depths 0.02/0.04, smoothstep
+//     displacement, shift = -ex*zOff/(D-zOff) with ex=D at the 45 deg
+//     fade end) gives ~1000 px per depth unit at the same source — 2.5x
+//     larger — and it is not even a single number: the smoothstep makes
+//     k vary 2x across the depth range, and layerWidth makes it vary
+//     2.3x with image ASPECT.
+// Until k is MEASURED on device (feature displacement vs known depth),
+// changing the magnitude would be guessing with extra steps. The
+// derived form is implemented below and selectable, so the measurement
+// has somewhere to land.
+function bgConeSlopePerPx(pwArg) {
+    const pwv = Math.max(1, pwArg | 0);
+    if (window._coneSlopeDerived === true) {
+        // geometric form: 1 / max_over_depth(k), conservative (never folds)
+        const phv = Math.max(1, (window._coneSlopePh | 0) || pwv);
+        const layerAspect = pwv / phv;
+        const frameAspect = terrariumWidth / terrariumHeight;
+        const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
+        const pxPerWorld = pwv / Math.max(1e-6, layerW);
+        const D = 0.2;                                   // portal distance (dolly default)
+        const ex = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+        const pn = 0.5;                                  // u_portalPlaneDepthNorm
+        const gMax = Math.max(1.5 * outerVolumeDepth / pn, 1.5 * innerVolumeDepth / (1 - pn));
+        const dShiftdZ = ex * D / Math.pow(Math.max(1e-4, D - innerVolumeDepth), 2);
+        return 1 / Math.max(1e-6, dShiftdZ * gMax * pxPerWorld);
+    }
+    return 0.0025 * (1920 / pwv);
+}
+
 let bgViewFadeEnabled = true;   // main-canvas "Angle fade" toggle (off = test wild angles)
 // A60: true reference-eye ray reprojection is now the DEFAULT (the view-Z push
 // shears depth-gradient surfaces into taffy at extreme angles / distant focal
@@ -5923,7 +5971,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a89 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 INVARIANCE PASS (euclidean cone, detected depth quantum, derived tie-break); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a90 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 ONE cone-slope definition (5 sites, 3 reference widths, unified); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9941,8 +9989,7 @@ function buildBackgroundLayer() {
             // tuned: the fill may rise at most one grazing limit per pixel,
             // k = 396 * (pw/1920) px per depth unit at the fade-end, so
             // sCone = 1/k = 0.0025 * 1920/pw. window._sConeFixed reverts.
-            const sCone = (window._sConeFixed === true) ? 0.0025
-                                                        : 0.0025 * (1920 / Math.max(1, pw));
+            const sCone = (window._sConeFixed === true) ? 0.0025 : bgConeSlopePerPx(pw);
             const plateQ = dQ.slice();
             for (let y = 0; y < ph; y++) { const row = y*pw;
                 for (let x = 0; x < pw; x++) { const i = row+x;
@@ -12028,7 +12075,7 @@ function buildBackgroundLayer() {
                     // conservative choice for containment.
                     if ((typeof window._dirPlate !== 'boolean') || window._dirPlate) {
                         const cImgDP = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
-                        const dirR = bgDirectionalPlate(depth, pw, ph, cImgDP, 0.0025 * (1920 / Math.max(1, pw)), fgTearStep);   // A88: resolution-correct cone slope
+                        const dirR = bgDirectionalPlate(depth, pw, ph, cImgDP, bgConeSlopePerPx(pw), fgTearStep);   // A90: single cone-slope definition
                         if (dirR) { dirPlateV = dirR.plate; console.log('[RUNG-PLUG] directional plate for plug consumers (' + dirR.cells + ' flood cells)'); }
                     }
                     {
@@ -12176,7 +12223,7 @@ function buildBackgroundLayer() {
                         // slope tuned at 851px width (quick-bake contract);
                         // scale by resolution so the envelope is the same
                         // physical shape on any asset
-                        const sCone = 0.0025 * 851 / pw, sd = sCone, sdg = sCone * 1.41421356;
+                        const sCone = bgConeSlopePerPx(pw), sd = sCone, sdg = sCone * 1.41421356;   // A90: was 0.0025*851/pw (troll-calibrated, 2.26x off its siblings)
                         const INF = 1e9;
                         const env = new Float32Array(PN);
                         for (let i = 0; i < PN; i++) env[i] = (band[i] || underMask[i]) ? INF : depth[i];
@@ -12782,7 +12829,7 @@ function buildBackgroundLayer() {
                             // comes from an 8px sample; amplified over a 100px+
                             // extension it is noise, not surface — runaway rises
                             // rendered as nearer-than-everything strip patches.
-                            const riseCap = baseD + (0.0025 * 851 / pw) * (dist + 4);
+                            const riseCap = baseD + bgConeSlopePerPx(pw) * (dist + 4);   // A90: was troll-calibrated
                             if (e > riseCap) e = riseCap;
                             if (e > baseD) e = Math.min(e, Math.max(baseD, depth[i] - STEP7));
                             return Math.max(0, Math.min(1, e));
