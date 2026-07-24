@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a87 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 PLATE TEAR (disocclusion sheet); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a88 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 plate tear + a88 RESOLUTION-CORRECT CONE SLOPE (fill no longer folds); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -5923,7 +5923,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a87 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 PLATE TEAR (disocclusion sheet); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a88 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone-envelope fill + a86 8-bit dequantize + a87 plate tear + a88 RESOLUTION-CORRECT CONE SLOPE (fill no longer folds); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9884,7 +9884,27 @@ function buildBackgroundLayer() {
             // pass then invalidates exactly the ~(step/s)px ring where the
             // envelope departs the source, so the wash ring is clean far
             // colour. s must exceed any plausible ground slope.
-            const sCone = 0.0025;
+            // A88 RESOLUTION-CORRECT CONE SLOPE. sCone is a slope PER PIXEL,
+            // and it was a fixed 0.0025 — calibrated once against a 1920-px
+            // bake (1/0.0025 = 400 ~ the measured 396 px of reprojection per
+            // depth unit at the fade-end) and never scaled with the source.
+            // A pixel is not a fixed angle: at pw=3000 the same physical
+            // slope is 1920/3000 as steep per pixel, so the shipped constant
+            // is 1.56x TOO STEEP there. A surface whose slope exceeds the
+            // grazing limit 1/k does not merely stretch — it FOLDS (the
+            // reprojection reverses), and a folded fill renders as an
+            // inverted sheet lying across the reveal. Measured on the
+            // warrior (3000px) at the user's cams: 87-92% of the claimed
+            // fill is folded at ex >= 0.2, onset at ex = 0.128 — INSIDE the
+            // supported cone. This is the asset dependence: star (1920px)
+            // folds only at the fade-end, exactly as designed; warrior
+            // (3000px) folds at 0.128 ("total mess"); troll (851px) is
+            // 0.44x, safe but under-reaching. The law is geometric, not
+            // tuned: the fill may rise at most one grazing limit per pixel,
+            // k = 396 * (pw/1920) px per depth unit at the fade-end, so
+            // sCone = 1/k = 0.0025 * 1920/pw. window._sConeFixed reverts.
+            const sCone = (window._sConeFixed === true) ? 0.0025
+                                                        : 0.0025 * (1920 / Math.max(1, pw));
             const plateQ = dQ.slice();
             for (let y = 0; y < ph; y++) { const row = y*pw;
                 for (let x = 0; x < pw; x++) { const i = row+x;
@@ -10886,18 +10906,29 @@ function buildBackgroundLayer() {
                     const gpP = L.mesh.geometry.parameters || {};
                     const vwP = (gpP.widthSegments || 0) + 1, vhP = (gpP.heightSegments || 0) + 1;
                     const srcP = gQ.index.array;
-                    if (vwP > 1 && vhP > 1 && plateQ) {
+                    if (vwP > 1 && vhP > 1 && plateF) {
                         const sxP = (pw - 1) / Math.max(1, vwP - 1), syP = (ph - 1) / Math.max(1, vhP - 1);
+                        // A87b: tear against plateF — the ACTUAL displacement
+                        // texture the plate renders (matQ.displacementMap =
+                        // plateDT built from plateF). plateQ is only the
+                        // pre-plug flood: inside the SD region plateF is
+                        // OVERWRITTEN by the plug depth (flush-silhouette
+                        // plug), and that plug carries its own cliffs — the
+                        // ones that stretch across the reveal. Tearing the
+                        // flood field instead dropped 0.09% of the plate and
+                        // left the sheet standing (measured on device).
+                        // plateF is row-FLIPPED for the texture upload, so the
+                        // vertex->texel map must flip too.
                         const tiP = (vi) => {
                             const vx = vi % vwP, vy = (vi / vwP) | 0;
                             const px = Math.min(pw - 1, Math.round(vx * sxP));
                             const py = Math.min(ph - 1, Math.round(vy * syP));
-                            return py * pw + px;
+                            return (ph - 1 - py) * pw + px;
                         };
                         const outP = new srcP.constructor(srcP.length);
                         let nP = 0, dropP = 0;
                         for (let t = 0; t + 2 < srcP.length; t += 3) {
-                            const a0 = plateQ[tiP(srcP[t])], a1 = plateQ[tiP(srcP[t + 1])], a2 = plateQ[tiP(srcP[t + 2])];
+                            const a0 = plateF[tiP(srcP[t])], a1 = plateF[tiP(srcP[t + 1])], a2 = plateF[tiP(srcP[t + 2])];
                             const mxP = Math.max(a0, Math.max(a1, a2)), mnP = Math.min(a0, Math.min(a1, a2));
                             if (mxP - mnP > fgTearStep) { dropP++; continue; }
                             outP[nP++] = srcP[t]; outP[nP++] = srcP[t + 1]; outP[nP++] = srcP[t + 2];
@@ -11959,7 +11990,7 @@ function buildBackgroundLayer() {
                     // conservative choice for containment.
                     if ((typeof window._dirPlate !== 'boolean') || window._dirPlate) {
                         const cImgDP = (L.textures.color && L.textures.color.image) || (L.elements && L.elements.color);
-                        const dirR = bgDirectionalPlate(depth, pw, ph, cImgDP, 0.0025, fgTearStep);
+                        const dirR = bgDirectionalPlate(depth, pw, ph, cImgDP, 0.0025 * (1920 / Math.max(1, pw)), fgTearStep);   // A88: resolution-correct cone slope
                         if (dirR) { dirPlateV = dirR.plate; console.log('[RUNG-PLUG] directional plate for plug consumers (' + dirR.cells + ' flood cells)'); }
                     }
                     {
