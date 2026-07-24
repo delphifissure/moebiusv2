@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a90 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 ONE cone-slope definition (5 sites, 3 reference widths, unified); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a91 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 DERIVED per-cell tear (fold limit T=1, cited); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -91,6 +91,41 @@ let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 // changing the magnitude would be guessing with extra steps. The
 // derived form is implemented below and selectable, so the measurement
 // has somewhere to land.
+// A91 PER-CELL FOLD THRESHOLD (the tear).  DERIVED, NOT CHOSEN.
+//
+// A mesh cell spanning a depth difference dd has its two ends displaced by
+// k*dd px under reprojection.  When k*dd reaches the cell's own size the
+// cell INVERTS — the surface folds — and a folded cell is exactly the
+// "rubber / tunnelling / extrusion" artefact.  With one vertex per texel
+// the cell is 1 px, so the fold limit is dd = 1/k, and 1/k is the cone
+// slope: THE TEAR THRESHOLD AND THE FILL SLOPE ARE THE SAME QUANTITY,
+// "the largest depth change one pixel can carry without folding".
+//
+// The dimensionless form is T = tearStep * k.  Measured on the shipped
+// depth maps, the fixed tearStep = 0.06 gives
+//     troll (851px)  T = 10.5      star (1920px)  T = 23.8
+//     photo (2047px) T = 25.3      warrior (3000px) T = 37.1
+// i.e. cells were permitted to fold 11x - 37x before tearing, and by a
+// factor that VARIED 3.5x with resolution — the mixed-unit bug measured
+// in Addendum 99 (per-texel steps double when resolution halves).
+//
+// Trade curve, measured on the three depth maps (torn% = fragmentation
+// cost, surviving-folded% = rubber the tear lets through):
+//     T:        1          4          16         37(today)
+//     troll   2.25/0.00  0.63/1.62  0.24/2.01  0.10/2.15
+//     star    2.63/0.00  1.09/1.54  0.47/2.17  0.23/2.40
+//     warrior 3.27/0.00  1.36/1.91  0.74/2.53  0.22/3.06
+// The cells are the same population either way: at today's setting 2-3%
+// of the mesh renders as folded rubber; at T=1 that same 2-3% tears and
+// re-ships as A53 cap cards (rigid splats at true depth, no pixel lost).
+// T = 1 is the physical limit, not a taste: at T = 1 no folded cell
+// survives, by construction, which is the user's stated contract
+// ("ZERO tunneling / extrusion visible").  window._foldFactor overrides
+// for A/B; window._noFoldTear restores the fixed 0.06.
+function bgFoldStepPerCell(pwArg) {
+    const T = (typeof window._foldFactor === 'number') ? window._foldFactor : 1.0;
+    return T * bgConeSlopePerPx(pwArg);
+}
 function bgConeSlopePerPx(pwArg) {
     const pwv = Math.max(1, pwArg | 0);
     if (window._coneSlopeDerived === true) {
@@ -5971,7 +6006,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a90 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 ONE cone-slope definition (5 sites, 3 reference widths, unified); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a91 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 DERIVED per-cell tear (fold limit T=1, cited); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9990,6 +10025,12 @@ function buildBackgroundLayer() {
             // k = 396 * (pw/1920) px per depth unit at the fade-end, so
             // sCone = 1/k = 0.0025 * 1920/pw. window._sConeFixed reverts.
             const sCone = (window._sConeFixed === true) ? 0.0025 : bgConeSlopePerPx(pw);
+            // A91: the PER-CELL tear threshold is the fold limit (derived above);
+            // fgTearStep stays the CLIFF-SCALE constant used by the windowed
+            // barrier/seed/membrane tests, whose windows already scale with pw.
+            const _cellTearStep = (window._noFoldTear === true) ? fgTearStep : bgFoldStepPerCell(pw);
+            console.log('[QUICK-BAKE] a91 per-cell tear threshold = ' + _cellTearStep.toFixed(5) +
+                        ' (fold limit at pw=' + pw + '); cliff-scale tearStep stays ' + fgTearStep);
             const plateQ = dQ.slice();
             for (let y = 0; y < ph; y++) { const row = y*pw;
                 for (let x = 0; x < pw; x++) { const i = row+x;
@@ -10705,7 +10746,7 @@ function buildBackgroundLayer() {
                             const d0 = dQ[t0i], d1 = dQ[t1i], d2 = dQ[t2i];
                             let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
                             let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
-                            if (mx - mn > fgTearStep) { droppedT++; continue; }
+                            if (mx - mn > _cellTearStep) { droppedT++; continue; }
                             cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
@@ -11015,7 +11056,7 @@ function buildBackgroundLayer() {
                         for (let t = 0; t + 2 < srcP.length; t += 3) {
                             const a0 = plateF[tiP(srcP[t])], a1 = plateF[tiP(srcP[t + 1])], a2 = plateF[tiP(srcP[t + 2])];
                             const mxP = Math.max(a0, Math.max(a1, a2)), mnP = Math.min(a0, Math.min(a1, a2));
-                            if (mxP - mnP > fgTearStep) { dropP++; continue; }
+                            if (mxP - mnP > _cellTearStep) { dropP++; continue; }
                             outP[nP++] = srcP[t]; outP[nP++] = srcP[t + 1]; outP[nP++] = srcP[t + 2];
                         }
                         gQ.setIndex(new THREE.BufferAttribute(outP.subarray(0, nP), 1));
