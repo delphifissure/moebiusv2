@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a96 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 FLOAT plug depth (8-bit round-trip removed); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.19-a97 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6024,7 +6024,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a96 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 FLOAT plug depth (8-bit round-trip removed); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.19-a97 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step; conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9384,7 +9384,22 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // level; on a 16-bit source that is 131 quanta and real value differences
     // would be swallowed as ties). Derived from tearStep so it also scales
     // with any depth-range renormalisation: one part in 32 of a tear step.
-    const QUANT = tearStep / 32;
+    // A97: the tie-break window must be a fraction of the SMALLEST LEGITIMATE
+    // INCREMENT the fill can make, which is one cone step — not a fraction of
+    // the cliff scale. As tearStep/32 it was a fixed depth compared against
+    // values that differ by cone steps, and the cone step scales with
+    // resolution, so the tie window measured 0.23 / 0.47 / 0.75 / 1.17 cone
+    // steps at pw 600 / 1200 / 1920 / 3000. At 3000 px two candidates more
+    // than a WHOLE legitimate increment apart were still being treated as
+    // tied and resolved by distance instead of value — so which anchor won a
+    // pixel depended on the source resolution, and with it the fill's crease
+    // skeleton (a crease between opposing cone claims steps by up to 2*sCone,
+    // i.e. k*step ~ 2, a guaranteed fold: creases ARE the fold population the
+    // invariance metric counts).
+    // A quarter of one cone step: small enough that only genuine near-ties
+    // fall in the window, large enough to absorb float noise in the
+    // accumulated plane evaluation.
+    const QUANT = sCone / 4;
     const flrF = window._foldProbe ? new Uint8Array(PN2) : null;   // PROBE: claim value came from the a63b descent floor
     let h = 0, guard = 0, GUARD = PN2 * 24;
     while (h < q.length && guard++ < GUARD) {
