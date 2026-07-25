@@ -37,7 +37,10 @@ const SRC = { troll:   ['defaultImgColor.png', 'defaultImgDepth.png'],
 const ASSET = process.argv[2] || 'troll';
 const POSES = [ { nm: 'rest', x: 0, y: 0 }, { nm: '0.52xR', x: 0.178, y: 0.021 },
                 { nm: '0.85xR', x: 0.293, y: 0.005 }, { nm: '0.85xU', x: 0.005, y: -0.293 } ];
-const ARMS = [ ['fold',  {}], ['cliff', { _qbTearMode: 'cliff' }], ['none', { _qbNoTear: true }] ];
+// NOTE: after a117 the DEFAULT is cliff, so an empty flag object no longer
+// selects fold — the 'fold' arm must ask for it explicitly. The run where
+// 'fold' and 'cliff' printed identical numbers was measuring cliff twice.
+const ARMS = [ ['fold',  { _qbTearMode: 'fold' }], ['cliff', { _qbTearMode: 'cliff' }], ['none', { _qbNoTear: true }] ];
 
 (async () => {
   fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(H, 'defaultImgColor.png'));
