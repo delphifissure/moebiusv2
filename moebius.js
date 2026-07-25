@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.21-a103 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.22-a106 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -221,19 +221,27 @@ function bgConeSlopeAtDepth(pwArg, phArg, d, tearStepArg) {
 // D is camera.position.z, moved by every dolly. D enters as D^2/(D-z)^2, which
 // at the shipped D = 0.2 and inner = 0.04 is a factor of 1.56 — not a rounding
 // error. Read both live.
-let _bgShiftLUT = null;
-function bgShiftLUTFor(pwArg, phArg) {
+let _bgShiftLUT = null, _bgShiftLUTAlt = null;
+function bgShiftLUTFor(pwArg, phArg, exArg) {
     const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
     const pn = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
-    const D = (typeof camera !== 'undefined' && camera && camera.position && camera.position.z > 1e-3)
-              ? camera.position.z : 0.2;
+    const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    const _cz = (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2;
+    // A103b: the distance is camera-to-PORTAL, and the portal plane has its own
+    // slider (portalPlaneWorldZ); a103 used camera.position.z alone, which is
+    // the distance only while the portal sits at the world origin.
+    const D = Math.max(1e-3, Math.abs(_cz - _pz));
     const key = pwv + 'x' + phv + '|' + bgViewFadeEndDeg + '|' + innerVolumeDepth + '|' +
-                outerVolumeDepth + '|' + pn + '|' + D.toFixed(5);
+                outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' +
+                ((typeof exArg === 'number') ? exArg.toFixed(5) : 'fade');
     if (_bgShiftLUT && _bgShiftLUT.key === key) return _bgShiftLUT;
+    if (_bgShiftLUTAlt && _bgShiftLUTAlt.key === key) return _bgShiftLUTAlt;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
     const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
     const pxPerWorld = pwv / Math.max(1e-6, layerW);
-    const ex = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    // A104: callers with their own head offset (the directional plug's per-edge
+    // budget) pass it; everyone else gets the fade-end offset.
+    const ex = (typeof exArg === 'number') ? exArg : D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
     const outer = outerVolumeDepth, inner = innerVolumeDepth;
     const N = 8192, fwd = new Float32Array(N + 1);
     for (let i = 0; i <= N; i++) {
@@ -251,8 +259,9 @@ function bgShiftLUTFor(pwArg, phArg) {
         const f = (b > a) ? (target - a) / (b - a) : 0;
         inv[i] = Math.min(1, (j + f) / N);
     }
-    _bgShiftLUT = { key, fwd, inv, N, M, m0, m1, span: m1 - m0 };
-    return _bgShiftLUT;
+    const built = { key, fwd, inv, N, M, m0, m1, span: m1 - m0 };
+    if (typeof exArg === 'number') _bgShiftLUTAlt = built; else _bgShiftLUT = built;
+    return built;
 }
 function bgShiftPxAt(L, d) {
     const t = Math.min(1, Math.max(0, d)) * L.N, i = t | 0;
@@ -6230,7 +6239,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.21-a103 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.22-a106 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp; conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -7481,11 +7490,20 @@ function bgSlide2D(src, W, H, r, isMin) {
 function bgDirectionalPlug(depth, W, H, opts) {
     opts = opts || {};
     const N = W*H, STEP = opts.step || bgBandStep || 0.06, DELTA = opts.delta || 0.12, SWEEPS = opts.sweeps || 120;
-    // parallax px LUT (matches the app's parallaxCurve), used for per-edge budget
-    const lut = new Float32Array(1024);
-    for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
-        const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s=nd<0.5?slo:shi; lut[i]=DELTA*s/(0.20+s)*(W/0.16); }
-    const pxAt = dv => lut[Math.min(1023,Math.max(0,(dv*1023)|0))];
+    // A104: was a PRIVATE copy of the parallax law with 0.02 / 0.04 / 0.5 /
+    // 0.20 / 0.16 hardcoded, so it ignored the volume-depth sliders, the
+    // depth-midpoint control, the fade angle and the layer's aspect fit. It is
+    // the same quantity a102 computes exactly (only ever read as
+    // |pxAt(a) - pxAt(b)|, so the sign convention is irrelevant); DELTA stays
+    // as this caller's own head offset.
+    const _plugLegacy = (window._legacyPlugLUT === true);
+    const _plugLut = _plugLegacy ? (() => { const l = new Float32Array(1024);
+        for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
+            const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s2=nd<0.5?slo:shi; l[i]=DELTA*s2/(0.20+s2)*(W/0.16); }
+        return l; })() : null;
+    const _plugL = _plugLegacy ? null : bgShiftLUTFor(W, H, DELTA);
+    const pxAt = dv => _plugLegacy ? _plugLut[Math.min(1023,Math.max(0,(dv*1023)|0))]
+                                   : bgShiftPxAt(_plugL, dv);
     const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1);
     const q = new Int32Array(N); let qt = 0;   // [PERF] typed queue (each pixel enqueued at most once)
     const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
@@ -8394,7 +8412,7 @@ function applyLiveBake(L) {
         if (_inkSeatOn && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
             const S = out.sharpened, N = w * h;
             // slope-tolerant cone-erosion floor (ground beneath content)
-            const sCone = 0.0015 * 1920 / w;
+            const sCone = bgConeSlopePerPx(w);   // A104: was 0.0015*1920/w, a third private slope
             const floor = S.slice();
             for (let y = 0; y < h; y++) { const row = y*w;
                 for (let x = 0; x < w; x++) { const i = row+x; let v = floor[i];
@@ -8722,12 +8740,25 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
     // to the old full-frame clone.
     const budV = new Float32Array(PN);
     {
-        const sConeV = 0.0015 * 1920 / pw;
+        // A104: was sConeV = 0.0015*1920/pw — a SECOND cone slope, 1.67x the one
+        // a88/a90/a101 corrected, used as reach = depthStep/sConeV = depthStep*k.
+        // That product IS the screen displacement, which a102's envelope gives
+        // exactly, so the budget no longer needs a slope at all.
+        const _budLegacy = (window._legacyV2Budget === true), _sConeV = 0.0015 * 1920 / pw;
+        const _budL = _budLegacy ? null : bgShiftLUTFor(pw, ph);
+        const _pxOf = (a, b) => _budLegacy ? (Math.abs(a - b) / _sConeV)
+                                           : Math.abs(bgShiftPxAt(_budL, a) - bgShiftPxAt(_budL, b));
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
-            const i = y*pw+x; let s2 = 0;
-            if (x < pw-1) { const a = Math.abs(dV[i+1] - dV[i]); if (a > s2) s2 = a; }
-            if (y < ph-1) { const a = Math.abs(dV[i+pw] - dV[i]); if (a > s2) s2 = a; }
-            if (s2 > fgTearStep) { const b = s2 / sConeV; if (b > budV[i]) budV[i] = b;
+            const i = y*pw+x; let s2 = 0, bpx = 0;
+            // the cliff GATE stays on the depth step; the BUDGET is the largest
+            // screen displacement across the pair, and because k varies 19x the
+            // larger depth step is not always the larger displacement — so both
+            // neighbours are measured, not just the one that won on depth.
+            if (x < pw-1) { const a = Math.abs(dV[i+1] - dV[i]); if (a > s2) s2 = a;
+                            const b = _pxOf(dV[i+1], dV[i]); if (b > bpx) bpx = b; }
+            if (y < ph-1) { const a = Math.abs(dV[i+pw] - dV[i]); if (a > s2) s2 = a;
+                            const b = _pxOf(dV[i+pw], dV[i]); if (b > bpx) bpx = b; }
+            if (s2 > fgTearStep) { const b = bpx; if (b > budV[i]) budV[i] = b;
                 if (x < pw-1 && b > budV[i+1]) budV[i+1] = b;
                 if (y < ph-1 && b > budV[i+pw]) budV[i+pw] = b; }
         }
@@ -9183,10 +9214,31 @@ function bgBackstopSweep() {
         };
         const strips = (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) ? mpiStripMeshes.filter(m => m.userData._bs) : [];
         let fixedP = 0, fixedS = 0;
-        const poses = [[0.123, -0.055], [-0.123, 0.055], [0.16, 0.06], [-0.16, -0.06]];
+        // A105 DERIVED SCAN POSES (was four hardcoded diagonals at 34.0 and 40.5
+        // degrees, camera z pinned to 0.2). The supported region is the disc
+        // |(x,y)| <= dist*tan(bgViewFadeEndDeg) -- viewFade uses off=hypot(x,y),
+        // ang=atan2(off,dist), so it is isotropic. Sample its RIM, because the
+        // rim is where reveals are widest, and sample the axes as well as the
+        // diagonals: a reveal opens widest when the head moves perpendicular to
+        // the silhouette edge casting it, and image edges are dominated by
+        // horizontal and vertical, so pure up/down and pure left/right are the
+        // two moves that matter most -- and were the two never taken.
+        const _scanZ = (typeof camera !== 'undefined' && camera && Math.abs(camera.position.z) > 1e-3)
+                       ? camera.position.z : 0.2;
+        const _scanDist = Math.max(1e-3, Math.abs(_scanZ - (typeof portalPlaneWorldZ === 'number' ? portalPlaneWorldZ : 0)));
+        const _scanR = _scanDist * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+        const _scanN = (typeof window._scanPoses === 'number') ? Math.max(2, window._scanPoses | 0) : 8;
+        const poses = (window._scanLegacyPoses === true)
+            ? [[0.123, -0.055], [-0.123, 0.055], [0.16, 0.06], [-0.16, -0.06]]
+            : Array.from({ length: _scanN }, (_, k) => {
+                  const a = (2 * Math.PI * k) / _scanN;
+                  return [_scanR * Math.cos(a), _scanR * Math.sin(a)];
+              });
+        console.log('[A105] scan poses: ' + poses.length + ' on a rim of r=' + _scanR.toFixed(4) +
+                    ' (dist ' + _scanDist.toFixed(3) + ' x tan ' + bgViewFadeEndDeg + ' deg)');
         const vec = new THREE.Vector3();
         for (const [PX, PY] of poses) {
-            camera.position.set(PX, PY, 0.2);
+            camera.position.set(PX, PY, _scanZ);
             render();   // updates the portal frusta + all matrixWorlds
             if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = false;
             const fg = grab();
@@ -10686,12 +10738,24 @@ function buildBackgroundLayer() {
                 // tests visible (measured: scan dropped ~0 on star).
                 const dSrt = dQ.slice().sort();
                 const dRefS = dSrt[dSrt.length >> 1];
+                // A106 EXACT SCAN WARP. Was xx = x + ux*t*(1/sCone)*(d - dRef),
+                // linear in depth against a scalar k — the same error a101/a102
+                // removed from the fill and the tear, and the one place where it
+                // is SILENT: an over-short warp drops reveals that do open, and
+                // those texels are then never inpainted. The displacement is
+                // shift(d) - shift(dRef), exactly; t is then a pure fraction of
+                // the fade-end offset, so t = 1 IS the fade end by construction
+                // and window._scanRange stops being a calibrated constant.
+                const _scanL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
+                const _sRefS = _scanL ? bgShiftPxAt(_scanL, dRefS) : 0;
                 for (const [ux, uy] of DIRS) for (const t of TS) {
                     zbuf.fill(-1);
                     const kx = ux * t * invS, ky = uy * t * invS;
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
                         const d = dQ[i] - dRefS;
-                        const xx = x + kx * d, yy = y + ky * d;
+                        const _sp = _scanL ? (bgShiftPxAt(_scanL, dQ[i]) - _sRefS) : 0;
+                        const xx = _scanL ? (x + ux * t * _sp) : (x + kx * d);
+                        const yy = _scanL ? (y + uy * t * _sp) : (y + ky * d);
                         const x0 = xx | 0, y0 = yy | 0;
                         for (let dy2 = 0; dy2 <= 1; dy2++) for (let dx2 = 0; dx2 <= 1; dx2++) {
                             const xq = x0 + dx2, yq = y0 + dy2;

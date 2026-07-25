@@ -1,7 +1,10 @@
 // A109: isolate the one suite FAIL a101 introduced — "dolly q!=P lock crest px"
 // went 0..2 -> 3.0. Same measurement as regress.js's a67 invariant, run twice
-// in ONE page with window._noPerPixelCone toggled between bakes, so the only
-// difference between the two numbers is a101's per-depth cone.
+// in ONE page with window._noExactCone toggled between bakes, so the only
+// difference between the two numbers is a102's exact envelope.
+// _noVpScan is on for BOTH variants: the a80 scan dominates bake cost and does
+// not feed the plate depth this metric reads, so the A/B is unaffected while
+// the run fits inside the environment's tolerance for long GL sessions.
 //   node harness/a109_dolly.js        (run from /workspace/arc73)
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
@@ -47,7 +50,14 @@ const MEASURE = async (page) => {
     subjectLockActive = lock; dollyZoomActive = true;
     const pin = () => { dollyZoomTime = tval - dollyZoomSpeed * 100; };
     isSweeping = true;
-    await new Promise(r2 => { let n = 0; const tick = () => { pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; n++; n < 8 ? requestAnimationFrame(tick) : r2(); }; requestAnimationFrame(tick); });
+    // NO requestAnimationFrame. Under swiftshader, after a long GL session the
+    // GPU process stops producing frames and rAF simply never fires again --
+    // the JS thread then sits idle forever while the GPU spins, which is
+    // exactly how two runs of this probe and one full suite hung (JS CPU time
+    // frozen at 66s while the GPU process burned 100+ minutes). Driving
+    // render() directly settles the same state without depending on the
+    // compositor.
+    for (let n = 0; n < 8; n++) { pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; render(); }
     pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; render();
     return crest();
   };
@@ -81,8 +91,8 @@ const MEASURE = async (page) => {
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
     if (ok) break; await new Promise(r => setTimeout(r, 1000));
   }
-  for (const [tag, flag] of [['a101 per-depth cone', false], ['scalar cone (a88/a90)', true]]) {
-    await page.evaluate((f) => { window._rayReproject = true; window._noVpScan = true; window._noPerPixelCone = f; }, flag);
+  for (const [tag, flag] of [['a102 exact envelope', false], ['a101 slope (fallback)', true]]) {
+    await page.evaluate((f) => { window._rayReproject = true; window._noVpScan = true; window._noExactCone = f; }, flag);
     const r = await MEASURE(page);
     const line = tag.padEnd(24) + ' lock med=' + r.lock.med + ' mean=' + r.lock.mean + ' p90=' + r.lock.p90 +
                 ' n=' + r.lock.n + '   |   free med=' + r.free.med + ' mean=' + r.free.mean + ' n=' + r.free.n;

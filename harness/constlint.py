@@ -91,6 +91,10 @@ for i, L in enumerate(lines):
     s2 = L.strip()
     if s2.startswith('//') or s2.startswith('*'): continue
     if LAW_NAMES.search(L): continue          # names the real thing: not a copy
+    # an explicitly-hatched legacy branch is the OLD law kept for A/B, not a
+    # second live copy — skip it if a legacy marker sits within three lines
+    if any(re.search(r'[Ll]egacy', lines[j]) for j in range(max(0, i - 3), min(len(lines), i + 2))):
+        continue
     found = {}
     for m in NUM.finditer(L):
         v = m.group(1)
