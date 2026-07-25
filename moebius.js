@@ -9227,7 +9227,19 @@ function bgBackstopSweep() {
                        ? camera.position.z : 0.2;
         const _scanDist = Math.max(1e-3, Math.abs(_scanZ - (typeof portalPlaneWorldZ === 'number' ? portalPlaneWorldZ : 0)));
         const _scanR = _scanDist * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
-        const _scanN = (typeof window._scanPoses === 'number') ? Math.max(2, window._scanPoses | 0) : 8;
+        // COUNT: 4, not 8. This sweep is the GPU bottleneck of the bake — each
+        // pose costs two full-resolution renders plus a readback of a
+        // multi-million-triangle mesh — so doubling the pose count doubles the
+        // slowest stage. Four poses ON THE AXES is cost-neutral against the
+        // four hardcoded diagonals it replaces and strictly better coverage:
+        //     gaps      44.6/135.4/44.6/135.4 deg  ->  90/90/90/90
+        //     max |x|   80.0% of the rim           ->  100%
+        //     max |y|   30.0% of the rim           ->  100%
+        // The diagonals are the cheapest thing to give up: a reveal opens
+        // widest when the head moves perpendicular to the edge casting it, and
+        // image edges are dominated by horizontal and vertical. Set
+        // window._scanPoses = 8 to add them back.
+        const _scanN = (typeof window._scanPoses === 'number') ? Math.max(2, window._scanPoses | 0) : 4;
         const poses = (window._scanLegacyPoses === true)
             ? [[0.123, -0.055], [-0.123, 0.055], [0.16, 0.06], [-0.16, -0.06]]
             : Array.from({ length: _scanN }, (_, k) => {
