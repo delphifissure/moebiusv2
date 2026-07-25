@@ -10446,8 +10446,21 @@ function buildBackgroundLayer() {
             // fgTearStep stays the CLIFF-SCALE constant used by the windowed
             // barrier/seed/membrane tests, whose windows already scale with pw.
             const _cellTearStep = (window._noFoldTear === true) ? fgTearStep : bgFoldStepPerCell(pw);
-            console.log('[QUICK-BAKE] a91 per-cell tear threshold = ' + _cellTearStep.toFixed(5) +
-                        ' (fold limit at pw=' + pw + '); cliff-scale tearStep stays ' + fgTearStep);
+            // A102: the live test is |shift(dmax)-shift(dmin)| > cell extent in px,
+            // not a depth threshold, so report BOTH — the scalar below is only
+            // the _noExactCone fallback, and a console line that shows only it
+            // is the kind of stale instrument this arc has already been misled
+            // by twice (a88's comment-sourced k, the six-day-old suite log).
+            {
+                const _dbgL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
+                console.log('[QUICK-BAKE] a102 per-cell tear = ' +
+                    (_dbgL ? ('|shift span| > sqrt(2) px of screen shift; total span ' +
+                              _dbgL.span.toFixed(0) + ' px over the depth range, so the mean-depth ' +
+                              'equivalent is ' + (Math.SQRT2 / Math.max(1e-6, _dbgL.span)).toFixed(5) + ' depth = ' +
+                              (Math.SQRT2 / Math.max(1e-6, _dbgL.span) * 255).toFixed(2) + ' 8-bit levels')
+                          : ('scalar fallback ' + _cellTearStep.toFixed(5) + ' depth')) +
+                    ' at pw=' + pw + '; cliff-scale tearStep stays ' + fgTearStep);
+            }
             const plateQ = dQ.slice();
             for (let y = 0; y < ph; y++) { const row = y*pw;
                 for (let x = 0; x < pw; x++) { const i = row+x;
