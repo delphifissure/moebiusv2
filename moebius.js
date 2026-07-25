@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a122 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a123 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6404,9 +6404,72 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a122 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a123 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
+// A123: the SD bundle borrowed this material from the debug-sheet exporter,
+// which builds it lazily — so exportSDBundle refused to run with
+//     "Open the Debug Sheet once first (initializes shared material)"
+// until you had opened an unrelated panel. Same material, same modes,
+// created on demand by whoever needs it first.
+function ensureDbgPanelMaterial() {
+    if (!_dbgPanelMaterial) {
+        _dbgPanelMaterial = new THREE.ShaderMaterial({
+            uniforms: { tA: { value: null }, tB: { value: null }, u_mode: { value: 0 } },
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }`,
+            fragmentShader: `
+                uniform sampler2D tA;
+                uniform sampler2D tB;
+                uniform int u_mode;
+                varying vec2 vUv;
+                void main() {
+                    vec4 a = texture2D(tA, vUv);
+                    vec4 b = texture2D(tB, vUv);
+                    vec3 outC = vec3(0.0);
+                    if (u_mode == 0) {            // plain RGB
+                        outC = a.rgb;
+                    } else if (u_mode == 1) {     // gap mask: white where color OR depth invalid
+                        bool gap = (a.a < 0.5) || (b.a < 0.5);
+                        outC = vec3(gap ? 1.0 : 0.0);
+                    } else if (u_mode == 2) {     // scene depth: gray, red where invalid
+                        outC = (a.a < 0.5) ? vec3(0.6, 0.0, 0.0) : vec3(a.r);
+                    } else if (u_mode == 3) {     // mask contract over dimmed color
+                        vec3 base = b.rgb * 0.45;
+                        if (a.b > 0.004 && a.b < 0.995) outC = mix(base, vec3(1.0, 0.1, 0.1), 0.4 + 0.5 * a.b); // FG occluder (brighter = more budget)
+                        else if (a.a > 0.5) outC = vec3(0.05, a.r * 0.5, 1.0);           // true gap (G encodes rim depth)
+                        else                outC = base;
+                    } else if (u_mode == 4) {     // rim target depth in gaps, dim depth elsewhere
+                        outC = (a.a > 0.5) ? vec3(a.r) : vec3(b.r * 0.3);
+                    } else if (u_mode == 5) {     // raw R channel
+                        outC = vec3(a.r);
+                    } else if (u_mode == 6) {     // raw G channel
+                        outC = vec3(a.g);
+                    } else if (u_mode == 7) {     // raw B channel (budget)
+                        outC = vec3(a.b);
+                    } else if (u_mode == 8) {     // COMPLETED DEPTH (the plug):
+                        // valid -> own scene depth; interior gap -> flooded rim
+                        // target; border void -> 0 (outpaint region, no geometry)
+                        if (b.a > 0.5)            outC = vec3(b.r);
+                        else if (a.b > 0.995)     outC = vec3(0.0);
+                        else                      outC = vec3(a.r);
+                    } else if (u_mode == 9) {     // SD inpaint mask: interior disocclusions only
+                        bool interiorGap = (a.a > 0.5) && (a.b < 0.008) && (b.a < 0.5);
+                        outC = vec3(interiorGap ? 1.0 : 0.0);
+                    } else if (u_mode == 10) {    // SD outpaint mask: border void
+                        outC = vec3((a.b > 0.995) ? 1.0 : 0.0);
+                    } else if (u_mode == 11) {    // FG occluder mask
+                        bool fg = (a.b > 0.008) && (a.b < 0.995);
+                        outC = vec3(fg ? 1.0 : 0.0);
+                    } else if (u_mode == 12) {    // coverage: white where A > 0.5
+                        outC = vec3((a.a > 0.5) ? 1.0 : 0.0);
+                    }
+                    gl_FragColor = vec4(outC, 1.0);
+                }
+            `,
+            depthWrite: false, depthTest: false
+        });
+    }
+}
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
 
 function exportDebugContactSheet() {
@@ -6491,62 +6554,7 @@ function exportDebugContactSheet() {
             });
         }
 
-        if (!_dbgPanelMaterial) {
-            _dbgPanelMaterial = new THREE.ShaderMaterial({
-                uniforms: { tA: { value: null }, tB: { value: null }, u_mode: { value: 0 } },
-                vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }`,
-                fragmentShader: `
-                    uniform sampler2D tA;
-                    uniform sampler2D tB;
-                    uniform int u_mode;
-                    varying vec2 vUv;
-                    void main() {
-                        vec4 a = texture2D(tA, vUv);
-                        vec4 b = texture2D(tB, vUv);
-                        vec3 outC = vec3(0.0);
-                        if (u_mode == 0) {            // plain RGB
-                            outC = a.rgb;
-                        } else if (u_mode == 1) {     // gap mask: white where color OR depth invalid
-                            bool gap = (a.a < 0.5) || (b.a < 0.5);
-                            outC = vec3(gap ? 1.0 : 0.0);
-                        } else if (u_mode == 2) {     // scene depth: gray, red where invalid
-                            outC = (a.a < 0.5) ? vec3(0.6, 0.0, 0.0) : vec3(a.r);
-                        } else if (u_mode == 3) {     // mask contract over dimmed color
-                            vec3 base = b.rgb * 0.45;
-                            if (a.b > 0.004 && a.b < 0.995) outC = mix(base, vec3(1.0, 0.1, 0.1), 0.4 + 0.5 * a.b); // FG occluder (brighter = more budget)
-                            else if (a.a > 0.5) outC = vec3(0.05, a.r * 0.5, 1.0);           // true gap (G encodes rim depth)
-                            else                outC = base;
-                        } else if (u_mode == 4) {     // rim target depth in gaps, dim depth elsewhere
-                            outC = (a.a > 0.5) ? vec3(a.r) : vec3(b.r * 0.3);
-                        } else if (u_mode == 5) {     // raw R channel
-                            outC = vec3(a.r);
-                        } else if (u_mode == 6) {     // raw G channel
-                            outC = vec3(a.g);
-                        } else if (u_mode == 7) {     // raw B channel (budget)
-                            outC = vec3(a.b);
-                        } else if (u_mode == 8) {     // COMPLETED DEPTH (the plug):
-                            // valid -> own scene depth; interior gap -> flooded rim
-                            // target; border void -> 0 (outpaint region, no geometry)
-                            if (b.a > 0.5)            outC = vec3(b.r);
-                            else if (a.b > 0.995)     outC = vec3(0.0);
-                            else                      outC = vec3(a.r);
-                        } else if (u_mode == 9) {     // SD inpaint mask: interior disocclusions only
-                            bool interiorGap = (a.a > 0.5) && (a.b < 0.008) && (b.a < 0.5);
-                            outC = vec3(interiorGap ? 1.0 : 0.0);
-                        } else if (u_mode == 10) {    // SD outpaint mask: border void
-                            outC = vec3((a.b > 0.995) ? 1.0 : 0.0);
-                        } else if (u_mode == 11) {    // FG occluder mask
-                            bool fg = (a.b > 0.008) && (a.b < 0.995);
-                            outC = vec3(fg ? 1.0 : 0.0);
-                        } else if (u_mode == 12) {    // coverage: white where A > 0.5
-                            outC = vec3((a.a > 0.5) ? 1.0 : 0.0);
-                        }
-                        gl_FragColor = vec4(outC, 1.0);
-                    }
-                `,
-                depthWrite: false, depthTest: false
-            });
-        }
+        ensureDbgPanelMaterial();
 
         const panels = [];
         const addPanel = (label, texA, texB, mode) => {
@@ -6866,10 +6874,14 @@ function exportSDBundle() {
                 format: THREE.RGBAFormat, type: THREE.UnsignedByteType
             });
         }
-        // _dbgPanelMaterial must exist; the sheet exporter creates it lazily,
-        // so create-if-missing by borrowing its path: cheapest is to require
-        // one sheet export first — instead, fail loudly if missing.
-        if (!_dbgPanelMaterial) { alert('Open the Debug Sheet once first (initializes shared material), then export the bundle.'); return; }
+        // A123: just build it. The old comment reasoned "cheapest is to require
+        // one sheet export first — instead, fail loudly if missing", which made
+        // the SD hand-off depend on the user having opened an unrelated debug
+        // panel earlier in the same session. ensureDbgPanelMaterial() is the
+        // sheet exporter's own creation path, extracted, so both callers share
+        // one definition of the export modes.
+        ensureDbgPanelMaterial();
+        if (!_dbgPanelMaterial) { alert('SD bundle: panel material could not be created — see console.'); return; }
 
         const colorTex = pingPongRenderTargetB.texture;
         const depthTex = screenNormalizedDepthTarget.texture;
