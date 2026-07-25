@@ -61,7 +61,28 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // all 180 degrees). Rule: full support inside bgViewFadeStartDeg, linear
 // fade to black by bgViewFadeEndDeg, black beyond — the boundary is a
 // design statement instead of an artifact.
-let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+// A109 THE SUPPORTED CONE IS 120 DEGREES (was 90). User decision, with the
+// reason: ~120 deg is becoming the horizontal FOV of front-facing cameras, so
+// that is the range over which the head is actually trackable and the portal
+// has to hold up.
+// WHAT THIS COSTS, measured before making the change rather than after:
+//   ex = D*tan(halfAngle) is the head excursion at the fade end, and every
+//   reveal width, SD mask area and plate reach scales linearly with it.
+//       45 deg half:  ex = 1.000*D   shift span 818 px @1920
+//       60 deg half:  ex = 1.732*D   shift span 1417 px   -> 1.73x everything
+//   The fold limit is 1/k, so it TIGHTENS by the same 1.73x. In 8-bit levels
+//   (>= 1.00 means one quantisation step fits inside the limit):
+//       source     at 45 deg   at 60 deg
+//        851         0.47        0.27
+//       1920         0.44        0.25
+//       3000         0.28        0.16
+//   8-bit depth was already 2.2-3.5x over the fold limit at 90 deg; at 120 it
+//   is 3.7-6.1x over. So this change makes 16-bit depth ingest (a99) load-
+//   bearing rather than optional, and it will grow the SD mask and the torn
+//   fraction on every asset. Those are consequences to measure and re-pin, not
+//   reasons to refuse — the range is a product decision.
+// The 10-degree fade band is kept: full support to 50, black by 60.
+let bgViewFadeStartDeg = 50, bgViewFadeEndDeg = 60;
 
 // ===================== CONE SLOPE: ONE DEFINITION =====================
 // A90. The plate's maximum rise per source pixel. Five call sites had

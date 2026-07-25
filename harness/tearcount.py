@@ -18,7 +18,7 @@ is the whole point of the a101/a102 arc.
 import sys, math
 from PIL import Image
 
-INNER, OUTER, TW, TH, D, PN, FADE = 0.04, 0.02, 0.16, 0.09, 0.2, 0.5, 45.0
+INNER, OUTER, TW, TH, D, PN, FADE = 0.04, 0.02, 0.16, 0.09, 0.2, 0.5, 60.0
 
 def law(pw, ph):
     layer_aspect, frame_aspect = pw / ph, TW / TH
