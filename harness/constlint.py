@@ -60,3 +60,45 @@ for k in ('C_src_px','C_iters_as_reach','F_canvas_px'):
         if key in seen: continue
         seen.add(key)
         print('%-18s L%-6d %-8s %s' % (k, ln, v, s))
+
+# ---------------------------------------------------------------------------
+# LAW-COPY DETECTOR (added after a104). The unit census above finds a constant
+# whose UNITS are wrong. It does NOT find a constant whose units are right and
+# whose VALUE is a silent duplicate of a live global — the defect that hid
+# bgDirectionalPlug's private parallax LUT for the whole arc: it inlined
+# 0.02 / 0.04 / 0.5 / 0.20 / 0.16, so it kept working, kept passing, and simply
+# ignored the volume-depth sliders, the depth-midpoint control, the fade angle
+# and the layer's aspect fit.
+# Rule: a line that spells out two or more of the physical globals as literals,
+# without naming any of them, is re-deriving a law that already exists.
+LAW = {
+    '0.04': 'innerVolumeDepth', '0.02': 'outerVolumeDepth',
+    '0.16': 'terrariumWidth',   '0.09': 'terrariumHeight',
+    '0.20': 'portal distance (camera.position.z)',
+    '0.2':  'portal distance (camera.position.z)',
+    '0.5':  'currentNormPortalPlane',
+    '45':   'bgViewFadeEndDeg',  '35': 'bgViewFadeStartDeg',
+    '0.06': 'fgTearStep',
+}
+LAW_NAMES = re.compile(r'\b(innerVolumeDepth|outerVolumeDepth|terrariumWidth|terrariumHeight|'
+                       r'currentNormPortalPlane|bgViewFadeEndDeg|bgViewFadeStartDeg|fgTearStep|'
+                       r'camera\.position\.z|bgShiftLUTFor|bgConeSlopePerPx|bgConeSlopeAtDepth)\b')
+print()
+print('=== LAW COPIES: physical globals spelled out as literals ===')
+hits = []
+for i, L in enumerate(lines):
+    if i in shader_lines: continue
+    s2 = L.strip()
+    if s2.startswith('//') or s2.startswith('*'): continue
+    if LAW_NAMES.search(L): continue          # names the real thing: not a copy
+    found = {}
+    for m in NUM.finditer(L):
+        v = m.group(1)
+        if v in LAW: found[LAW[v]] = v
+    if len(found) >= 2:
+        hits.append((i + 1, found, s2[:110]))
+for ln, found, s2 in hits:
+    print('L%-6d %s' % (ln, ', '.join('%s=%s' % (v, k) for k, v in found.items())))
+    print('        %s' % s2)
+if not hits:
+    print('(none)')
