@@ -11259,7 +11259,11 @@ function buildBackgroundLayer() {
                         const _tearL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
                         const _cellExtentPx = Math.sqrt(sxT * sxT + syT * syT);
                         const tiOf = (vi) => Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
-                        const inFull = new Uint8Array(PNq), cov = new Uint8Array(PNq);
+                        // A111: `drop` marks every texel incident to a DROPPED
+                        // triangle. `cov` (a surviving triangle touched it) is
+                        // NOT the right test for "is there a hole here" — see
+                        // the cap-card block below.
+                        const inFull = new Uint8Array(PNq), cov = new Uint8Array(PNq), drop = new Uint8Array(PNq);
                         let nI = 0, droppedT = 0;
                         for (let t = 0; t < srcI.length; t += 3) {
                             const t0i = tiOf(srcI[t]), t1i = tiOf(srcI[t+1]), t2i = tiOf(srcI[t+2]);
@@ -11272,21 +11276,45 @@ function buildBackgroundLayer() {
                                 ? ((bgShiftPxAt(_tearL, mx) - bgShiftPxAt(_tearL, mn)) > _cellExtentPx)
                                 : (mx - mn > ((window._noPerPixelCone === true) ? _cellTearStep
                                    : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep)));
-                            if (_fold) { droppedT++; continue; }
+                            if (_fold) { droppedT++; drop[t0i] = 1; drop[t1i] = 1; drop[t2i] = 1; continue; }
                             cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
                         g.setIndex(new THREE.BufferAttribute(outI.subarray(0, nI), 1));
                         // ---- CAP CARDS: no pixel left behind ----
+                        // A111 THE PREDICATE WAS WRONG, AND IT COST A FIFTH OF THE
+                        // FRAME. A card was issued only where a texel had NO
+                        // surviving incident triangle (`inFull && !cov`). But a
+                        // texel is a vertex of up to six triangles: keep one and
+                        // lose five and it counts as covered, while five real
+                        // holes remain around it. Coverage was tracked per VERTEX;
+                        // the hole is per TRIANGLE.
+                        // Measured on the troll at the REST pose, where the
+                        // reprojection is identity and the frame should be
+                        // pixel-faithful to the source:
+                        //     692469 of 1737400 triangles dropped   (39.9%)
+                        //     279438 texels carded under `!cov`     (32% of texels)
+                        //     19.77% of the frame renders BLACK
+                        //     with the pre-tear disabled entirely:  0.00% black
+                        // So the tear was removing a fifth of the image and the
+                        // cards were not putting it back. The right predicate is
+                        // "is this texel incident to ANY dropped triangle" — that
+                        // is exactly where a hole is, and the card paints the
+                        // texel's own colour at its own depth (a rigid splat, no
+                        // rubber), which is what a53 promised.
+                        // Strict superset: no-surviving-triangle implies
+                        // at-least-one-dropped-triangle, so nothing that used to
+                        // be carded stops being carded.
                         let nOrph = 0;
-                        for (let i = 0; i < PNq; i++) if (inFull[i] && !cov[i]) nOrph++;
+                        const _cardAll = (window._capCardsVertexOnly !== true);
+                        for (let i = 0; i < PNq; i++) if (inFull[i] && (_cardAll ? drop[i] : !cov[i])) nOrph++;
                         if (nOrph) {
                             const pW = gp.width, pH = gp.height;
                             const pos = new Float32Array(nOrph * 12), uvs = new Float32Array(nOrph * 8);
                             const idxC = new Uint32Array(nOrph * 6);
                             let vp = 0, vu = 0, vix = 0, vb = 0;
                             for (let i = 0; i < PNq; i++) {
-                                if (!inFull[i] || cov[i]) continue;
+                                if (!inFull[i] || (_cardAll ? !drop[i] : cov[i])) continue;
                                 const tx = i % pw, ty = (i / pw) | 0;
                                 const x0 = (tx / pw - 0.5) * pW, x1 = ((tx + 1) / pw - 0.5) * pW;
                                 const y0 = (0.5 - ty / ph) * pH, y1 = (0.5 - (ty + 1) / ph) * pH;
@@ -11307,7 +11335,19 @@ function buildBackgroundLayer() {
                             const gC = new THREE.BufferGeometry();
                             gC.setAttribute('position', new THREE.BufferAttribute(pos, 3));
                             gC.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                            // A111b THE CARDS WERE A NO-OP DRAW. The FG geometry has
+                            // position/normal/uv; these had position/uv only. Three
+                            // declares `attribute vec3 normal` into every
+                            // ShaderMaterial's vertex shader, and a missing enabled
+                            // attribute makes the draw silently produce nothing on
+                            // ANGLE/SwiftShader. Measured before the fix: the card
+                            // mesh was in the scene, visible, 823058 triangles — and
+                            // hiding it changed the lit fraction by 0.0000%.
+                            const nrm = new Float32Array(nOrph * 12);
+                            for (let n2 = 2; n2 < nrm.length; n2 += 3) nrm[n2] = 1;   // (0,0,1) per vertex
+                            gC.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
                             gC.setIndex(new THREE.BufferAttribute(idxC, 1));
+                            gC.computeBoundingSphere();   // else the first frustum test sees null
                             const matC = L.mesh.material.clone();
                             matC.side = THREE.DoubleSide;
                             if (matC.uniforms.u_useBandCut) { matC.uniforms.u_useBandCut.value = false; matC.uniforms.u_bandMask.value = null; }
@@ -11326,7 +11366,8 @@ function buildBackgroundLayer() {
                             scene.add(bgCardMesh);
                         }
                         console.log('[QUICK-BAKE] cliff tear: ' + droppedT + ' spanning triangles dropped of ' + (srcI.length / 3) +
-                                    '; ' + nOrph + ' orphaned pixels re-shipped as cap cards (no pixel lost)');
+                                    '; ' + nOrph + ' texels re-shipped as cap cards (' +
+                                    (_cardAll ? 'a111: incident to a dropped triangle' : 'legacy: no surviving triangle') + ')');
                     }
                     }
                 }
