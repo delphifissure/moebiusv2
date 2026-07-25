@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a115 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a117 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6334,7 +6334,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a115 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a117 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -11319,11 +11319,45 @@ function bgBuildBackgroundLayerCore() {
                             const d0 = dQ[t0i], d1 = dQ[t1i], d2 = dQ[t2i];
                             let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
                             let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
-                            // A101: the fold limit is per-DEPTH, so the tear is too
-                            const _fold = _tearL
+                            // A101: the fold limit is per-DEPTH, so the tear is too.
+                            // A117 THE FOLD LIMIT IS NOT A SURVIVABLE TEAR CRITERION
+                            // ON 8-BIT DEPTH. Addendum 110 computed that the fold
+                            // limit at 851px is 0.47 of ONE 8-bit level, so the
+                            // smallest step the source can express already folds and
+                            // testing every cell against it tears most of the mesh.
+                            // MEASURED on the troll (harness/teartest.js): 692469 of
+                            // 1737400 triangles dropped, 39.9%, handing 411529 texels
+                            // to cap cards — and the cards render them as a 1px
+                            // moire comb. black% cannot see it (identical 35.17 vs
+                            // 37.45 at 0.85x rim with tearing off) because the comb
+                            // is alternating light/dark, not black; second-difference
+                            // comb energy does: 7.91 torn vs 6.22 untorn, and 9.19 vs
+                            // 7.04 at 0.52x rim.
+                            // CLIFF IS NOW THE DEFAULT: it tears only at a GENUINE
+                            // depth discontinuity, the same fgTearStep the rest of
+                            // the bake already calls a cliff. The sub-cliff steps it
+                            // keeps stretch by at most one cell extent — the rubber
+                            // a52 shipped deliberately, and invisible next to the
+                            // comb. It beats BOTH other arms at once (troll, whole
+                            // canvas, user's own poses):
+                            //
+                            //   arm      tris dropped   cards    comb 0.52xR/0.85xR   black 0.52xR/0.85xR
+                            //   fold      692469 (40%)  411529      9.19 / 7.91         41.74 / 35.17
+                            //   cliff       8025 (0.5%)   8106      6.70 / 5.61         41.84 / 35.56
+                            //   none           0 (0%)        0      7.04 / 6.22         42.78 / 37.45
+                            //
+                            // 86x fewer dropped triangles, 51x fewer cap cards, comb
+                            // energy 27-29% below fold AND below no-tear at every
+                            // off-axis pose, for +0.1 to +0.4 points of black. Tearing
+                            // real discontinuities beats tearing nothing; tearing
+                            // every sub-quantum step is what was destroying the frame.
+                            // window._qbTearMode = 'fold' restores the a102 criterion.
+                            const _fold = (window._qbTearMode !== 'fold')
+                                ? ((mx - mn) > fgTearStep)
+                                : (_tearL
                                 ? ((bgShiftPxAt(_tearL, mx) - bgShiftPxAt(_tearL, mn)) > _cellExtentPx)
                                 : (mx - mn > ((window._noPerPixelCone === true) ? _cellTearStep
-                                   : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep)));
+                                   : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep))));
                             if (_fold) { droppedT++; drop[t0i] = 1; drop[t1i] = 1; drop[t2i] = 1; continue; }
                             cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
