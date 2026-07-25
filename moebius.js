@@ -1663,6 +1663,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_edgeMask: { value: null },
         u_useEdgeMask: { value: false },
         u_isBackgroundLayer: { value: false },
+        u_ignoreSrcAlpha: { value: false },   // A111d: true only on the cap cards
         u_resolution: { value: new THREE.Vector2(renderer.domElement.width, renderer.domElement.height) },
 
         // --- NEW UNIFIED GAP UNIFORMS ---
@@ -2104,9 +2105,19 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
 
         fragmentShaderSource = `
             ${fragmentShaderHead} uniform sampler2D map; uniform sampler2D displacementMap;
+            uniform bool u_ignoreSrcAlpha;   // A111d: set only on the cap cards
             float getDepth(vec2 uv) { return texture2D(displacementMap, uv).r; }
             void main() {
                 vec4 originalColor = texture2D(map, vUv);
+                // A111d CAP CARDS MUST IGNORE THE SOURCE ALPHA. This texture's
+                // alpha IS the FG mask: zero exactly where content was cut. A cap
+                // card exists only where a triangle was DROPPED — i.e. at a cliff,
+                // i.e. precisely where that alpha is zero — so the discard below
+                // threw away every card. Measured over the card area: mean alpha
+                // 71.5/255 and 70.4% of fragments under the 0.01 threshold, which
+                // is why 823058 card triangles painted 0 pixels while the same
+                // geometry with a flat material painted 27.3% of the frame.
+                if (u_ignoreSrcAlpha) originalColor.a = 1.0;
                 ${alphaDiscardLogicGLSL}
                 if (originalColor.a < 0.01) discard;
                 // A58: quick-bake plate is HOLE-ONLY. Render only inside the
@@ -11356,6 +11367,20 @@ function buildBackgroundLayer() {
                                               'u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle']) {
                                 if (matC.uniforms[gk]) matC.uniforms[gk].value = false;
                             }
+                            // A111d: the cards live where the FG mask is zero, by
+                            // construction — that is what a torn cell IS — so the
+                            // source-alpha discard must not apply to them.
+                            // MEASURED AND LEFT OFF: forcing it on takes rest-pose
+                            // black from 19.77% to 28.81%. The cards then DO draw,
+                            // and they draw BLACK — this texture has its RGB zeroed
+                            // wherever the mask cut it, not just its alpha, so the
+                            // cards paint black over plate that was visible. The
+                            // cards need an UNMASKED colour source, which is the
+                            // real fix and is not a one-line change.
+                            if (matC.uniforms.u_ignoreSrcAlpha)
+                                matC.uniforms.u_ignoreSrcAlpha.value = (window._capCardsIgnoreAlpha === true);
+                            if (matC.uniforms.u_isBackgroundLayer) matC.uniforms.u_isBackgroundLayer.value = true;
+                            if (matC.uniforms.u_useBgIslands) matC.uniforms.u_useBgIslands.value = false;
                             if (matC.uniforms.u_cutSharp) matC.uniforms.u_cutSharp.value = false;
                             if (matC.uniforms.u_useEdgeMask) matC.uniforms.u_useEdgeMask.value = false;
                             bgCardMesh = new THREE.Mesh(gC, matC);

@@ -81,6 +81,59 @@ const WT='/workspace/mm', H=path.join(WT,'harness');
       const d=cx.getImageData(0,0,W,Hh).data;let red=0;
       for(let i=0;i<W*Hh;i++) if(d[i*4]>150 && d[i*4+1]<80 && d[i*4+2]<80) red++;
       info.redPct = 100*red/(W*Hh); }
+    // ---- THE BISECT ----
+    // FG VERTEX shader + trivial solid-green FRAGMENT shader, sharing the FG's
+    // live uniforms so the vertex stage has every sampler and value it expects.
+    // (A fragment shader need not declare varyings the vertex stage writes, so
+    // this compiles.) Green present => the vertex stage places the cards fine
+    // and the FG FRAGMENT stage is discarding them by some path other than
+    // isGap. Green absent => the vertex stage is putting them somewhere
+    // invisible, which is where the reprojection lives.
+    if (typeof bgCardMesh !== 'undefined' && bgCardMesh) {
+      const fgMat = L.mesh.material;
+      try {
+        bgCardMesh.material = new THREE.ShaderMaterial({
+          uniforms: fgMat.uniforms,
+          vertexShader: fgMat.vertexShader,
+          fragmentShader: 'void main() { gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }',
+          side: THREE.DoubleSide, depthTest: false, depthWrite: false
+        });
+        bgCardMesh.renderOrder = 999;
+        info.bisectBuilt = true;
+      } catch (e) { info.bisectBuilt = 'ERR ' + e.message; }
+    }
+    { for (let n=0;n<3;n++) render();
+      const W=360,Hh=225,cv=document.createElement('canvas');cv.width=W;cv.height=Hh;
+      const cx=cv.getContext('2d');cx.drawImage(renderer.domElement,0,0,W,Hh);
+      const d=cx.getImageData(0,0,W,Hh).data;let g=0;
+      for(let i=0;i<W*Hh;i++) if(d[i*4+1]>150 && d[i*4]<80 && d[i*4+2]<80) g++;
+      info.greenPct_fgVertexShader = 100*g/(W*Hh); }
+    // FG vertex shader + a fragment that PAINTS THE ALPHA the FG shader tests.
+    // The FG fragment does `originalColor = texture2D(map, vUv)` then
+    // `if (originalColor.a < 0.01) discard;`. Every cap card sits where a
+    // triangle was dropped, i.e. at a depth cliff — if the colour texture
+    // carries alpha = the FG mask, every card samples 0 and discards.
+    if (typeof bgCardMesh !== 'undefined' && bgCardMesh) {
+      const fgMat = L.mesh.material;
+      try {
+        bgCardMesh.material = new THREE.ShaderMaterial({
+          uniforms: fgMat.uniforms, vertexShader: fgMat.vertexShader,
+          fragmentShader: 'uniform sampler2D map; varying vec2 vUv;\n' +
+            'void main() { float a = texture2D(map, vUv).a; gl_FragColor = vec4(a, a, a, 1.0); }',
+          side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+        bgCardMesh.renderOrder = 999;
+      } catch (e) { info.alphaProbe = 'ERR ' + e.message; }
+    }
+    { for (let n=0;n<3;n++) render();
+      const W=360,Hh=225,cv=document.createElement('canvas');cv.width=W;cv.height=Hh;
+      const cx=cv.getContext('2d');cx.drawImage(renderer.domElement,0,0,W,Hh);
+      const d=cx.getImageData(0,0,W,Hh).data;
+      let sum=0,n3=0,lowA=0;
+      for(let i=0;i<W*Hh;i++){ const r=d[i*4],g2=d[i*4+1],b2=d[i*4+2];
+        if (Math.abs(r-g2)<6 && Math.abs(g2-b2)<6) { sum+=r; n3++; if(r<3) lowA++; } }
+      info.cardAlphaMean255 = n3? +(sum/n3).toFixed(1) : -1;
+      info.cardAlphaGreyPx  = n3;
+      info.cardAlphaNearZeroPct = n3? +(100*lowA/n3).toFixed(1) : -1; }
     if (L.mesh) L.mesh.visible = true;
     return info;
   });
