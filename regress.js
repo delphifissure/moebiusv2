@@ -20,7 +20,28 @@ const HARNESS = path.join(__dirname, 'harness');
 const ASSETS = [
   // [tag, color, depth, sdMin%, sdMax%, groundMin%, groundMax%]
   ['star',    'starwatcher_color.png',   'starwatcher_depth.png',   11.0, 16.0, 74.0, 84.0],
-  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  6.5, 11.5, 79.0, 88.0],
+  // A106 RE-PIN (warrior SD 6.5..11.5 -> 8.0..14.0). The old band encoded the
+  // a80 scan's linear-in-depth warp. That warp displaced the FG with a SCALAR
+  // k, i.e. as if the head moved a fraction of its real excursion — measured
+  // against the exact envelope at pw=1920, dRef at the median depth, t=1:
+  //     d=0.20  -120.0 px vs -146.1 exact   0.82x
+  //     d=0.40   -40.0     vs  -24.7        1.62x
+  //     d=0.80   120.0     vs  357.4        0.34x
+  //     d=0.95   180.0     vs  579.1        0.31x
+  // Near content — which casts the widest reveals — was tested at under a third
+  // of its true displacement, so reveals that DO open were judged never-exposed
+  // and pruned out of the inpaint set. Isolated on one page, one asset, with
+  // _legacyScanWarp toggled between bakes (harness/a106_ab.js):
+  //     exact warp          SD 11.67%   ground 83.70%
+  //     legacy linear warp  SD  9.56%   ground 83.70%
+  //     scan OFF (ceiling)  SD 11.69%   ground 83.70%
+  // 9.56 reproduces the pre-a106 build exactly and ground is identical in all
+  // three, so the whole move is the warp. The ceiling settles what it means:
+  // with the correct warp the scan prunes 0.02 points, so the 2.13 points the
+  // legacy warp removed were reveals that genuinely open — texels that were
+  // never inpainted. Re-pinned to the corrected behaviour, not widened to
+  // accommodate it.
+  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  8.0, 14.0, 79.0, 88.0],
   // photo's higher SD% is the known dense-texture pocket cost of leaving
   // pocket promotion opt-in (a63b decision, made on star+warrior evidence:
   // promotion amplified painterly boundary leaks). Revisit if SD budget
