@@ -3,6 +3,9 @@
 // backstop pokes through the FG at a sampled pose, and reports its counts, so
 // the counts ARE the measurement: a protrusion the legacy set never saw is one
 // that was shipping.
+// V1 BAKE, not quick. The sweep is gated on window._bsRefs, which only the FULL
+// bake path populates (~L13508) — a first version of this probe used
+// bgQuickBake and therefore measured nothing at all.
 // Troll (851px) because this sweep is the GPU bottleneck and the point is the
 // pose set, not the asset.
 //   node harness/a105_ab.js [troll|star]
@@ -34,13 +37,15 @@ const ASSET = process.argv[2] || 'troll';
     }
     const r = await page.evaluate((lg) => {
       window._srCapture = true; window._rayReproject = true; window._scanLegacyPoses = lg;
-      bgQuickBake = true; buildBackgroundLayer();
-      const mk = window._qbMask; if (!mk) return null;
-      let nD = 0; const N = mk.pw * mk.ph;
-      for (let i = 0; i < N; i++) if (mk.disocc[i]) nD++;
-      return { sd: 100 * nD / N };
+      bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false;
+      const ok = buildBackgroundLayer();
+      const mk = window._qbMask;
+      let sd = -1;
+      if (mk) { let nD = 0; const N = mk.pw * mk.ph;
+                for (let i = 0; i < N; i++) if (mk.disocc[i]) nD++; sd = 100 * nD / N; }
+      return { sd, ok: ok !== false, hasRefs: !!window._bsRefs };
     }, legacy);
-    console.log(ASSET + '  ' + tag.padEnd(24) + (r ? 'SD ' + r.sd.toFixed(2) + '%' : '(no capture)'));
+    console.log(ASSET + '  ' + tag.padEnd(24) + (r ? ('SD ' + r.sd.toFixed(2) + '%  build ' + (r.ok ? 'ok' : 'FAILED') + '  _bsRefs ' + (r.hasRefs ? 'present' : 'ABSENT — sweep did not run')) : '(no capture)'));
     for (const l of logs) console.log('      ' + l.slice(0, 150));
     if (!logs.length) console.log('      (sweep reported nothing — no protrusions found at any sampled pose)');
     await page.close();

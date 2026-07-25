@@ -9246,8 +9246,14 @@ function bgBackstopSweep() {
                   const a = (2 * Math.PI * k) / _scanN;
                   return [_scanR * Math.cos(a), _scanR * Math.sin(a)];
               });
-        console.log('[A105] scan poses: ' + poses.length + ' on a rim of r=' + _scanR.toFixed(4) +
-                    ' (dist ' + _scanDist.toFixed(3) + ' x tan ' + bgViewFadeEndDeg + ' deg)');
+        // report what actually ran: the legacy branch is NOT on the rim, and a
+        // log that says it is would be another instrument that lies.
+        console.log('[A105] scan poses: ' + poses.length +
+            ((window._scanLegacyPoses === true)
+                ? ' HARDCODED diagonals (legacy A/B branch), max radius 0.171 = ' +
+                  (0.171 / Math.max(1e-6, _scanR) * 100).toFixed(1) + '% of the rim'
+                : ' on the rim r=' + _scanR.toFixed(4) +
+                  ' (dist ' + _scanDist.toFixed(3) + ' x tan ' + bgViewFadeEndDeg + ' deg)'));
         const vec = new THREE.Vector3();
         for (const [PX, PY] of poses) {
             camera.position.set(PX, PY, _scanZ);
