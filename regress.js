@@ -87,8 +87,28 @@ const check = (label, val, lo, hi) => {
 
 (async () => {
   const mode = process.argv[2] || 'full';
+  // A110 SERVED-IDENTITY GUARD. Port 8099 is not owned by this run. A
+  // scratch_server left behind by an earlier probe — in a DIFFERENT worktree —
+  // keeps the port, our spawn dies of EADDRINUSE, and every measurement then
+  // silently describes that other tree's build and that other tree's assets.
+  // Measured: a full masks run reported identical numbers for all four assets
+  // because a stale arc73 server was serving arc73's troll to every one of
+  // them. Nothing in the output said so. Assert what is actually being served
+  // before measuring anything.
   const srv = spawn('node', ['scratch_server.js'], { cwd: HARNESS, stdio: 'ignore' });
   await new Promise(r => setTimeout(r, 1200));
+  {
+    const localStamp = (fs.readFileSync(path.join(__dirname, 'moebius.js'), 'utf8').split('\n')[0].match(/v[\d.]+-a\d+/) || ['?'])[0];
+    const servedSrc = await fetch('http://localhost:8099/moebius.js').then(r => r.text()).catch(() => '');
+    const servedStamp = (servedSrc.split('\n')[0].match(/v[\d.]+-a\d+/) || ['?'])[0];
+    if (!servedSrc || servedStamp !== localStamp) {
+      console.log('ABORT: port 8099 is serving ' + servedStamp + ' but this tree is ' + localStamp +
+                  ' — a stale scratch_server from another worktree owns the port.');
+      console.log('       pkill -f scratch_server, then re-run.');
+      srv.kill(); process.exit(2);
+    }
+    console.log('served build = ' + servedStamp + ' (matches this tree)');
+  }
   const browser = await chromium.launch({ executablePath: CHROME, headless: true,
     args: ['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist'] });
   let page = null;
