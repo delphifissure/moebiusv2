@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.20-a101 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 PER-DEPTH CONE SLOPE (k measured as a field, 19x range); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.21-a103 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -177,6 +177,92 @@ function bgConeSlopeAtDepth(pwArg, phArg, d, tearStepArg) {
     const ceil = (typeof tearStepArg === 'number') ? tearStepArg : 0.06;
     if (!(k > 1e-6)) return ceil;
     return Math.min(ceil, 1 / k);
+}
+// A102 EXACT FOLD ENVELOPE — the fold law never needed a slope.
+// a101 evaluated the fold limit as a SLOPE at one depth and then extrapolated
+// it LINEARLY over the fill's reach. But k varies 19x across depth, so a
+// linear extrapolation over hundreds of px is wrong by a large margin.
+// Measured (harness scratch, pw=1920, linearised vs exact final depth):
+//     anchor d=0.05, reach 100 px : 0.514 vs 0.253   (0.262 too near)
+//     anchor d=0.35, reach 400 px : 1.000 vs 0.796   (0.204 too near)
+//     anchor d=0.50, reach  25 px : 1.000 vs 0.569   (0.431 too near)
+// i.e. the linearised cone drives the fill to the NEAR clamp where the exact
+// envelope is still mid-depth — the "wall of texture" class of artifact.
+// The fold condition is a statement about the DISPLACEMENT, not its
+// derivative: two texels p apart fold when their screen shifts at the fade
+// end differ by more than p. shift(d) is monotone (z(d) is a monotone
+// smoothstep pair; shift(z) = -ex*z/(D-z) is monotone in z for z < D), so it
+// inverts, and both uses become exact and slope-free:
+//     cone fill : v(p) = shiftInv( shift(anchor) + p )
+//     cell tear : |shift(dmax) - shift(dmin)| > cell extent in texels
+// No linearisation and no ceiling clamp: near the portal plane shift is flat,
+// so shiftInv correctly permits a large depth rise over few px — right,
+// because content that does not move cannot fold.
+// VALIDATION against the live scene (harness/measure_k.js, Addendum 108),
+// same central-difference sampling, source px per unit depth:
+//     d       measured   this law
+//     0.1        363        387.0
+//     0.5         79         84.1
+//     0.7       1497       1597.1
+//     mean       763        814.7
+// within 7% at every sample — the residual is the closed form's thin-lens
+// shift vs the measurement's full projection. This is the renderer's own
+// geometry, not a model of it.
+// LUT ACCURACY. 8192 samples each way. Measured worst-case round-trip over
+// 100k depths: 1.6e-3 in depth units, which is 2.5e-2 SCREEN PX — the
+// quantity that actually matters, 40x below one pixel. The depth error is
+// concentrated exactly where the shift is flattest (the smoothstep's
+// zero-derivative points), i.e. where a depth error has least screen effect.
+// A103 LIVE PORTAL GEOMETRY. a90/a101 hardcoded D = 0.2 (camera-to-portal
+// distance) and pn = 0.5 (u_portalPlaneDepthNorm). Both are live controls:
+// pn is currentNormPortalPlane, moved by the depth-midpoint slider AND set
+// automatically by depth peek (so it is CONTENT-DEPENDENT — a different image
+// can put the portal plane at 0.3 and every cone constant is then wrong), and
+// D is camera.position.z, moved by every dolly. D enters as D^2/(D-z)^2, which
+// at the shipped D = 0.2 and inner = 0.04 is a factor of 1.56 — not a rounding
+// error. Read both live.
+let _bgShiftLUT = null;
+function bgShiftLUTFor(pwArg, phArg) {
+    const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
+    const pn = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
+    const D = (typeof camera !== 'undefined' && camera && camera.position && camera.position.z > 1e-3)
+              ? camera.position.z : 0.2;
+    const key = pwv + 'x' + phv + '|' + bgViewFadeEndDeg + '|' + innerVolumeDepth + '|' +
+                outerVolumeDepth + '|' + pn + '|' + D.toFixed(5);
+    if (_bgShiftLUT && _bgShiftLUT.key === key) return _bgShiftLUT;
+    const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
+    const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
+    const pxPerWorld = pwv / Math.max(1e-6, layerW);
+    const ex = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    const outer = outerVolumeDepth, inner = innerVolumeDepth;
+    const N = 8192, fwd = new Float32Array(N + 1);
+    for (let i = 0; i <= N; i++) {
+        const d = i / N; let z;
+        if (d < pn) { const t = d / pn;             z = -outer + outer * (t * t * (3 - 2 * t)); }
+        else        { const t = (d - pn) / (1 - pn); z =  inner * (t * t * (3 - 2 * t)); }
+        fwd[i] = (ex * z / Math.max(1e-4, D - z)) * pxPerWorld;   // monotone increasing in d
+    }
+    const m0 = fwd[0], m1 = fwd[N], M = 8192, inv = new Float32Array(M + 1);
+    let j = 0;
+    for (let i = 0; i <= M; i++) {
+        const target = m0 + (m1 - m0) * (i / M);
+        while (j < N && fwd[j + 1] < target) j++;
+        const a = fwd[j], b = fwd[Math.min(N, j + 1)];
+        const f = (b > a) ? (target - a) / (b - a) : 0;
+        inv[i] = Math.min(1, (j + f) / N);
+    }
+    _bgShiftLUT = { key, fwd, inv, N, M, m0, m1, span: m1 - m0 };
+    return _bgShiftLUT;
+}
+function bgShiftPxAt(L, d) {
+    const t = Math.min(1, Math.max(0, d)) * L.N, i = t | 0;
+    return (i >= L.N) ? L.fwd[L.N] : L.fwd[i] + (L.fwd[i + 1] - L.fwd[i]) * (t - i);
+}
+function bgDepthAtShift(L, m) {
+    if (!(m > L.m0)) return 0;
+    if (m >= L.m1) return 1;
+    const t = (m - L.m0) / (L.m1 - L.m0) * L.M, i = t | 0;
+    return (i >= L.M) ? 1 : L.inv[i] + (L.inv[i + 1] - L.inv[i]) * (t - i);
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -6144,7 +6230,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.20-a101 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 PER-DEPTH CONE SLOPE (k measured as a field, 19x range); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.21-a103 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -9233,6 +9319,8 @@ function bgBackstopSweep() {
 // Returns { plate, ground, cells, guardHit } or null (no depth).
 function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     if (!dQ || !pw || !ph) return null;
+    // A102: one exact envelope for this whole pass (LUT built once, cached).
+    const _coneL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
     const PN2 = pw * ph;
     const P = dQ.slice();
     const remB = new Float32Array(PN2);
@@ -9635,8 +9723,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // the bound it replaced.
             const _dxc = xj - ax, _dyc = yj - ay;
             // A101: the cone rises at the slope permitted AT THE ANCHOR'S DEPTH
-            const _sc = coneF ? bgConeSlopeAtDepth(pw, ph, av, tearStep) : sCone;
-            const v2 = coneF ? av + _sc * Math.sqrt(_dxc * _dxc + _dyc * _dyc)
+            // A102: the cone's rise is the EXACT envelope — the depth whose
+            // screen shift sits `dist` px from the anchor's. a101's slope
+            // survives only as the fallback when the hatch disables the LUT.
+            const _dist = Math.sqrt(_dxc * _dxc + _dyc * _dyc);
+            const v2 = coneF ? (_coneL ? bgDepthAtShift(_coneL, bgShiftPxAt(_coneL, av) + _dist)
+                                       : av + bgConeSlopeAtDepth(pw, ph, av, tearStep) * _dist)
                              : ((window._noDescFloor === true) ? Math.max(0, planeV)
                                                                : Math.max(0, Math.max(av - tearStep, planeV)));
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
@@ -11005,6 +11097,15 @@ function buildBackgroundLayer() {
                     if (vw > 1 && vh > 1) {
                         const outI = new srcI.constructor(srcI.length);
                         const sxT = (pw - 1) / (vw - 1), syT = (ph - 1) / (vh - 1);
+                        // A102: exact fold test. A cell folds when the screen
+                        // shifts of its extreme depths differ by more than the
+                        // cell's OWN extent — which is (sxT, syT) texels, not
+                        // 1x1, so this also fixes the tear under mesh
+                        // decimation (MESH_DENSITY_FACTOR > 1, or any device
+                        // vertex budget below source resolution), where a
+                        // per-texel threshold tears every cell it looks at.
+                        const _tearL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
+                        const _cellExtentPx = Math.sqrt(sxT * sxT + syT * syT);
                         const tiOf = (vi) => Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
                         const inFull = new Uint8Array(PNq), cov = new Uint8Array(PNq);
                         let nI = 0, droppedT = 0;
@@ -11015,9 +11116,11 @@ function buildBackgroundLayer() {
                             let mn = d0 < d1 ? d0 : d1; if (d2 < mn) mn = d2;
                             let mx = d0 > d1 ? d0 : d1; if (d2 > mx) mx = d2;
                             // A101: the fold limit is per-DEPTH, so the tear is too
-                            const _ct = (window._noPerPixelCone === true) ? _cellTearStep
-                                      : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep);
-                            if (mx - mn > _ct) { droppedT++; continue; }
+                            const _fold = _tearL
+                                ? ((bgShiftPxAt(_tearL, mx) - bgShiftPxAt(_tearL, mn)) > _cellExtentPx)
+                                : (mx - mn > ((window._noPerPixelCone === true) ? _cellTearStep
+                                   : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep)));
+                            if (_fold) { droppedT++; continue; }
                             cov[t0i] = 1; cov[t1i] = 1; cov[t2i] = 1;
                             outI[nI++] = srcI[t]; outI[nI++] = srcI[t+1]; outI[nI++] = srcI[t+2];
                         }
