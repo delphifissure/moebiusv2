@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a112 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a115 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6334,7 +6334,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a112 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown; conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a115 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -10037,7 +10037,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     return { plate: P, ground, cells: q.length, guardHit: guard >= GUARD };
 }
 
-function buildBackgroundLayer() {
+function bgBuildBackgroundLayerCore() {
     try {
         const L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
         if (!L || !L.mesh || L.type !== 'image' || !L.textures?.color || !L.textures?.depth) {
@@ -14101,17 +14101,52 @@ function buildBackgroundLayer() {
                         const origW = gp.width, origH = gp.height;
                         const segW0 = gp.widthSegments || 1, segH0 = gp.heightSegments || 1;
                         const ax = origW / pw, ay = origH / ph;               // world units / source texel
-                        const hAngle = parseFloat(document.getElementById('autoSweepAngleHorizSlider')?.value || 45) / 400.0;
-                        const vAngle = parseFloat(document.getElementById('autoSweepAngleVertSlider')?.value  || 45) / 400.0;
-                        const Ez = Math.max(1e-3, Math.abs(((camera && camera.position) ? camera.position.z : 0.17) - portalPlaneWorldZ));
-                        const sOuter = Math.max(1e-4, outerVolumeDepth * metricScaleFactor);
-                        const parX = sOuter / (Ez + sOuter);                  // portal shift per unit eye-x
                         const PAD = 1.15;
-                        // margin in WORLD units from the image edge: pillarbox gap + parallax reveal
-                        const mWx = Math.max(0, (terrariumWidth  - origW) / 2) + hAngle * parX;
-                        const mWy = Math.max(0, (terrariumHeight - origH) / 2) + vAngle * parX;
-                        let mx = Math.ceil((mWx / ax) * PAD), my = Math.ceil((mWy / ay) * PAD);
+                        // A113 THE PARALLAX MARGIN IS THE FAR-PLANE SHIFT, AND IT IS
+                        // ISOTROPIC. It used to be
+                        //     hAngle = autoSweepAngleHorizSlider / 400
+                        //     parX   = sOuter / (Ez + sOuter)
+                        // i.e. a UI SWEEP SLIDER times a simplified parallax factor
+                        // built from outerVolumeDepth alone — not the supported cone,
+                        // and not the a102 envelope every other law now uses. After
+                        // a109 widened the cone to 120 degrees it was roughly 3x short.
+                        // The real quantity is how far the FAR plane slides across the
+                        // frame when the head reaches the rim, which is exactly
+                        // |shift(0)| from the envelope, in source px, and the same in
+                        // both axes because the supported region is a DISC.
+                        // The PILLARBOX term stays per-axis: that one really is
+                        // asymmetric, it is the letterbox gap, and it is why this bug
+                        // hid. A portrait layer is fitted to HEIGHT, so
+                        // (terrariumHeight - origH) is 0 and the vertical margin was
+                        // the parallax term ALONE while the horizontal margin
+                        // collected the whole pillarbox. Measured on the troll:
+                        // +691 px horizontal against +60 px vertical, 11.5x, in a
+                        // system whose reveal is isotropic. Horizontal was passing on
+                        // an accident of framing; vertical was 23x worse at 10 degrees
+                        // (black 9.56% vs 0.41%, harness/platecover.js).
+                        const _extL = bgShiftLUTFor(pw, ph);
+                        const _parPx = Math.max(Math.abs(_extL.m0), Math.abs(_extL.m1));
+                        const _legacyExt = (window._legacyExtMargin === true);
+                        const _hA = parseFloat(document.getElementById('autoSweepAngleHorizSlider')?.value || 45) / 400.0;
+                        const _vA = parseFloat(document.getElementById('autoSweepAngleVertSlider')?.value  || 45) / 400.0;
+                        const _Ez = Math.max(1e-3, Math.abs(((camera && camera.position) ? camera.position.z : 0.17) - portalPlaneWorldZ));
+                        const _sO = Math.max(1e-4, outerVolumeDepth * metricScaleFactor);
+                        const _parX = _sO / (_Ez + _sO);
+                        // pillarbox in WORLD units, per axis; parallax in SOURCE PX, isotropic
+                        const mWx = Math.max(0, (terrariumWidth  - origW) / 2);
+                        const mWy = Math.max(0, (terrariumHeight - origH) / 2);
+                        let mx, my;
+                        if (_legacyExt) {
+                            mx = Math.ceil(((mWx + _hA * _parX) / ax) * PAD);
+                            my = Math.ceil(((mWy + _vA * _parX) / ay) * PAD);
+                        } else {
+                            mx = Math.ceil((mWx / ax + _parPx) * PAD);
+                            my = Math.ceil((mWy / ay + _parPx) * PAD);
+                        }
                         mx = Math.max(0, Math.min(mx, pw));  my = Math.max(0, Math.min(my, ph)); // sane clamp
+                        console.log('[A113] extension margin: ' + mx + 'x' + my + ' px (parallax ' +
+                                    _parPx.toFixed(0) + ' px isotropic from the envelope' +
+                                    (_legacyExt ? ' — LEGACY slider path' : '') + ')');
                         if (mx > 0 || my > 0) {
                             const tX = Date.now();
                             const EPW = pw + 2*mx, EPH = ph + 2*my, EPN = EPW*EPH;
@@ -14527,6 +14562,39 @@ function buildBackgroundLayer() {
         console.error('[BG-LAYER] build failed:', e);
         alert('BG layer build failed - see console');
         return false;
+    }
+}
+// A115 THE BAKE CLAIMS ITS OWN DEPTH KEY, ON COMPLETION.
+// a112's watcher tears the baked state down whenever the layer's depth-texture
+// uuid differs from window._bgLastBuiltDepthKey, and that key was claimed ONLY
+// by buildBackgroundLayerWithOverlay — the UI button's wrapper. Every other
+// entry into the bake (a harness probe, the SD-import auto-build, a preset)
+// therefore ran to completion, left the key null, and had the whole result —
+// bgLayerMesh, bgCardMesh, the restored FG index, bgBuildStamp — destroyed by
+// the watcher up to 800ms later.
+//
+// MEASURED: a v1 bake on the troll ran all 92.7s, printed every stage
+// including the scene extension and its [PERF] line, and then reported
+// bgLayerMesh === null and bgBuildStamp === null to a probe that looked
+// straight afterwards, with [BG-RESET] "new image loaded" in the log.
+//
+// The claim must happen at COMPLETION, not entry: the bake REPLACES
+// L.textures.depth partway through (the live-bake stage and the a99 float
+// ingest both install a new texture), so a uuid captured on the way in no
+// longer exists on the way out — claiming it at entry leaves the watcher
+// looking at a texture it has never seen, and it fires anyway. That was
+// measured too: the entry-claim version still logged [BG-RESET].
+//
+// A try/finally wrapper is the single point that covers all three bake modes'
+// return paths (quick, v2, v1) without threading a claim through each one.
+function buildBackgroundLayer() {
+    try {
+        return bgBuildBackgroundLayerCore();
+    } finally {
+        try {
+            const _L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+            window._bgLastBuiltDepthKey = (_L && _L.textures && _L.textures.depth && _L.textures.depth.uuid) || null;
+        } catch (e) {}
     }
 }
 
