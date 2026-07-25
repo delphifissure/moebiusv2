@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a117 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a120 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6014,6 +6014,74 @@ function renderMeshFootprintPass(w, h) {
     return true;
 }
 
+// A120 THE GAP BUFFER WAS AN EDGE DETECTOR, NOT A HOLE MAP.
+// render() writes pingPongRenderTargetB under a pass labelled "Generate
+// Gaps/Edges" with EIGHT detector uniforms driven by UI checkboxes — depth
+// gradient, Sobel, luma derivative, chroma derivative, crease, curvature and
+// two inhibitors — and `3x3 Sobel Depth` ships CHECKED. runFGSubtraction then
+// consumes that buffer as `isGap = color.a < 0.5`, so the disocclusion mask is
+// geometric holes UNION detected depth edges, and the SD export mask depends
+// on debug checkbox state.
+//
+// MEASURED (harness/fgmask.js, read from fgMaskTargetA, troll, % of frame):
+//     pose     interiorGap   occluderBand   borderVoid
+//     rest          2.57         38.65        53.16
+//     0.85x rim    10.04         49.38        34.83
+// At rest the reprojection is identity, so NOTHING can be revealed, yet 2.57%
+// is marked gap and 38.65% occluder. Dumped as an image
+// (harness/gapwhere.js) the rest-pose gaps are concentric ripple ARCS across
+// the whole frame — an edge response to smooth depth gradients, nothing
+// silhouette-shaped. That is the "spilling over into a bunch of places where
+// there are no disocclusions".
+//
+// A gap is a COVERAGE fact: the reprojected mesh does or does not reach the
+// pixel. This renders exactly that — same scene, same camera, same
+// completion-mesh hiding as the depth pass (cap cards included: they set
+// u_isBackgroundLayer), clear alpha 0 marking holes, and every detector forced
+// OFF so no edge can masquerade as a hole.
+//
+// THE MESH MUST BE TORN FIRST, AND THAT IS THE WHOLE POINT. Measured with no
+// bake, this pass returns 0.00% gap at EVERY pose including the rim: an intact
+// connected mesh has no coverage holes, it STRETCHES across the reveal. Holes
+// are made by the cut, not by moving the camera. So the edge detector was not
+// merely polluting the mask — in an untorn path it was the only thing
+// producing one, which is why it had to guess from depth gradients.
+//
+// MEASURED after a quick bake (a117 cliff tear, 0.46% of triangles), troll,
+// % of frame, harness/fgmask.js:
+//     gap buffer source     rest    0.15   0.30   0.52   0.70   0.85 rim
+//     legacy edge-detector 14.36      --     --     --     --     --
+//     a120 geometric        0.57    1.95   3.01   4.36   5.24   6.01
+// The legacy mask claims 25x more of the frame at rest than exists, at a pose
+// where identity reprojection makes disocclusion impossible. The geometric
+// mask starts at 0.57% — which is the torn triangles themselves, matching the
+// 0.46% the tear reports — and grows 10.5x across the cone, which is what
+// reveal area actually does.
+function renderGeometricGapPass() {
+    if (!pingPongRenderTargetB || !scene || !camera) return false;
+    const hiddenBG = [];
+    scene.traverse((o) => {
+        if (!o.isMesh || !o.visible) return;
+        const u = o.material && o.material.uniforms;
+        if (u && u.u_isBackgroundLayer && u.u_isBackgroundLayer.value && !o.userData.v2Plane) {
+            hiddenBG.push(o); o.visible = false;
+        }
+    });
+    const dets = ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma',
+                  'u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle'];
+    for (const un of dets) setAllLayerUniforms(un, false);
+    setAllLayerUniforms('u_useEdgeMask', false);
+    const prevRT = renderer.getRenderTarget();
+    const prevCC = new THREE.Color(); renderer.getClearColor(prevCC);
+    const prevCA = renderer.getClearAlpha();
+    renderer.setClearColor(new THREE.Color(0, 0, 0), 0.0);   // alpha 0 marks holes
+    renderer.setRenderTarget(pingPongRenderTargetB); renderer.clear();
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(prevRT);
+    renderer.setClearColor(prevCC, prevCA);
+    for (const o of hiddenBG) o.visible = true;
+    return true;
+}
 function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
     if (!screenNormalizedDepthTarget ||
         !postProcessScene || !postProcessCamera || !copyMaterial) {
@@ -6334,7 +6402,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a117 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a120 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -6773,6 +6841,16 @@ function exportSDBundle() {
         renderNormalizedDepthPass();
         const thr = parseFloat(document.getElementById('fgSubThresholdSlider')?.value || '0.05');
         const reach = parseFloat(document.getElementById('fgReachSlider')?.value || '120');
+        // A120: build the gap buffer from COVERAGE, not from the edge-detector
+        // pass. Previously this trusted whatever pingPongRenderTargetB happened
+        // to hold, which is render()'s "Generate Gaps/Edges" output with the
+        // detector checkboxes applied — so the exported SD mask carried every
+        // Sobel response on the depth map as if it were a reveal.
+        // window._legacyGapPass restores the old behaviour.
+        if (window._legacyGapPass !== true) {
+            try { renderGeometricGapPass(); }
+            catch (e) { console.warn('[SD-BUNDLE] geometric gap pass failed, using existing buffer:', e); }
+        }
         let fgOk = false;
         try { fgOk = runFGSubtraction(pingPongRenderTargetB?.texture || null, true, thr); }
         catch (e) { console.error('[SD-BUNDLE] FG subtraction failed:', e); }
