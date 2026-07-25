@@ -11370,15 +11370,25 @@ function buildBackgroundLayer() {
                             // A111d: the cards live where the FG mask is zero, by
                             // construction — that is what a torn cell IS — so the
                             // source-alpha discard must not apply to them.
-                            // MEASURED AND LEFT OFF: forcing it on takes rest-pose
-                            // black from 19.77% to 28.81%. The cards then DO draw,
-                            // and they draw BLACK — this texture has its RGB zeroed
-                            // wherever the mask cut it, not just its alpha, so the
-                            // cards paint black over plate that was visible. The
-                            // cards need an UNMASKED colour source, which is the
-                            // real fix and is not a one-line change.
+                            // A111e THE CARDS SAMPLE THE UNMASKED SOURCE.
+                            // The FG material's `map` is the COMPOSITED texture: by
+                            // bake time it has been swapped for the fill/plate
+                            // colour, and both its alpha AND its RGB are zeroed
+                            // wherever the FG mask cut content. A cap card exists
+                            // only where a triangle was dropped — at a cliff, i.e.
+                            // exactly where that zeroing happened — so sampling it
+                            // gives alpha 0 (measured: 70.4% of card fragments below
+                            // the 0.01 discard threshold, mean alpha 71.5/255) and,
+                            // once the discard is bypassed, black (measured: rest
+                            // black 19.77% -> 28.81%, WORSE).
+                            // layer.textures.color is the original loaded image,
+                            // never masked, and the card UVs are texel centres in
+                            // the same [0,1] source grid, so it lines up exactly.
+                            const _srcTex = (window._capCardsMaskedSrc === true) ? null
+                                          : (L.textures && L.textures.color) || null;
+                            if (_srcTex && matC.uniforms.map) matC.uniforms.map.value = _srcTex;
                             if (matC.uniforms.u_ignoreSrcAlpha)
-                                matC.uniforms.u_ignoreSrcAlpha.value = (window._capCardsIgnoreAlpha === true);
+                                matC.uniforms.u_ignoreSrcAlpha.value = !!_srcTex || (window._capCardsIgnoreAlpha === true);
                             if (matC.uniforms.u_isBackgroundLayer) matC.uniforms.u_isBackgroundLayer.value = true;
                             if (matC.uniforms.u_useBgIslands) matC.uniforms.u_useBgIslands.value = false;
                             if (matC.uniforms.u_cutSharp) matC.uniforms.u_cutSharp.value = false;
