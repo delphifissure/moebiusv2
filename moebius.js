@@ -398,6 +398,32 @@ function bgDeviceFovProfile() {
     return _bgFovProfile;
 }
 let _viewFadeEl = null;
+// A108 THE GRID MUST SAY WHERE THE CAMERA IS STANDING. The view fade is a DOM
+// overlay layered OVER the canvas, so a debug grid that captures
+// renderer.domElement shows what is UNDERNEATH the black — content at poses
+// the product never displays. Four of five review shots were at 48.5-59.5
+// degrees against a 45-degree fade end (1.13x to 1.70x the supported rim) and
+// nothing in the grid said so, which makes any visual judgement from it
+// uncalibrated: "broken" and "out of range" look identical.
+// Same geometry as updateViewFade: dist = |cam.z - portalZ|, off = hypot(x,y),
+// ang = atan2(off, dist). Reports the angle, the supported rim multiple, and
+// the fade opacity the viewer is actually seeing through.
+function _dbgViewAngleStamp() {
+    try {
+        const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
+        const off  = Math.hypot(camera.position.x, camera.position.y);
+        const ang  = Math.atan2(off, dist) * 180 / Math.PI;
+        const rim  = dist * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+        const f    = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) /
+                        Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+        return 'ang=' + ang.toFixed(1) + 'deg ' +
+               (ang > bgViewFadeEndDeg
+                   ? ('OUTSIDE the ' + bgViewFadeEndDeg + 'deg cone by ' + (ang - bgViewFadeEndDeg).toFixed(1) +
+                      'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim) — viewer sees BLACK')
+                   : ('inside ' + bgViewFadeEndDeg + 'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim)')) +
+               ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)');
+    } catch (e) { return 'ang=?'; }
+}
 function updateViewFade() {
     if (!canvasElement || !camera) return;
     if (!bgViewFadeEnabled) { if (_viewFadeEl) _viewFadeEl.style.opacity = '0'; return; }
@@ -6505,7 +6531,7 @@ function exportDebugContactSheet() {
         const reachStamp = document.getElementById('fgReachSlider')?.value || '120';
         const stamp = [
             MOEBIUS_DEBUG_VERSION + ' | ' + new Date().toISOString() + ' | render ' + srcW + 'x' + srcH,
-            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
+            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | ' + _dbgViewAngleStamp() + ' | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk
         ];
         ctx.fillStyle = '#ff8';
         stamp.forEach((s, i) => ctx.fillText(s, pad, sheet.height - footerH + 20 + i * 18));
