@@ -22,7 +22,11 @@ const ASSET = process.argv[2] || 'warrior';
   await new Promise(r => setTimeout(r, 1200));
   const browser = await chromium.launch({ executablePath: CHROME, headless: true,
     args: ['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist'] });
-  for (const [tag, legacy] of [['a106 exact warp', false], ['legacy linear warp', true]]) {
+  // third variant: scan OFF entirely. That is the un-pruned claim mask, i.e.
+  // the ceiling. It says whether the exact warp RECOVERS reveals the linear
+  // warp was wrongly pruning, or whether it has started keeping texels no head
+  // pose can reach.
+  for (const [tag, legacy] of [['a106 exact warp', false], ['legacy linear warp', true], ['scan OFF (ceiling)', 'off']]) {
     const page = await browser.newPage({ viewport: { width: 720, height: 450 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 140)));
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
@@ -31,7 +35,9 @@ const ASSET = process.argv[2] || 'warrior';
       if (ok) break; await new Promise(r => setTimeout(r, 1000));
     }
     const r = await page.evaluate((lg) => {
-      window._srCapture = true; window._rayReproject = true; window._legacyScanWarp = lg;
+      window._srCapture = true; window._rayReproject = true;
+      window._noVpScan = (lg === 'off');
+      window._legacyScanWarp = (lg === true);
       bgQuickBake = true; buildBackgroundLayer();
       const mk = window._qbMask; if (!mk) return null;
       let nD = 0, nG = 0; const N = mk.pw * mk.ph;
