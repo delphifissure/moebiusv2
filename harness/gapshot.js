@@ -21,21 +21,28 @@ const SRC = { troll: ['defaultImgColor.png','defaultImgDepth.png'],
   const browser = await chromium.launch({ executablePath: CHROME, headless: true,
     args: ['--no-sandbox','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist'] });
   const page = await browser.newPage({ viewport: { width: 720, height: 450 } });
+  page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0,200)));
+  page.on('console', m => { const t = m.text(); if (/SD-VIEW|deprecated|FG subtraction/.test(t)) console.log('  [PAGE] ' + t.slice(0,200)); });
   await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
   for (let t = 0; t < 40; t++) {
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
     if (ok) break; await new Promise(r => setTimeout(r, 1000));
   }
   const shots = await page.evaluate(async () => {
+    // Bake first: without a tear there are no coverage holes at all (a120),
+    // so the mask view is legitimately empty and proves nothing.
+    window._rayReproject = true;
+    bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
+    bgBuildStamp = null; buildBackgroundLayer();
     isSweeping = true;
     const dist = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2;
     const sel = document.getElementById('debugViewSelect');
     const out = [];
     for (const [nm, fx] of [['rest',0],['0.85xR',0.85]]) {
       camera.position.set(fx * dist * Math.tan(60*Math.PI/180), 0, dist);
-      for (const view of ['final','gaps','sd_gap_mask']) {
+      for (const view of ['final','sd_gap_mask','sd_gap_depth']) {
         if (sel) sel.value = view;
-        for (let n=0;n<3;n++) render();
+        for (let n=0;n<4;n++) render();
         out.push({ nm, view, png: renderer.domElement.toDataURL('image/png') });
       }
     }

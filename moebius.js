@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a121 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a122 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -765,7 +765,9 @@ let geometryInspectionMaterial; // Checkerboard debug
 let screenNormalizedDepthTarget; // New target for linear depth capture
 
 // --- NEW: SD Pipeline / Gap Export System ---
-let sdExportGapMaskTarget;       // Binary gap mask (white = gap)
+let sdExportGapMaskTarget;       // Binary gap mask (white = gap) — A122: never constructed; the
+                                 // sd_gap_mask view now derives the mask live instead.
+let _sdViewMaterial = null;      // A122: SD export-preview material (mode 8/9 predicates)
 let sdExportGapDepthTarget;      // Expected BG depth in gap regions
 let sdExportGapDepthTarget2;     // Second target for iterative propagation
 let gapDepthPullMaterial, gapDepthPushMaterial, gapDepthSeedMaterial, fgSubtractionMaterial;
@@ -6402,7 +6404,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a121 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a122 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -17266,30 +17268,74 @@ function render() {
     }
     
     // --- SD PIPELINE DEBUG VIEWS ---
-    if (debugView === 'sd_gap_mask') {
-        // Capture SD data first (updates targets)
-        captureSDExportData().then(() => {
-            if (sdExportGapMaskTarget && copyMaterial && postProcessQuad) {
-                setLetterboxedViewport(contentAspectRatio);
-                postProcessQuad.material = copyMaterial;
-                copyMaterial.uniforms.tDiffuse.value = sdExportGapMaskTarget.texture;
-                renderer.render(postProcessScene, postProcessCamera);
-                renderer.setScissorTest(false);
-            }
-        });
-        return;
-    }
-    if (debugView === 'sd_gap_depth') {
-        // Capture SD data first
-        captureSDExportData().then(() => {
-            if (sdExportGapDepthTarget && copyMaterial && postProcessQuad) {
-                setLetterboxedViewport(contentAspectRatio);
-                postProcessQuad.material = copyMaterial;
-                copyMaterial.uniforms.tDiffuse.value = sdExportGapDepthTarget.texture;
-                renderer.render(postProcessScene, postProcessCamera);
-                renderer.setScissorTest(false);
-            }
-        });
+    // A122 THESE TWO VIEWS RENDERED NOTHING AT ALL.
+    // Both awaited captureSDExportData(), which is a deprecated stub:
+    //     async function captureSDExportData() {
+    //         console.log("...deprecated. Use the Hole Patch system instead.");
+    //         return null; }
+    // and then guarded on sdExportGapMaskTarget, which is DECLARED at the top
+    // of the file and never constructed — only the two gap-DEPTH targets are.
+    // So the guard was permanently false, nothing was drawn, and the canvas
+    // kept whatever the previously selected view had left in it. Selecting
+    // "SD: Gap Mask (Export Preview)" showed you the last view you looked at.
+    // (That is also why an early probe of mine appeared to show a mask: it was
+    // reading a stale frame from the 'gaps' view.)
+    //
+    // They now render the SAME quantity the bundle exports, synchronously and
+    // from the same source: geometric gap pass (a120) -> FG subtraction ->
+    // the mode 9 / mode 8 predicates, so what you see is what SD receives.
+    if (debugView === 'sd_gap_mask' || debugView === 'sd_gap_depth') {
+        if (!postProcessQuad) return;
+        renderNormalizedDepthPass();
+        if (window._legacyGapPass !== true) {
+            try { renderGeometricGapPass(); } catch (e) {}
+        }
+        const _thr = parseFloat(document.getElementById('fgSubThresholdSlider')?.value || '0.05');
+        let _ok = false;
+        try { _ok = runFGSubtraction(pingPongRenderTargetB?.texture || null, true, _thr); }
+        catch (e) { console.error('[SD-VIEW] FG subtraction failed:', e); }
+        if (!_ok) { console.warn('[SD-VIEW] FG subtraction unavailable — nothing to show'); return; }
+        if (!_sdViewMaterial) {
+            _sdViewMaterial = new THREE.ShaderMaterial({
+                uniforms: { tMask: { value: null }, tDepth: { value: null }, u_showDepth: { value: false } },
+                vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }',
+                fragmentShader: `
+                    uniform sampler2D tMask; uniform sampler2D tDepth;
+                    uniform bool u_showDepth; varying vec2 vUv;
+                    void main() {
+                        vec4 a = texture2D(tMask, vUv);
+                        vec4 b = texture2D(tDepth, vUv);
+                        // mode 9: interior disocclusions only — the exact
+                        // predicate _renderBufferToCanvas uses for
+                        // mask_inpaint.png, kept character-for-character so the
+                        // preview cannot drift from the export.
+                        bool interiorGap = (a.a > 0.5) && (a.b < 0.008) && (b.a < 0.5);
+                        if (u_showDepth) {
+                            // mode 8: completed depth — own depth outside gaps,
+                            // the flooded BG rim depth (R) inside them.
+                            float d = (a.a > 0.5) ? a.r : b.r;
+                            gl_FragColor = vec4(vec3(d), 1.0);
+                        } else {
+                            gl_FragColor = vec4(vec3(interiorGap ? 1.0 : 0.0), 1.0);
+                        }
+                    }`,
+                depthWrite: false, depthTest: false
+            });
+        }
+        // renderNormalizedDepthPass() and runFGSubtraction() both leave a
+        // render target BOUND. Without unbinding, this draws into that buffer
+        // instead of the canvas and the screen keeps showing the previously
+        // selected view — which is exactly how the first version of this fix
+        // looked "still broken" (no error, no warning, just the old frame).
+        renderer.setRenderTarget(null);
+        renderer.clear();
+        setLetterboxedViewport(contentAspectRatio);
+        postProcessQuad.material = _sdViewMaterial;
+        _sdViewMaterial.uniforms.tMask.value = fgMaskTargetA.texture;
+        _sdViewMaterial.uniforms.tDepth.value = screenNormalizedDepthTarget.texture;
+        _sdViewMaterial.uniforms.u_showDepth.value = (debugView === 'sd_gap_depth');
+        renderer.render(postProcessScene, postProcessCamera);
+        renderer.setScissorTest(false);
         return;
     }
     
