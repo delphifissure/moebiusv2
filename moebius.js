@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.24-a111 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 CAP CARDS PAINT (unmasked source; rest-pose black 19.8%% -> 0%%); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a112 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown; conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -529,6 +529,43 @@ function hideBuildOverlay() {
     if (bar) { bar.style.transition = 'transform 180ms ease-out'; bar.style.transform = 'scaleX(1)'; }
     if (pct) pct.textContent = '100%';
     setTimeout(() => { if (_bgBuildOverlayEl) _bgBuildOverlayEl.style.display = 'none'; }, 240);
+}
+// A112 TEARDOWN. Everything a bake creates must be releasable in one call, or
+// a second image renders through the first one's leftovers. Restoring the FG
+// index matters most: the pre-tear stores the original in
+// geometry.userData._fullIndex and then REPLACES the index, so without this the
+// new image's mesh is still missing the previous image's torn triangles.
+function bgResetBakedState(why) {
+    try {
+        for (const m of [bgCardMesh, bgLayerMesh]) {
+            if (!m) continue;
+            if (m.parent) m.parent.remove(m);
+            if (m.geometry) m.geometry.dispose();
+            if (m.material) { if (m.material.map) m.material.map.dispose && m.material.map.dispose(); m.material.dispose(); }
+        }
+        bgCardMesh = null; bgLayerMesh = null;
+        const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
+        const g = L0 && L0.mesh && L0.mesh.geometry;
+        if (g && g.userData && g.userData._fullIndex) {
+            g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
+            g.userData._fullIndex = null;
+        }
+        window._bsRefs = null;
+        window._qbMask = null;
+        window._bgQuickBaked = false;
+        window._bgUserBuiltOnce = false;      // back to realtime inpainting
+        window._bgLastBuiltDepthKey = null;
+        bgBuildStamp = null;
+        if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) {
+            for (const sm of mpiStripMeshes) { if (sm && sm.parent) sm.parent.remove(sm); }
+            mpiStripMeshes = [];
+        }
+        if (typeof mpiMidMesh !== 'undefined' && mpiMidMesh) {
+            if (mpiMidMesh.parent) mpiMidMesh.parent.remove(mpiMidMesh);
+            mpiMidMesh = null;
+        }
+        console.log('[BG-RESET] baked state cleared (' + (why || '') + ') — back to realtime inpainting');
+    } catch (e) { console.warn('[BG-RESET] ' + e.message); }
 }
 function buildBackgroundLayerWithOverlay(done) {
     const quick = (typeof bgQuickBake !== 'undefined' && bgQuickBake);
@@ -6297,7 +6334,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.24-a111 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 CAP CARDS PAINT (unmasked source; rest-pose black 19.8%% -> 0%%); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a112 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown; conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 let _dbgWireMatBG = null, _dbgWireMatFG = null;   // wireframe debug panel
@@ -14564,19 +14601,35 @@ function _wireDebugSheetControls() {
     // the button starts it behind a loading overlay. Once the user HAS
     // built, a new upload auto-REBUILDS (still behind the overlay) so the
     // stack never goes stale against a swapped image.
-    window.bgAutoBuild = true;          // governs rebuild-on-new-upload only
+    window.bgAutoBuild = false;         // A112: a NEW IMAGE REVERTS TO REALTIME
     window._bgUserBuiltOnce = false;    // set by the overlay wrapper
     {
         let building = false;
         setInterval(() => {
-            if (!window.bgAutoBuild || !window._bgUserBuiltOnce || building) return;
+            if (building) return;
             if (typeof isSweeping !== 'undefined' && isSweeping) return;
             const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
             if (!L0 || !L0.mesh || !L0.textures || !L0.textures.depth) return;
             const key = L0.textures.depth.uuid;
             if (key === window._bgLastBuiltDepthKey) return;
-            building = true;
-            buildBackgroundLayerWithOverlay(() => { building = false; });
+            // A112 A NEW IMAGE GOES BACK TO REALTIME, AND TAKES NOTHING WITH IT.
+            // This watcher used to AUTO-REBUILD on any depth-texture swap once
+            // the user had built once, which is wrong twice over: the user did
+            // not ask for a bake on this image, and the bake is synchronous, so
+            // every upload froze the app. Worse, nothing tore the previous
+            // bake down, so the new image inherited the old plate, the old cap
+            // cards, the old backstop refs and the old TORN INDEX — the FG mesh
+            // still missing the triangles the PREVIOUS image's cliffs removed.
+            // That is the "leaves behind data from the previous image" report,
+            // and it also silently corrupts any comparison made after a reload.
+            if (window._bgUserBuiltOnce || bgLayerMesh || bgCardMesh) {
+                bgResetBakedState('new image loaded');
+            }
+            window._bgLastBuiltDepthKey = key;   // claim it WITHOUT baking
+            if (window.bgAutoBuild === true && window._bgUserBuiltOnce) {
+                building = true;
+                buildBackgroundLayerWithOverlay(() => { building = false; });
+            }
         }, 800);
     }
     document.getElementById('bgColorImport')?.addEventListener('change', (e) => {
