@@ -47,6 +47,41 @@ const WT='/workspace/mm', H=path.join(WT,'harness');
     info.litNoFGNoCards = lit();
     if (typeof bgCardMesh !== 'undefined' && bgCardMesh) bgCardMesh.visible = true;
     if (L.mesh) L.mesh.visible = true;
+    info.litRestored = lit();
+    // THE TEST: the card material is a clone of the FG material, and the FG
+    // fragment shader ends with `if (isGap && !u_isBackgroundLayer) discard;`.
+    // The clone never sets u_isBackgroundLayer, so it inherits false and every
+    // card fragment flagged as gap is thrown away — and the cards sit exactly
+    // in the torn region. Flip it at RUNTIME, change nothing else.
+    if (typeof bgCardMesh !== 'undefined' && bgCardMesh) {
+      const u = bgCardMesh.material.uniforms;
+      info.cardIsBgUniformExists = !!u.u_isBackgroundLayer;
+      info.cardIsBgWas = u.u_isBackgroundLayer ? u.u_isBackgroundLayer.value : '(absent)';
+      if (u.u_isBackgroundLayer) u.u_isBackgroundLayer.value = true;
+      bgCardMesh.material.needsUpdate = true;
+    }
+    info.litCardsAsBg = lit();
+    if (L.mesh) L.mesh.visible = false;
+    info.litCardsAsBgNoFG = lit();
+    // DECISIVE: swap the card material for a plain unlit red, no shader, no
+    // displacement, no discard. If red appears, the geometry and its place in
+    // the scene are fine and the FG-derived material is what kills the draw.
+    // If nothing appears, the geometry or its transform is wrong and no
+    // material change will ever help.
+    if (typeof bgCardMesh !== 'undefined' && bgCardMesh) {
+      bgCardMesh.material = new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide,
+                                                          depthTest: false, depthWrite: false });
+      bgCardMesh.renderOrder = 999;
+    }
+    info.litFlatRedNoFG = lit();
+    // and count actual RED pixels, so 'lit' cannot be confused with the plate
+    { for (let n=0;n<3;n++) render();
+      const W=360,Hh=225,cv=document.createElement('canvas');cv.width=W;cv.height=Hh;
+      const cx=cv.getContext('2d');cx.drawImage(renderer.domElement,0,0,W,Hh);
+      const d=cx.getImageData(0,0,W,Hh).data;let red=0;
+      for(let i=0;i<W*Hh;i++) if(d[i*4]>150 && d[i*4+1]<80 && d[i*4+2]<80) red++;
+      info.redPct = 100*red/(W*Hh); }
+    if (L.mesh) L.mesh.visible = true;
     return info;
   });
   console.log(JSON.stringify(out,null,1));
