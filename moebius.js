@@ -10758,7 +10758,11 @@ function buildBackgroundLayer() {
                 // shift(d) - shift(dRef), exactly; t is then a pure fraction of
                 // the fade-end offset, so t = 1 IS the fade end by construction
                 // and window._scanRange stops being a calibrated constant.
-                const _scanL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
+                // _legacyScanWarp isolates THIS change from a102's fill/tear, which
+                // share _noExactCone — without a separate hatch a mask move cannot
+                // be attributed to the scan rather than to the fill.
+                const _scanL = (window._noExactCone === true || window._legacyScanWarp === true)
+                               ? null : bgShiftLUTFor(pw, ph);
                 const _sRefS = _scanL ? bgShiftPxAt(_scanL, dRefS) : 0;
                 // hoisted: the displacement of each texel is the same in all 32
                 // sweeps, so evaluate the envelope once per texel instead of
