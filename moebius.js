@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a123 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a126 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it; holes at 0.85x rim 5.21%% -> 3.17%%); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6404,7 +6404,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a123 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a126 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it; holes at 0.85x rim 5.21%% -> 3.17%%); conservative defaults kept (membrane/row-colours OPT-IN)';
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 // A123: the SD bundle borrowed this material from the debug-sheet exporter,
@@ -11812,7 +11812,70 @@ function bgBuildBackgroundLayerCore() {
                 // The FG's ink exemption does not apply: this index is
                 // built from the PLATE's own depth (P), where adopted ink
                 // was never a cliff. window._noPlateTear reverts to a50.
-                if (window._noPlateTear !== true) {
+                // A126 DO NOT TEAR THE PLATE — MAKE ITS DEPTH CONTINUOUS.
+                // The plate is the BACKSTOP: the surface of last resort, with
+                // nothing behind it. A hole in it is a hole in the frame by
+                // construction, and the tear was cutting 71072 triangles —
+                // 4.09% of the plate, NINE TIMES what the FG tear cuts.
+                //
+                // MEASURED (harness/holes.js, troll, black% INSIDE the layer
+                // footprint so the 53% letterbox cannot dominate):
+                //     arm             0.00   0.30   0.52   0.70   0.85 rim
+                //     default            0   1.68   2.87   4.06   5.21
+                //     no plate tear      0   1.08   1.89   2.54   3.09
+                //     no FG tear         0   2.68   5.32   7.62   9.56
+                //     neither            0   1.08   1.89   2.54   3.09
+                // The plate tear is 41% of the holes. (Tearing the FG is the
+                // opposite — removing it nearly doubles black, because the cap
+                // cards it produces were patching the plate's own damage.)
+                //
+                // It also had a117's disease: it tore on _cellTearStep, the
+                // FOLD limit, which at 8-bit is below one quantum of the source
+                // (Addendum 110). Same criterion, second surface.
+                //
+                // THE FIX IS SLOPE, NOT SCISSORS. A depth step only folds
+                // because the surface rises faster than the grazing limit. The
+                // plate is a FILL — a flood plus a plug, already smoothed —
+                // so unlike the FG it has no genuine cliffs to preserve, and
+                // capping its gradient is legitimate where capping the FG's was
+                // not (harness/slopelimit.py recorded that negative result).
+                //
+                // Two chamfer sweeps enforce plateF[i] <= min(neighbour) + step
+                // exactly, in O(N), with step = bgConeSlopePerPx(pw) = 1/k per
+                // texel — the one slope definition a90/a104 consolidated. Per
+                // TEXEL is conservative against the per-CELL fold limit, since
+                // a cell spans >= 1 texel. The clamp only ever LOWERS a texel
+                // (1 = near, 0 = far), so the plate can move further back but
+                // never forward: it cannot create a protrusion through the FG,
+                // which is the failure a43/a87 were guarding against.
+                // window._legacyPlateTear restores the a87 tear.
+                if (window._legacyPlateTear !== true) {
+                    if (plateF) {
+                        const _t0P = Date.now();
+                        const _st = bgConeSlopePerPx(pw), _stD = _st * 1.41421356;
+                        let _moved = 0, _maxMove = 0;
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                            const i = y*pw + x; const v0 = plateF[i]; let v = v0;
+                            if (x > 0)            { const c = plateF[i-1]    + _st;  if (c < v) v = c; }
+                            if (y > 0)            { const c = plateF[i-pw]   + _st;  if (c < v) v = c;
+                              if (x > 0)          { const d = plateF[i-pw-1] + _stD; if (d < v) v = d; }
+                              if (x < pw-1)       { const d = plateF[i-pw+1] + _stD; if (d < v) v = d; } }
+                            if (v !== v0) { plateF[i] = v; _moved++; const m = v0 - v; if (m > _maxMove) _maxMove = m; }
+                        }
+                        for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                            const i = y*pw + x; const v0 = plateF[i]; let v = v0;
+                            if (x < pw-1)         { const c = plateF[i+1]    + _st;  if (c < v) v = c; }
+                            if (y < ph-1)         { const c = plateF[i+pw]   + _st;  if (c < v) v = c;
+                              if (x < pw-1)       { const d = plateF[i+pw+1] + _stD; if (d < v) v = d; }
+                              if (x > 0)          { const d = plateF[i+pw-1] + _stD; if (d < v) v = d; } }
+                            if (v !== v0) { plateF[i] = v; _moved++; const m = v0 - v; if (m > _maxMove) _maxMove = m; }
+                        }
+                        plateDT.needsUpdate = true;
+                        console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + _moved + ' texels lowered of ' + PNq +
+                                    ' (' + (100*_moved/Math.max(1,PNq)).toFixed(2) + '%), max ' + _maxMove.toFixed(4) +
+                                    ' depth, step 1/k = ' + _st.toFixed(5) + '/texel, ' + (Date.now()-_t0P) + 'ms');
+                    }
+                } else if (window._noPlateTear !== true) {
                     const gpP = L.mesh.geometry.parameters || {};
                     const vwP = (gpP.widthSegments || 0) + 1, vhP = (gpP.heightSegments || 0) + 1;
                     const srcP = gQ.index.array;
