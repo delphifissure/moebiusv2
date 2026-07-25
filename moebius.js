@@ -10748,12 +10748,18 @@ function buildBackgroundLayer() {
                 // and window._scanRange stops being a calibrated constant.
                 const _scanL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
                 const _sRefS = _scanL ? bgShiftPxAt(_scanL, dRefS) : 0;
+                // hoisted: the displacement of each texel is the same in all 32
+                // sweeps, so evaluate the envelope once per texel instead of
+                // once per (direction, magnitude, texel) — 32x fewer lookups.
+                let _spAll = null;
+                if (_scanL) { _spAll = new Float32Array(PNq);
+                    for (let i = 0; i < PNq; i++) _spAll[i] = bgShiftPxAt(_scanL, dQ[i]) - _sRefS; }
                 for (const [ux, uy] of DIRS) for (const t of TS) {
                     zbuf.fill(-1);
                     const kx = ux * t * invS, ky = uy * t * invS;
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
                         const d = dQ[i] - dRefS;
-                        const _sp = _scanL ? (bgShiftPxAt(_scanL, dQ[i]) - _sRefS) : 0;
+                        const _sp = _spAll ? _spAll[i] : 0;
                         const xx = _scanL ? (x + ux * t * _sp) : (x + kx * d);
                         const yy = _scanL ? (y + uy * t * _sp) : (y + ky * d);
                         const x0 = xx | 0, y0 = yy | 0;
