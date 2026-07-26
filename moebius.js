@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a144 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a146 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -551,6 +551,10 @@ function bgReadCameraIntrinsics() {
     }
     const ov = (typeof window.bgDeviceFovOverride === 'object' && window.bgDeviceFovOverride) ? window.bgDeviceFovOverride : null;
     if (!hfov && ov && typeof ov.hfov === 'number') { hfov = ov.hfov; source = 'window.bgDeviceFovOverride'; }
+    if (!hfov && window._fovFromFace && window._fovFromFace.hfov > 20 && window._fovFromFace.hfov < 120) {
+        hfov = window._fovFromFace.hfov;
+        source = 'estimated from the observed face (assumed viewing distance; see a146b)';
+    }
     if (!hfov) {
         const p = bgDeviceFovProfile();
         hfov = p.hfov; source = 'platform-class LUT (the browser exposes no FOV field)';
@@ -572,6 +576,54 @@ function bgReadCameraIntrinsics() {
         (set.width ? (' (' + set.width + 'x' + set.height + ')') : ''));
     return _camIntrinsics;
 }
+// A146b FOV FROM THE OBSERVED FACE — AND WHY A FAKE FACE CANNOT DO IT.
+//
+// Compositing a face into the frame tells you nothing about the lens. Field of
+// view is a property of how the REAL WORLD projects into the sensor; a pasted
+// image has no physical size and no distance, so no arrangement of synthetic
+// faces can measure it. The fake face measures the DETECTOR's frame-edge
+// boundary (a145/a146), which is a different quantity and the one it can
+// legitimately reach.
+//
+// A real face can constrain the lens, but only up to one unknown:
+//     ipd_px = f_px * IPD_m / d          f_px = W_px / (2 tan(hfov/2))
+// One equation, two unknowns (f_px and d), from a single view. It is not
+// solvable without either a known distance or a second view with known motion.
+//
+// So this is an ESTIMATE that trades one assumption for a better-behaved one.
+// The LUT assumes the CAMERA's field of view by platform class. This assumes
+// the USER'S VIEWING DISTANCE by platform class and derives the FOV from a real
+// pixel measurement. Viewing distance varies far less across devices than
+// camera optics do — laptop cameras run 60-78 deg and phone front cameras ~80,
+// while seated viewing distance is 50-60 cm on a laptop and 30-40 on a phone —
+// so grounding on the measurement moves the guess to the smaller variance.
+// IPD 63.0 mm is the adult population mean (Dodgson, "Variation and extrema of
+// human interpupillary distance", SPIE 5291, 2004; SD 3.5 mm, so a +/-1 SD
+// individual shifts the estimate by about 6%).
+// The uncertainty implied by the distance range is PRINTED, not hidden.
+const IPD_M = 0.063;
+function bgEstimateFovFromFace(ipdPx, frameWpx) {
+    if (!(ipdPx > 1) || !(frameWpx > 1)) return null;
+    const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '');
+    const dRange = isPhone ? [0.30, 0.40] : [0.45, 0.70];
+    const dNom = isPhone ? 0.35 : 0.55;
+    const hfovAt = (d) => {
+        const fpx = ipdPx * d / IPD_M;
+        return 2 * Math.atan(frameWpx / (2 * fpx)) * 180 / Math.PI;
+    };
+    const est = { hfov: hfovAt(dNom), lo: hfovAt(dRange[1]), hi: hfovAt(dRange[0]),
+                  ipdPx, dNom, dRange, assumedIPDmm: IPD_M * 1000 };
+    console.log('[A146b] FOV estimated from the observed face: hfov ' + est.hfov.toFixed(1) +
+        ' deg (range ' + est.lo.toFixed(1) + '-' + est.hi.toFixed(1) + ' over an assumed viewing ' +
+        'distance of ' + dRange[0] + '-' + dRange[1] + ' m). Measured IPD ' + ipdPx.toFixed(1) +
+        ' px in a ' + frameWpx + ' px frame, assumed IPD ' + (IPD_M * 1000).toFixed(0) +
+        ' mm (Dodgson 2004 population mean). This is an ESTIMATE resting on the distance ' +
+        'assumption — a single view cannot separate focal length from distance. ' +
+        'window.bgDeviceFovOverride still wins.');
+    return est;
+}
+window.bgEstimateFovFromFace = bgEstimateFovFromFace;
+
 function bgCameraIntrinsics() { return _camIntrinsics || bgReadCameraIntrinsics() || (() => {
     const p = bgDeviceFovProfile();
     return { hfov: p.hfov, vfov: p.vfov, aspect: 16 / 9, source: 'LUT (no camera track yet)' };
@@ -604,6 +656,178 @@ function bgNoteFaceLost() {
     }
     _faceEdge.lastGoodX = 0; _faceEdge.lastGoodY = 0;
 }
+
+// -----------------------------------------------------------------------------
+// A145 — PROBE THE BOUNDARY, DO NOT WAIT FOR IT
+//
+// a144 learned where the tracker loses the face from real losses. That is
+// correct but it is retrospective: the first time you swing your head out, the
+// fade has not been calibrated yet, so the pose that calibrates it is also the
+// pose that looks wrong. The boundary should be known before any interaction.
+//
+// It can be, because the detector is a PURE FUNCTION OF AN IMAGE. Nothing
+// requires the face in front of it to be live — we can synthesise frames with a
+// face at chosen offsets and ask the detector where it stops answering. That is
+// a direct measurement of the failure boundary, taken in about a second, with
+// the user sitting still.
+//
+// THE STIMULUS IS THE USER'S OWN FACE, not a drawn one. A cartoon or a generic
+// stock face is a different stimulus: the landmark model's response to it says
+// nothing about where it will lose THIS face, at THIS distance, in THIS light,
+// through THIS lens — and if it failed to detect the drawn face at centre the
+// probe would report a nonsense boundary with no way to tell. Once one real
+// detection exists (which happens within about a second of the camera opening,
+// with the user central and not yet interacting) we have the only correct
+// template, and the probe is calibrated to the actual conditions.
+//
+// METHOD, per axis:
+//   backdrop  the captured frame with the original face smeared out (draw the
+//             face box heavily downscaled and back up), so the only detectable
+//             face in the probe frame is the one we paste
+//   stimulus  the face crop pasted centred at offset t, clipped naturally by
+//             the canvas edge — which is exactly what makes the real detector
+//             fail, so the probe fails for the same reason
+//   accept    a returned face whose centre is within 0.15 frame-widths of the
+//             paste point. Proximity-checked rather than count-checked, so a
+//             residual detection on the smeared original cannot be mistaken for
+//             a hit on the stimulus.
+// Bisection between the last hit and the first miss; the boundary is the
+// midpoint. Everything logged, including a refusal to report if the probe
+// cannot even detect the template at centre — a probe that fails its own
+// control measures nothing.
+let _faceProbeDone = false, _faceProbeRunning = false;
+async function bgProbeFaceEdge() {
+    if (_faceProbeDone || _faceProbeRunning) return null;
+    if (!faceMeshDetector || !offscreenCanvas || !offscreenCtx) return null;
+    if (!window._faceTemplate) return null;
+    _faceProbeRunning = true;
+    const t0 = performance.now();
+    try {
+        const W = offscreenCanvas.width, H = offscreenCanvas.height;
+        const T = window._faceTemplate;                 // {canvas, cx, cy, w, h}
+        const probe = document.createElement('canvas');
+        probe.width = W; probe.height = H;
+        const pctx = probe.getContext('2d', { willReadFrequently: true });
+        // backdrop: the frame with the real face smeared out
+        const back = document.createElement('canvas');
+        back.width = W; back.height = H;
+        const bctx = back.getContext('2d');
+        bctx.drawImage(T.frame, 0, 0);
+        {
+            const sw = Math.max(2, Math.round(T.w / 12)), sh = Math.max(2, Math.round(T.h / 12));
+            const tiny = document.createElement('canvas'); tiny.width = sw; tiny.height = sh;
+            tiny.getContext('2d').drawImage(T.frame, T.cx - T.w / 2, T.cy - T.h / 2, T.w, T.h, 0, 0, sw, sh);
+            bctx.imageSmoothingEnabled = true;
+            bctx.drawImage(tiny, 0, 0, sw, sh, T.cx - T.w / 2, T.cy - T.h / 2, T.w, T.h);
+        }
+        const hit = async (axis, t) => {
+            pctx.clearRect(0, 0, W, H);
+            pctx.drawImage(back, 0, 0);
+            const px = (axis === 'x') ? (0.5 + t) * W : 0.5 * W;
+            const py = (axis === 'y') ? (0.5 + t) * H : 0.5 * H;
+            pctx.drawImage(T.canvas, px - T.w / 2, py - T.h / 2, T.w, T.h);
+            let faces = [];
+            try { faces = await faceMeshDetector.estimateFaces(probe, { flipHorizontal: false }); }
+            catch (e) { return false; }
+            for (const f of (faces || [])) {
+                const k = f.keypoints && f.keypoints[1];
+                if (!k) continue;
+                if (Math.abs(k.x - px) / W < 0.15 && Math.abs(k.y - py) / H < 0.15) return true;
+            }
+            return false;
+        };
+        // CONTROL: the template must be detectable where it came from.
+        if (!(await hit('x', 0))) {
+            console.warn('[A145] face-edge probe ABORTED: the detector does not find the ' +
+                'template at centre, so it is not a valid stimulus and any boundary it ' +
+                'produced would be meaningless. Falling back to the observed-loss learner.');
+            _faceProbeRunning = false; _faceProbeDone = true;
+            return null;
+        }
+        const sweep = async (axis) => {
+            let lastHit = 0, firstMiss = null;
+            for (let t = 0.20; t <= 0.75001; t += 0.05) {
+                if (await hit(axis, t)) lastHit = t;
+                else { firstMiss = t; break; }
+            }
+            if (firstMiss === null) return 0.75;         // detects everywhere we probed
+            for (let i = 0; i < 3; i++) {                 // bisect to ~0.006
+                const mid = (lastHit + firstMiss) / 2;
+                if (await hit(axis, mid)) lastHit = mid; else firstMiss = mid;
+            }
+            return (lastHit + firstMiss) / 2;
+        };
+        const ex = await sweep('x'), ey = await sweep('y');
+        _faceEdge.x = Math.min(_faceEdge.x, ex);
+        _faceEdge.y = Math.min(_faceEdge.y, ey);
+        _faceEdge.probed = { x: ex, y: ey, ms: Math.round(performance.now() - t0) };
+        const p = bgCameraIntrinsics(), D2R = Math.PI / 180;
+        const ang = (e, fov) => Math.atan(Math.min(0.5, e) * 2 * Math.tan(fov * 0.5 * D2R)) / D2R;
+        console.log('[A145] face-edge probe: tracking survives to ' + ex.toFixed(3) +
+            ' of half-frame horizontally (' + ang(ex, p.hfov).toFixed(1) + ' deg) and ' +
+            ey.toFixed(3) + ' vertically (' + ang(ey, p.vfov).toFixed(1) + ' deg), ' +
+            _faceEdge.probed.ms + 'ms. The 10-degree fade band is anchored there, before ' +
+            'any interaction. Nominal frame edge would have been 0.500.');
+        _faceProbeDone = true;
+        return _faceEdge.probed;
+    } catch (e) {
+        console.warn('[A145] face-edge probe failed:', e && e.message);
+        _faceProbeDone = true;
+        return null;
+    } finally { _faceProbeRunning = false; }
+}
+// A146 THE CANONICAL FACE: probe at LOAD, before the user has done anything.
+// a145 needed one real detection first, which is about a second of camera —
+// short, but still "wait for the user". A bundled reference face removes even
+// that: composite it into a synthetic frame at load and sweep immediately.
+//
+// Both stimuli are used, in this order, because they answer slightly different
+// questions. The canonical face gives a boundary NOW, for a generic face at a
+// generic scale. The user's own face, when it arrives, gives the boundary for
+// THIS face at THIS distance in THIS light — strictly better calibrated — so it
+// re-probes and overrides. Neither is guessed; both are measured.
+//
+// The control check earns its place here: if MediaPipe does not detect the
+// reference image at centre, the probe aborts and says so rather than reporting
+// a boundary derived from a stimulus the detector cannot see.
+function bgProbeWithCanonicalFace(url) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = async () => {
+            try {
+                const W = (offscreenCanvas && offscreenCanvas.width) || 640;
+                const H2 = (offscreenCanvas && offscreenCanvas.height) || 480;
+                if (!offscreenCanvas) {
+                    offscreenCanvas = document.createElement('canvas');
+                    offscreenCanvas.width = W; offscreenCanvas.height = H2;
+                    offscreenCtx = offscreenCanvas.getContext('2d');
+                }
+                // scale the reference so it subtends a plausible head size — a
+                // head is roughly a third of the frame height at a normal
+                // seated distance, and the boundary depends on the stimulus's
+                // SIZE relative to the frame, so this is not cosmetic.
+                const th = H2 * 0.33, tw = th * (img.width / img.height);
+                const cut = document.createElement('canvas');
+                cut.width = Math.round(tw); cut.height = Math.round(th);
+                cut.getContext('2d').drawImage(img, 0, 0, cut.width, cut.height);
+                const frame = document.createElement('canvas');
+                frame.width = W; frame.height = H2;
+                const fc = frame.getContext('2d');
+                fc.fillStyle = '#6b6b6b'; fc.fillRect(0, 0, W, H2);   // no face in the backdrop
+                window._faceTemplate = { canvas: cut, frame, w: tw, h: th, cx: W / 2, cy: H2 / 2 };
+                window._faceTemplateSource = 'canonical reference face';
+                const r = await bgProbeFaceEdge();
+                window._faceTemplate = null;      // release; the real face replaces it later
+                resolve(r);
+            } catch (e) { resolve(null); }
+        };
+        img.onerror = () => { console.warn('[A146] canonical face image not loadable: ' + url); resolve(null); };
+        img.src = url;
+    });
+}
+window.bgProbeWithCanonicalFace = bgProbeWithCanonicalFace;
+window.bgProbeFaceEdge = bgProbeFaceEdge;
+window.bgReprobeFaceEdge = () => { _faceProbeDone = false; _faceEdge.x = _faceEdge.y = 0.5; return bgProbeFaceEdge(); };
 
 function updateViewFade() {
     if (!canvasElement || !camera) return;
@@ -1801,6 +2025,56 @@ async function runFaceMeshCycle() {
         // the smoothed one — smoothing lags, and the last frame before a loss is
         // exactly where the lag would misreport the boundary.
         bgNoteFaceSeen(normalizedX, normalizedY);
+        // A145: grab a template for the boundary probe from an early, CENTRED,
+        // settled detection — 30 good frames in, so exposure and auto-focus have
+        // converged, and only while the face is near the middle so the crop is
+        // not already clipped. Then probe once, before any interaction.
+        if (!_faceProbeDone && !window._faceTemplate) {
+            window._faceGoodFrames = (window._faceGoodFrames || 0) + 1;
+            if (window._faceGoodFrames > 30 &&
+                Math.abs(normalizedX - 0.5) < 0.12 && Math.abs(normalizedY - 0.5) < 0.12) {
+                let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+                for (const kp of keypoints) {
+                    if (kp.x < x0) x0 = kp.x; if (kp.x > x1) x1 = kp.x;
+                    if (kp.y < y0) y0 = kp.y; if (kp.y > y1) y1 = kp.y;
+                }
+                const mw = (x1 - x0) * 0.35, mh = (y1 - y0) * 0.35;   // hair/chin/ears
+                x0 -= mw; x1 += mw; y0 -= mh; y1 += mh;
+                const w = Math.max(8, x1 - x0), h = Math.max(8, y1 - y0);
+                const frame = document.createElement('canvas');
+                frame.width = offscreenCanvas.width; frame.height = offscreenCanvas.height;
+                frame.getContext('2d').drawImage(offscreenCanvas, 0, 0);
+                const cut = document.createElement('canvas');
+                cut.width = Math.round(w); cut.height = Math.round(h);
+                cut.getContext('2d').drawImage(offscreenCanvas, x0, y0, w, h, 0, 0, cut.width, cut.height);
+                window._faceTemplate = { canvas: cut, frame, w, h, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+                window._faceTemplateSource = "the user's own face";
+                // A146b: IPD from the iris centres when refineLandmarks gave
+                // them (468/473), else the eye-corner pair 33/263 with the
+                // canonical-model ratio between the two spans. Fed once.
+                try {
+                    let ipd = 0;
+                    if (keypoints[468] && keypoints[473]) {
+                        ipd = Math.hypot(keypoints[468].x - keypoints[473].x, keypoints[468].y - keypoints[473].y);
+                    } else if (keypoints[33] && keypoints[263]) {
+                        // outer-corner span is ~1.45x the pupil span on the
+                        // MediaPipe canonical face; scale so both routes report
+                        // the same physical quantity
+                        ipd = Math.hypot(keypoints[33].x - keypoints[263].x, keypoints[33].y - keypoints[263].y) / 1.45;
+                    }
+                    if (ipd > 1 && !window._fovFromFace) {
+                        window._fovFromFace = bgEstimateFovFromFace(ipd, offscreenCanvas.width);
+                        _camIntrinsics = null;            // force a re-read with the estimate in hand
+                        bgReadCameraIntrinsics();
+                    }
+                } catch (e) {}
+                console.log('[A145] face template captured (' + Math.round(w) + 'x' + Math.round(h) +
+                    ' px from a centred, settled detection) — re-probing the tracking boundary ' +
+                    'with the real face, which supersedes any canonical-face result.');
+                _faceProbeDone = false;      // the real face is the better stimulus
+                bgProbeFaceEdge();
+            }
+        }
         if (transformDiv) transformDiv.textContent = `Face Mesh Detected: ${keypoints.length} landmarks`;
         if (initialBaselinePending && canvasElement) {
           setFaceTrackerBaselineOffset(canvasElement);
@@ -6606,7 +6880,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a144';
+const MOEBIUS_BUILD = 'v3.13.25-a146';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -21998,6 +22272,19 @@ async function onOpenCvReady() {
 
             console.log("Camera stream loaded. Initializing Face Mesh...");
             await initializeFaceMesh();
+            // A146: if a canonical reference face is configured, probe the
+            // tracking boundary from it IMMEDIATELY — before the user's own
+            // face has even been seen. Opt-in by URL because a reference image
+            // has to be verified detectable on the shipped model, and an
+            // unverified one would abort the control check on every load and
+            // silently do nothing. Not shipped with a default for that reason;
+            // the a145 real-face probe below covers the case either way and
+            // fires about a second after the camera opens, while the user is
+            // still central and has not interacted.
+            if (window.bgCanonicalFaceUrl) {
+                console.log('[A146] probing the tracking boundary from the canonical face before first detection');
+                bgProbeWithCanonicalFace(window.bgCanonicalFaceUrl);
+            }
            
             runFaceMeshCycle();
         };
