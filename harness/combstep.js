@@ -38,9 +38,16 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
 // REPLY01 also notes 38deg now sits INSIDE the 35/45 fade at ~70% opacity, so
 // the visibility-weighted penalty is reported alongside the raw one.
 const DEGS = [0, 15, 25, 32, 38];
-const ARMS = [['a128 step = 1/k (fold-correct)', {}],
-              ['a126 step = bgConeSlopePerPx (stale, shipped)', { _legacyPlateStep: true }],
-              ['no slope limit at all', { _noPlateLimit: true }]];
+// FIRST RUN OF THIS SCRIPT WAS A NULL, and the null was mine: I armed
+// `_legacyPlateStep`, which does not exist. Both arms ran the shipped path and
+// came out identical to 3 d.p. with the same logged step (0.00564). The real
+// flag is `_envelopePlateStep`, and the polarity is the other way round —
+// a128 INVERTED the fold-correct step to opt-in, so the SHIPPED default is the
+// stale bgConeSlopePerPx. Recorded because a table of identical numbers is
+// what a dead flag looks like, and it would have read as "no difference".
+const ARMS = [['shipped: step = bgConeSlopePerPx (stale)', {}],
+              ['fold-correct: step = 1/k', { _envelopePlateStep: true }],
+              ['no slope limit at all (a87 tear)', { _legacyPlateTear: true }]];
 
 (async () => {
   fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(H, 'defaultImgColor.png'));
@@ -63,8 +70,8 @@ const ARMS = [['a128 step = 1/k (fold-correct)', {}],
     const rows = await page.evaluate(async (f) => {
       window._rayReproject = true;
       bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
-      if (f._legacyPlateStep) window._legacyPlateStep = true;
-      if (f._noPlateLimit) window._legacyPlateTear = true;   // no slope limit; a87 tear path
+      if (f._envelopePlateStep) window._envelopePlateStep = true;
+      if (f._legacyPlateTear) window._legacyPlateTear = true;
       bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
       bgBuildStamp = null; buildBackgroundLayer();
       isSweeping = true;
@@ -124,7 +131,7 @@ const ARMS = [['a128 step = 1/k (fold-correct)', {}],
     console.log('   deg      black%     comb X     comb Y   visible');
     for (const r of all[tag]) console.log('   ' + pad(r.deg, 3) + pad(r.black, 11) + pad(r.combX, 11) + pad(r.combY, 11) + pad(fade(r.deg).toFixed(2), 10));
   }
-  const A = all[ARMS[0][0]], B = all[ARMS[1][0]];
+  const B = all[ARMS[0][0]], A = all[ARMS[1][0]];   // A = fold-correct, B = stale
   console.log('\n  fold-correct MINUS stale  (negative = fold-correct wins)');
   console.log('   deg     d black     d combX     d combY   d comb weighted by visibility');
   for (let i = 0; i < DEGS.length; i++) {
