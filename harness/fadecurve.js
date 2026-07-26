@@ -44,7 +44,7 @@ const H = path.join('/workspace/mm', 'harness');
     if (ok) break; await new Promise(r => setTimeout(r, 1000));
   }
   const res = await page.evaluate(() => {
-    const p = bgDeviceFovProfile();
+    const p = bgCameraIntrinsics();
     const D2R = Math.PI / 180;
     const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
     const ftsSlider = document.getElementById('facetrackingScalarSlider');
@@ -63,14 +63,18 @@ const H = path.join('/workspace/mm', 'harness');
       // populates. Evaluate the SHIPPED-BEFORE band and the two ends of the
       // derived range instead — that shows what the derivation buys without
       // pretending a real tracker was measured.
-      const fOf = (band) => Math.min(1, Math.max(0, (aH - (p.hfov * 0.5 - band)) / band));
+      // A144: the band is anchored to the LEARNED loss boundary, not the
+      // nominal frame edge. Evaluate at three boundaries: the nominal edge
+      // (what ships before any loss is observed) and two tightened ones, so
+      // the effect of the learner is visible without a webcam present.
+      const edgeAngOf = (e) => Math.atan(Math.min(0.5, e) * 2 * Math.tan(p.hfov * 0.5 * D2R)) / D2R;
+      const fAtEdge = (e) => { const ea = edgeAngOf(e); return Math.min(1, Math.max(0, (aH - (ea - 10)) / 10)); };
       rows.push({ off: +off.toFixed(3), theta: +theta.toFixed(1), aH: +aH.toFixed(1),
                   fVirtual: +fVirtual.toFixed(2),
-                  f10: +fOf(10).toFixed(2), f3: +fOf(3).toFixed(2), f2: +fOf(2).toFixed(2),
-                  fFace: +fOf(10).toFixed(2), fFinal: +Math.max(fVirtual, fOf(10)).toFixed(2) });
+                  e50: +fAtEdge(0.50).toFixed(2), e42: +fAtEdge(0.42).toFixed(2), e35: +fAtEdge(0.35).toFixed(2) });
     }
     return { profile: p, dist, scalar, lensGain, contentLensFovDeg, rows,
-             band: (window._faceBand && window._faceBand.h) || 10,
+             band: 10, intrinsicSource: p.source,
              start: bgViewFadeStartDeg, end: bgViewFadeEndDeg };
   });
 
@@ -78,16 +82,21 @@ const H = path.join('/workspace/mm', 'harness');
               '   | portal dist ' + res.dist.toFixed(3) + '  tracking scalar ' + res.scalar +
               '  lens ' + res.contentLensFovDeg + 'deg (gain ' + res.lensGain.toFixed(3) + ')' + '  | face-frame band ' + res.band + 'deg');
   console.log('DOCUMENTED CONE  fade starts ' + res.start + 'deg, black at ' + res.end + 'deg\n');
-  console.log('  nose off   virtual theta   in-frame    fade(virtual)   band=10 (was)   band=3   band=2');
+  console.log('  FOV SOURCE  ' + res.intrinsicSource + '\n');
+  console.log('  nose off   virtual theta   in-frame   fade(virtual)   edge=0.50   edge=0.42   edge=0.35');
   for (const r of res.rows)
     console.log('  ' + String(r.off).padStart(8) + String(r.theta).padStart(15) +
-                String(r.aH).padStart(11) + String(r.fVirtual).padStart(16) +
-                String(r.f10).padStart(16) + String(r.f3).padStart(9) + String(r.f2).padStart(9));
+                String(r.aH).padStart(10) + String(r.fVirtual).padStart(16) +
+                String(r.e50).padStart(12) + String(r.e42).padStart(12) + String(r.e35).padStart(12));
   const first = (key) => { const r = res.rows.find(x => Math.max(x.fVirtual, x[key]) > 0.01); return r ? r.theta : null; };
   const full  = (key) => { const r = res.rows.find(x => Math.max(x.fVirtual, x[key]) >= 0.999); return r ? r.theta : null; };
-  console.log('\n  band    darkening BEGINS    FULLY BLACK     (documented cone: ' + res.start + ' / ' + res.end + ')');
-  for (const [lab, key] of [['10 (shipped before)', 'f10'], ['3 (3 sigma, steady)', 'f3'], ['2 (floor)', 'f2']])
-    console.log('  ' + lab.padEnd(22) + String(first(key)).padStart(8) + ' deg' + String(full(key)).padStart(13) + ' deg');
+  console.log('\n  learned loss boundary    darkening BEGINS    FULLY BLACK   (documented cone: ' +
+              res.start + ' / ' + res.end + ')');
+  for (const [lab, key] of [['0.50 nominal frame edge', 'e50'], ['0.42 observed', 'e42'], ['0.35 observed', 'e35']])
+    console.log('  ' + lab.padEnd(26) + String(first(key)).padStart(8) + ' deg' + String(full(key)).padStart(13) + ' deg');
+  console.log('\n  The band is a fixed 10 deg by request; what moves is WHERE it is anchored.');
+  console.log('  Seeded at the nominal edge and only ever pulled IN by an observed loss, so');
+  console.log('  the first row is the shipped behaviour before any evidence arrives.');
   console.log('\n  NOTE the structural fact underneath: camOff=0.2 with scalar ' + res.scalar +
               ' and lens ' + res.contentLensFovDeg + 'deg maps the ENTIRE');
   console.log('  camera half-frame onto ' + res.rows[res.rows.length - 1].theta +

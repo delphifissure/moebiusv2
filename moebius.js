@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a143 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a144 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -506,6 +506,105 @@ function _dbgViewAngleStamp() {
                ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)');
     } catch (e) { return 'ang=?'; }
 }
+// =============================================================================
+// A144 — THE FADE MUST START 10 DEGREES FROM WHERE TRACKING ACTUALLY FAILS
+// =============================================================================
+// a143 measured the shipped fade blacking out at a virtual 26.6 deg against a
+// documented 45, and traced it to a 10-degree band taken out of a GUESSED
+// half-FOV. The user's call: read the real camera FOV, and put the band 10 deg
+// from where the tracker would genuinely lose the face.
+//
+// WHAT THE BROWSER ACTUALLY EXPOSES. Field of view is not in the MediaStream
+// spec. MediaTrackSettings/MediaTrackCapabilities define width, height,
+// aspectRatio, frameRate, facingMode, resizeMode, and (Chrome only) focusMode,
+// exposureMode, zoom, torch, pan/tilt. None of them is an angle. So there is no
+// standards-track "read the FOV" call to make, and any code claiming to do it
+// would be reading a field that is not there. This function reads and LOGS
+// everything the track does provide — so the claim is checkable rather than
+// asserted — and picks up a real FOV field if a browser ever ships one.
+//
+// WHAT IS ACTUALLY MEASURABLE, and is the better quantity anyway: the angle at
+// which THIS tracker on THIS camera stops returning a face. The nominal frame
+// edge (normalised 0 or 1) is an upper bound the detector never reaches — a
+// face is lost while still partly in frame, because the landmark model needs
+// most of the face visible. bgFaceLossBoundary() learns that boundary from the
+// session: the largest off-centre position seen with a HEALTHY detection, and
+// the position of the last good frame before each loss. The fade then starts
+// 10 degrees inside the learned boundary, which is what was asked for, with the
+// boundary observed rather than assumed.
+let _camIntrinsics = null;
+function bgReadCameraIntrinsics() {
+    const t = window._camTrack;
+    if (!t) return null;
+    let set = {}, cap = {};
+    try { set = t.getSettings ? t.getSettings() : {}; } catch (e) {}
+    try { cap = t.getCapabilities ? t.getCapabilities() : {}; } catch (e) {}
+    console.log('[A144] camera track settings:', JSON.stringify(set));
+    console.log('[A144] camera track capabilities:', JSON.stringify(cap));
+    // If a browser ever exposes a real angle, take it. Checked, not assumed.
+    const fovField = ['fieldOfView', 'horizontalFieldOfView', 'fov'].find(
+        (k) => typeof set[k] === 'number' || typeof cap[k] === 'number');
+    let hfov = null, source = null;
+    if (fovField) {
+        hfov = (typeof set[fovField] === 'number') ? set[fovField] : cap[fovField];
+        source = 'MediaTrack.' + fovField;
+    }
+    const ov = (typeof window.bgDeviceFovOverride === 'object' && window.bgDeviceFovOverride) ? window.bgDeviceFovOverride : null;
+    if (!hfov && ov && typeof ov.hfov === 'number') { hfov = ov.hfov; source = 'window.bgDeviceFovOverride'; }
+    if (!hfov) {
+        const p = bgDeviceFovProfile();
+        hfov = p.hfov; source = 'platform-class LUT (the browser exposes no FOV field)';
+    }
+    // aspect comes from the REAL stream, so vfov is derived rather than guessed
+    const aspect = (set.width && set.height) ? (set.width / set.height)
+                 : (bgDeviceFovProfile().hfov / Math.max(1e-6, bgDeviceFovProfile().vfov));
+    const D2R = Math.PI / 180;
+    const vfov = 2 * Math.atan(Math.tan(hfov * 0.5 * D2R) / Math.max(1e-6, aspect)) / D2R;
+    _camIntrinsics = { hfov, vfov, aspect, source,
+                       width: set.width || null, height: set.height || null };
+    if (source.indexOf('LUT') === 0)
+        console.log('[A144] the browser exposes NO field-of-view field (it is not in the ' +
+            'MediaStream spec), so this is a platform-class guess. If you know your camera, ' +
+            'set  window.bgDeviceFovOverride = {hfov: 78}  or localStorage bgDeviceFov — ' +
+            'a wider true FOV moves the fade onset LATER, which is the lever that matters here.');
+    console.log('[A144] camera intrinsics: hfov ' + hfov.toFixed(1) + ' deg (source: ' + source +
+        '), vfov ' + vfov.toFixed(1) + ' deg derived from the REAL stream aspect ' + aspect.toFixed(3) +
+        (set.width ? (' (' + set.width + 'x' + set.height + ')') : ''));
+    return _camIntrinsics;
+}
+function bgCameraIntrinsics() { return _camIntrinsics || bgReadCameraIntrinsics() || (() => {
+    const p = bgDeviceFovProfile();
+    return { hfov: p.hfov, vfov: p.vfov, aspect: 16 / 9, source: 'LUT (no camera track yet)' };
+})(); }
+
+// The learned loss boundary, in NORMALISED half-frame units (0 = centre,
+// 0.5 = nominal frame edge). Seeded at the nominal edge and only ever pulled
+// IN by evidence, so before any loss is observed the behaviour is the nominal
+// frame edge and never wider than it.
+const _faceEdge = { x: 0.5, y: 0.5, lastGoodX: 0, lastGoodY: 0, losses: 0, maxSeenX: 0, maxSeenY: 0 };
+window._faceEdge = _faceEdge;
+function bgNoteFaceSeen(nx, ny) {
+    const ox = Math.abs(nx - 0.5), oy = Math.abs(ny - 0.5);
+    if (ox > _faceEdge.maxSeenX) _faceEdge.maxSeenX = ox;
+    if (oy > _faceEdge.maxSeenY) _faceEdge.maxSeenY = oy;
+    _faceEdge.lastGoodX = ox; _faceEdge.lastGoodY = oy;
+}
+function bgNoteFaceLost() {
+    // The last good frame before a loss is a sample of the boundary. Take the
+    // running minimum over losses: the tightest place the tracker has ever
+    // died is the honest edge. Only counts losses that happened OFF-CENTRE —
+    // a face lost at the centre is occlusion or bad light, not frame exit.
+    if (_faceEdge.lastGoodX > 0.15) {
+        _faceEdge.x = Math.min(_faceEdge.x, Math.max(_faceEdge.lastGoodX, _faceEdge.maxSeenX * 0.9));
+        _faceEdge.losses++;
+    }
+    if (_faceEdge.lastGoodY > 0.15) {
+        _faceEdge.y = Math.min(_faceEdge.y, Math.max(_faceEdge.lastGoodY, _faceEdge.maxSeenY * 0.9));
+        _faceEdge.losses++;
+    }
+    _faceEdge.lastGoodX = 0; _faceEdge.lastGoodY = 0;
+}
+
 function updateViewFade() {
     if (!canvasElement || !camera) return;
     if (!bgViewFadeEnabled) { if (_viewFadeEl) _viewFadeEl.style.opacity = '0'; return; }
@@ -529,38 +628,47 @@ function updateViewFade() {
     // a lost face keeps the last opacity instead of snapping.
     if (window._lastFaceSeenT && (performance.now() - window._lastFaceSeenT) < 1500 &&
         typeof latestDetectedFaceX === 'number') {
-        const p = bgDeviceFovProfile();
+        const p = bgCameraIntrinsics();      // A144: the REAL stream, not a class LUT
         const D2R = Math.PI / 180;
         const aH = Math.atan(Math.abs(latestDetectedFaceX - 0.5) * 2 * Math.tan(p.hfov * 0.5 * D2R)) / D2R;
         const aV = Math.atan(Math.abs(latestDetectedFaceY - 0.5) * 2 * Math.tan(p.vfov * 0.5 * D2R)) / D2R;
-        // A143 THE BAND IS DERIVED FROM THE TRACKER'S OWN JITTER, not a fixed
-        // 10 degrees. MEASURED with the shipped constants (harness/fadecurve.js,
-        // default profile hfov 60, scalar 1, lens 90):
-        //     darkening BEGINS at virtual theta 18.0 deg   (documented 35)
-        //     FULLY BLACK at   virtual theta 26.6 deg      (documented 45)
-        // The user reported exactly this ("even 10 degrees off and it's
-        // darkening"). Cause: a 10-degree band out of a 30-degree half-FOV is a
-        // THIRD of the entire trackable range, and camOff=0.2 maps the whole
-        // half-frame onto only 26.6 deg of virtual angle — so the face-frame
-        // term is the only fade that ever fires and it fires early.
+        // A144 THE BAND IS 10 DEGREES FROM WHERE TRACKING ACTUALLY FAILS.
+        // a143 shipped a 3-sigma jitter band as a stopgap; this is the thing
+        // that was asked for and it is better, because the anchor is now an
+        // OBSERVED boundary rather than the nominal frame edge.
         //
-        // The band's job is to hide poses the tracker is about to lose, so its
-        // width should come from how unreliable the tracker actually is, not
-        // from a guess. sigma is a running standard deviation of the detected
-        // nose angle; the band is 3 sigma, floored at 2 degrees so it never
-        // vanishes and capped at the old 10 so this can only ever be LESS
-        // conservative than what shipped. Self-calibrating: a steady tracker
-        // gets a narrow band, a noisy one widens it on its own evidence.
-        if (!window._faceJit) window._faceJit = { n: 0, mH: 0, sH: 0, mV: 0, sV: 0 };
-        const J = window._faceJit, w = 0.02;          // ~1s at 50Hz
-        J.n++;
-        J.mH += w * (aH - J.mH); J.sH += w * ((aH - J.mH) * (aH - J.mH) - J.sH);
-        J.mV += w * (aV - J.mV); J.sV += w * ((aV - J.mV) * (aV - J.mV) - J.sV);
-        const bandOf = (v) => Math.min(10, Math.max(2, 3 * Math.sqrt(Math.max(0, v))));
-        const bH = (J.n > 25) ? bandOf(J.sH) : 10, bV = (J.n > 25) ? bandOf(J.sV) : 10;
-        window._faceBand = { h: bH, v: bV };
-        const fH = (aH - (p.hfov * 0.5 - bH)) / bH;
-        const fV = (aV - (p.vfov * 0.5 - bV)) / bV;
+        // The nominal edge (normalised 0.5) is an upper bound the detector
+        // never reaches: a landmark model loses the face while it is still
+        // partly in frame. _faceEdge learns where it actually dies, seeded at
+        // the nominal edge and only ever pulled IN by evidence — so with no
+        // loss observed yet the behaviour is exactly "10 degrees from the frame
+        // edge", and it tightens to the truth as the session provides it.
+        const edgeAng = (offNorm, fovDeg) =>
+            Math.atan(Math.min(0.5, offNorm) * 2 * Math.tan(fovDeg * 0.5 * D2R)) / D2R;
+        const eH = edgeAng(_faceEdge.x, p.hfov), eV = edgeAng(_faceEdge.y, p.vfov);
+        // 10 degrees by request. The one guard: on a very narrow camera, or
+        // after the learner has pulled the boundary well in, a fixed 10 deg
+        // could be most of the whole trackable range — which is the failure
+        // a143 measured, arriving by a different route. Capped at 40% of the
+        // range and LOGGED when the cap binds, so it cannot happen silently.
+        // At the LUT's 60 deg hfov the range is 30 deg and 10 is 33%, so the
+        // cap does not bind and the behaviour is exactly what was asked for.
+        const bandFor = (edge, ax) => {
+            const lim = 0.4 * edge;
+            if (10 <= lim) return 10;
+            if (!window['_bandCapLogged' + ax]) {
+                console.warn('[A144] ' + ax + ' fade band capped ' + 10 + ' -> ' + lim.toFixed(1) +
+                    ' deg: the trackable range is only ' + edge.toFixed(1) +
+                    ' deg, so a 10 deg band would be ' + (1000 / edge).toFixed(0) +
+                    '% of it. Reported, not silent.');
+                window['_bandCapLogged' + ax] = true;
+            }
+            return lim;
+        };
+        const bH = bandFor(eH, 'h'), bV = bandFor(eV, 'v');
+        window._faceBand = { h: bH, v: bV, edgeH: eH, edgeV: eV, losses: _faceEdge.losses };
+        const fH = (aH - (eH - bH)) / bH;
+        const fV = (aV - (eV - bV)) / bV;
         f = Math.max(f, Math.min(1, Math.max(0, fH)), Math.min(1, Math.max(0, fV)));
     }
     _viewFadeEl.style.opacity = f > 0.003 ? f.toFixed(3) : '0';
@@ -1689,6 +1797,10 @@ async function runFaceMeshCycle() {
         latestDetectedFaceX = smoothedFaceX_global;
         latestDetectedFaceY = smoothedFaceY_global;
         window._lastFaceSeenT = performance.now();   // freshness gate for the face-frame view fade
+        // A144: feed the loss-boundary learner the RAW normalised position, not
+        // the smoothed one — smoothing lags, and the last frame before a loss is
+        // exactly where the lag would misreport the boundary.
+        bgNoteFaceSeen(normalizedX, normalizedY);
         if (transformDiv) transformDiv.textContent = `Face Mesh Detected: ${keypoints.length} landmarks`;
         if (initialBaselinePending && canvasElement) {
           setFaceTrackerBaselineOffset(canvasElement);
@@ -1698,6 +1810,7 @@ async function runFaceMeshCycle() {
         if (transformDiv) {
           transformDiv.textContent = 'No face';
         }
+        bgNoteFaceLost();   // A144: a loss off-centre is a sample of the boundary
       }
     }
   } catch (error) {
@@ -6493,7 +6606,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a143';
+const MOEBIUS_BUILD = 'v3.13.25-a144';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -21893,6 +22006,10 @@ async function onOpenCvReady() {
             console.log("Requesting camera access...");
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             videoInput.srcObject = stream;
+            // A144: keep the track so the fade can read the camera's REAL
+            // settings instead of guessing from a platform-class LUT.
+            try { window._camTrack = stream.getVideoTracks()[0] || null; bgReadCameraIntrinsics(); }
+            catch (e) { console.warn('[A144] camera intrinsics unavailable:', e.message); }
             
             // Use 'loadeddata' as it's more reliable than 'loadedmetadata' for dimensions
             videoInput.onloadeddata = () => {
