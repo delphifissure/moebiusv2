@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a135 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a137 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -428,6 +428,25 @@ function bgConeSlopePerPx(pwArg) {
         return 1 / Math.max(1e-6, dShiftdZ * gMax * pxPerWorld);
     }
     return 0.0025 * (1920 / pwv);
+}
+
+// A136: THE SOURCE QUANTUM, as a function. a89 detects this inline in the quick
+// bake ("the smallest grid whose levels the samples land on") and a135 needs
+// the same number in v2, where none of a89's locals are in scope. Same
+// algorithm, same candidate grids, same 1e-3 tolerance. a89's inline copy is
+// left alone on purpose: unifying a law changes behaviour at every call site
+// simultaneously, and that needs its own A/B (REPLY01 3). Flagged, not merged.
+function bgSourceQuantum(arr, n) {
+    const CAND = [255, 4095, 65535];
+    const stride = Math.max(1, (n / 20000) | 0);
+    for (const g of CAND) {
+        let ok = true;
+        for (let i = 0; i < n && ok; i += stride) {
+            if (Math.abs(arr[i] * g - Math.round(arr[i] * g)) > 1e-3) ok = false;
+        }
+        if (ok) return 1 / g;
+    }
+    return 0;   // continuous: no quantisation grid found
 }
 
 let bgViewFadeEnabled = true;   // main-canvas "Angle fade" toggle (off = test wild angles)
@@ -6448,7 +6467,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a135';
+const MOEBIUS_BUILD = 'v3.13.25-a137';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -9264,6 +9283,44 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
                     cT[o*4+c2] = (cT[o*4+c2] + cT[(o-1)*4+c2] + cT[(o+1)*4+c2] + cT[(o-bw)*4+c2] + cT[(o+bw)*4+c2]) / 5;
             }
         }
+        // A136 THE ORDERING CLAMP, IN v2. a135 landed the invariant
+        //     d_hidden(x) >= d_occluder_silhouette(x) + eps
+        // in the quick path only, and a136's mode probe found the gap: quick
+        // has the clamp and never reaches the backstop sweep; v2 — the SHIPPED
+        // DEFAULT — had neither; v1 has the sweep (63.5 s on troll, measured)
+        // and no clamp. The invariant and the expensive search for its
+        // violations were in different modes, and the default mode had no
+        // protection at all.
+        //
+        // Here the occluder is the layer's own visible surface, dV: a texel
+        // this plane CLAIMS (reg && !isV) is by definition hidden behind
+        // whatever is visible at that texel, so its completed depth must sit at
+        // least one quantum behind it. Texels the plane owns natively already
+        // satisfy it by construction, modulo eps.
+        {
+            const _eps2 = bgSourceQuantum(dV, PN) || (1 / 255);
+            let _nProt2 = 0, _maxV2 = 0, _nClaim2 = 0;
+            for (let y = 0; y < bh; y++) { const gy = by0 + y, dRow = (bh - 1 - y) * bw;
+                for (let x = 0; x < bw; x++) { const o = dRow + x;
+                    if (!clm[o]) continue;                     // claimed texels only
+                    _nClaim2++;
+                    const dq = dV[gy * pw + bx0 + x];
+                    if (dT[o] > dq - _eps2) {
+                        if (dT[o] > dq) { const v = dT[o] - dq; if (v > _maxV2) _maxV2 = v; _nProt2++; }
+                        dT[o] = dq - _eps2;
+                    }
+                }
+            }
+            // LOGGED UNCONDITIONALLY. The first version only printed when it
+            // found a violation, and a v2 bake then printed nothing — which is
+            // indistinguishable from the clamp not being reached at all. That
+            // is the same ambiguity a134 exists to forbid, one level down: an
+            // absent line is not evidence of a clean pass.
+            console.log('[MPI-V2] a136 ordering clamp ' + tag + '/bin' + k + ': ' + _nProt2 +
+                ' of ' + _nClaim2 + ' claimed texels were STRICTLY IN FRONT of the surface they back' +
+                (_nProt2 ? (', worst by ' + _maxV2.toFixed(4) + ' depth (' + (_maxV2 / _eps2).toFixed(1) + ' quanta)') : '') +
+                '; eps = ' + _eps2.toFixed(5));
+        }
         const dTex = new THREE.DataTexture(dT, bw, bh, THREE.RedFormat, THREE.FloatType);
         dTex.needsUpdate = true; dTex.flipY = false;
         dTex.minFilter = THREE.LinearFilter; dTex.magFilter = THREE.LinearFilter;
@@ -11963,13 +12020,24 @@ function bgBuildBackgroundLayerCore() {
                 // is only ever seen through a disocclusion, and a backstop in
                 // front of the thing it backs is a protrusion by definition.
                 //
-                // WHY THIS IS WORTH A PASS. A21, A41, A43, A112, the backstop
-                // protrusion sweep, the cap cards and the hardcoded -0.004
-                // push-back all exist to FIND or PAPER OVER violations of this
-                // one inequality. Searching rendered poses for violations of an
-                // invariant is strictly worse than enforcing the invariant:
-                // the search is O(poses) and samples, the enforcement is O(N)
-                // and exact.
+                // WHAT THIS DOES AND DOES NOT REPLACE — MEASURED, AND THE
+                // FIRST ANSWER WAS WRONG. a135 shipped with the claim that this
+                // one inequality is what A21, A41, A43, A112, the backstop
+                // protrusion sweep and the -0.004 push-back all exist to find,
+                // so the sweep could go. a137 tested that in v1, the only path
+                // that runs both, and it is FALSE:
+                //     clamp OFF: sweep flattened 12627 plate texels
+                //     clamp ON:  clamp found 0 same-texel violations, and the
+                //                sweep still flattened 12604
+                // The clamp is a SAME-TEXEL invariant. The sweep searches
+                // RENDERED poses, where the plate and the FG that occludes it
+                // have parallaxed to different screen positions — so "the
+                // surface it backs" at a pose is not dQ at the same index. The
+                // two guard different populations and the sweep stays.
+                // What this pass does earn on its own: in QUICK it removed 7401
+                // texels (0.85%) that were strictly in front of the surface at
+                // their own index, worst by 86 px of misplacement at the rim,
+                // with black% and comb both slightly better. That stands.
                 //
                 // eps IS DERIVED, not chosen. It is one source quantum — the
                 // smallest depth step the data can express (a89 measures it;
@@ -14094,6 +14162,45 @@ function bgBuildBackgroundLayerCore() {
                             plugDT.needsUpdate = true;
                         }
                         if (nPlateFix + nStripFix) console.log('[RUNG-PLUG] backstop contract: ' + nPlateFix + 'px plate flattened to floor, ' + nStripFix + 'px orphan strip dropped');
+                        // A137 THE ORDERING CLAMP IN v1, AND THE POINT IS TO
+                        // CROSS-VALIDATE a135. This is the only path that also
+                        // runs bgBackstopSweep(), which searches for the SAME
+                        // violations by an entirely different method: render
+                        // four extreme poses, find on-screen protrusions, back-
+                        // project them to the backstop. Measured at 63.5 s on
+                        // troll, finding 12627 plate texels.
+                        //
+                        // If the O(N) inequality is right, the O(poses x pixels)
+                        // search should have nothing left to find. That is a
+                        // real test of a135, from an instrument that shares no
+                        // code with it, and it is worth more than the 63 s.
+                        // (The 63 s itself is v1-only, and v1 is UI-disabled
+                        // since a129 — so banking it is bookkeeping, not a
+                        // shipped win. Stated because the reverse was assumed.)
+                        if (window._noOrderClamp !== true) {
+                            const _t0V1 = Date.now();
+                            const _epsV1 = bgSourceQuantum(depth, PN) || (1 / 255);
+                            let _nP1 = 0, _mV1 = 0, _nC1 = 0;
+                            for (let i = 0; i < PN; i++) {
+                                const lim = depth[i] - _epsV1;
+                                if (plugDepth[i] > lim) {
+                                    if (plugDepth[i] > depth[i]) { const v = plugDepth[i] - depth[i]; if (v > _mV1) _mV1 = v; _nP1++; }
+                                    plugDepth[i] = lim; _nC1++;
+                                }
+                            }
+                            if (_nC1) {
+                                for (let y = 0; y < ph; y++) {
+                                    const s2 = y*pw, d2 = (ph-1-y)*pw;
+                                    for (let x = 0; x < pw; x++) plugFlipped[d2+x] = plugDepth[s2+x];
+                                }
+                                plugDT.needsUpdate = true;
+                            }
+                            console.log('[RUNG-PLUG] a137 ordering clamp: ' + _nP1 + ' texels of ' + PN +
+                                ' (' + (100*_nP1/Math.max(1,PN)).toFixed(2) + '%) were STRICTLY IN FRONT of the surface ' +
+                                'they back' + (_nP1 ? (', worst by ' + _mV1.toFixed(4) + ' depth (' + (_mV1/_epsV1).toFixed(1) + ' quanta)') : '') +
+                                '; a further ' + (_nC1 - _nP1) + ' took the eps setback only. eps = ' + _epsV1.toFixed(5) +
+                                '. ' + (Date.now()-_t0V1) + 'ms');
+                        }
                         // refs for the post-build render sweep (bgBackstopSweep)
                         window._bsRefs = { plugDepth, plugFlipped, plugDT, floorC, pw, ph };
                 _mark('backstop-contract');
