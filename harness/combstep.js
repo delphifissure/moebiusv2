@@ -28,6 +28,7 @@
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
+const { armWitness, assertArmsDiffer } = require('./abguard');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const WT = '/workspace/mm', H = path.join(WT, 'harness');
 const ASSET = process.argv[2] || 'troll';
@@ -121,6 +122,14 @@ const ARMS = [['shipped: step = bgConeSlopePerPx (stale)', {}],
     all[tag] = rows; notes[tag] = logs;
     await page.close();
   }
+
+  // A134: prove the arms diverged DOWNSTREAM of the flag before reading a
+  // single number. The witness is the bake's own report of what the slope
+  // limit did (texels lowered, max lower, step) — inside the branch under
+  // test, not the flag assignment. This exact check is what the first run of
+  // this script lacked, and that run printed a full table of identical numbers
+  // from one arm run twice.
+  assertArmsDiffer(ARMS.map(([tag]) => [tag, armWitness(notes[tag])]));
 
   const fade = (deg) => 1 - Math.min(1, Math.max(0, (deg - 35) / 10));   // visible fraction
   const pad = (s, n) => String(s).padStart(n);
