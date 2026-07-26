@@ -14950,6 +14950,12 @@ function _wireDebugSheetControls() {
     // guarded so nothing breaks if an old page is cached.
     {
         const modeSel = document.getElementById('bgModeSel');
+        // A129: v1 is DISABLED in the dropdown but still fully present here and
+        // reachable programmatically (the harness probes select it by setting
+        // the flags directly, and the scene extension lives only in this path).
+        // Greying out the option rather than deleting the branch keeps the
+        // beyond-frame work available while stopping anyone reaching for the
+        // slowest, worst-looking mode by accident.
         const applyBakeMode = (m) => {
             if (m === 'quick')   { bgQuickBake = true; }
             else if (m === 'v2') { bgQuickBake = false; bgMPIFullPlanes = true;  bgMPIMode = true; }
