@@ -75,7 +75,7 @@ const materialise = (rev, dir) => {
         const has = (n) => { try { return typeof eval(n) !== 'undefined'; } catch (e) { return false; } };
         const caps = { quick: has('bgQuickBake'), v2: has('bgMPIFullPlanes'), skirt: has('bgSkirtMesh'),
                        ray: has('_rayReprojectNow'), build: has('MOEBIUS_BUILD') ? MOEBIUS_BUILD : '?' };
-        try { isSweeping = true; } catch (e) { /* const in this build */ }
+        
         const dist = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2;
         const W = 600, Hh = 375;
         const grab = () => { for (let n = 0; n < 3; n++) render();
@@ -115,7 +115,7 @@ const materialise = (rev, dir) => {
                 bgBuildStamp = null; buildBackgroundLayer(); run('v2'); } catch (e) { out.v2Err = e.message; }
         }
         return out;
-      }, { degs: DEGS, shotDeg: 25, arms: ARMS });
+      }, { degs: DEGS, shotDeg: 25, arms: ARMS, embed: process.env.EMBED === '1' });
       rows.push({ label, rev, stamp, res });
       const sd = path.join(TMP, 'shots'); fs.mkdirSync(sd, { recursive: true });
       for (const [tag, a] of Object.entries(res.arms)) {
