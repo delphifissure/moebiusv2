@@ -47,6 +47,7 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
   const rows = await page.evaluate(async (o) => {
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
+    if (o.noSkirt) window._noQuickSkirt = true;
     bgQuickBake = (o.mode === 'quick');
     bgMPIFullPlanes = (o.mode === 'v2'); bgMPIMode = (o.mode === 'v2');
     bgBuildStamp = null; buildBackgroundLayer();
@@ -68,15 +69,21 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     for (const deg of o.degs) {
       camera.position.set(dist * Math.tan(deg * Math.PI / 180), 0, dist);
       const d = grab();
-      let eT = 0, eB = 0, iT = 0, iB = 0;
+      let eT = 0, eB = 0, iT = 0, iB = 0, eA = 0;
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const i = (y * W + x) * 4;
         const edge = (x - x0 < mx) || (x1 - x < mx) || (y - y0 < my) || (y1 - y < my);
-        const black = (d[i] + d[i + 1] + d[i + 2]) < 24;
-        if (edge) { eT++; if (black) eB++; } else { iT++; if (black) iB++; }
+        // A149: separate ABSENCE from dark paint. The clear is alpha 0, so a
+        // texel the geometry never covered has alpha 0; painted content has
+        // alpha 255 however dark it is. Counting them together cannot tell a
+        // hole from a black border.
+        const absent = d[i + 3] < 8;
+        const black = absent || ((d[i] + d[i + 1] + d[i + 2]) < 24);
+        if (edge) { eT++; if (black) eB++; if (absent) eA++; } else { iT++; if (black) iB++; }
       }
       out.push({ deg,
         edgePct: +(100 * eB / Math.max(1, eT)).toFixed(2),
+        edgeAbsentPct: +(100 * eA / Math.max(1, eT)).toFixed(2),
         intPct: +(100 * iB / Math.max(1, iT)).toFixed(2),
         edgeShare: +(100 * eB / Math.max(1, eB + iB)).toFixed(1),
         edgeAreaShare: +(100 * eT / Math.max(1, eT + iT)).toFixed(1),
@@ -84,15 +91,15 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     }
     camera.position.set(0, 0, dist); render();
     return out;
-  }, { degs: DEGS, band: BAND, mode: MODE });
+  }, { degs: DEGS, band: BAND, mode: MODE, noSkirt: process.env.NOSKIRT === '1' });
 
   const pad = (s, n) => String(s).padStart(n);
   console.log('\n' + ASSET + '  mode=' + MODE + '  WHERE IS THE BLACK? (outer ' + (BAND * 100) +
-              '% of the content bbox = "edge")');
-  console.log('  deg   black% edge   black% interior   total black%   edge share of all black');
+              '% of the content bbox = "edge")' + (process.env.NOSKIRT === '1' ? '   [SKIRT OFF]' : '   [skirt on]'));
+  console.log('  deg   black% edge   ABSENT% edge   black% interior   total black%   edge share');
   for (const r of rows)
-    console.log('  ' + pad(r.deg, 3) + pad(r.edgePct, 13) + pad(r.intPct, 18) + pad(r.totalPct, 15) +
-                pad(r.edgeShare + '%', 25));
+    console.log('  ' + pad(r.deg, 3) + pad(r.edgePct, 13) + pad(r.edgeAbsentPct, 15) +
+                pad(r.intPct, 18) + pad(r.totalPct, 15) + pad(r.edgeShare + '%', 14));
   console.log('\n  the edge band is ' + rows[0].edgeAreaShare + '% of the measured area, so an edge share');
   console.log('  above that is a genuine edge concentration and below it is not.');
   await browser.close(); srv.kill(); process.exit(0);

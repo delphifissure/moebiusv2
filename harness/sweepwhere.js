@@ -39,7 +39,7 @@ const MODES = [['quick (shipped default for preview)', { q: true, v2: false }],
     const sweepLines = [], clampLines = [];
     page.on('console', mm => { const t = mm.text();
       if (/backstop sweep/.test(t)) sweepLines.push(t);
-      if (/a13[56] ordering clamp/.test(t)) clampLines.push(t); });
+      if (/a13[56] ordering clamp|a149 skirt/.test(t)) clampLines.push(t); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 40; t++) {
       const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);

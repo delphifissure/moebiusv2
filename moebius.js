@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a148 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a149 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing + a149 THE SKIRT PORTED TO QUICK (948 triangles, margin from the a113 shift envelope not a world constant; edge black 6.80%% -> 1.91%% at 45deg, 1.78%% -> 0.04%% at 15deg, interior unchanged, no measurable bake cost)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -992,6 +992,7 @@ function bgResetBakedState(why) {
             if (m.material) { if (m.material.map) m.material.map.dispose && m.material.map.dispose(); m.material.dispose(); }
         }
         bgCardMesh = null; bgLayerMesh = null;
+        if (bgSkirtMesh) { try { scene.remove(bgSkirtMesh); bgSkirtMesh.geometry.dispose(); } catch (e) {} bgSkirtMesh = null; }
         const L0 = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
         const g = L0 && L0.mesh && L0.mesh.geometry;
         if (g && g.userData && g.userData._fullIndex) {
@@ -6925,7 +6926,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a148';
+const MOEBIUS_BUILD = 'v3.13.25-a149';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -7569,6 +7570,7 @@ function exportSDBundle() {
 //      BG layer is already there, at plug depth, with baked color.
 // ============================================================================
 let bgLayerMesh = null;
+let bgSkirtMesh = null;      // A149: quick's beyond-frame skirt, shares the plate material
 let bgCardMesh = null;   // A53: per-pixel cap cards for texels orphaned by the cliff tear (quick mode)
 // Directional plug data stashed at BG-build for the SD-export bundle (native res,
 // top-row-first): the exact gap mask + completed BG depth + coarse fill the
@@ -12683,6 +12685,96 @@ function bgBuildBackgroundLayerCore() {
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
+
+            // ================================================================
+            // A149 THE SKIRT, PORTED TO QUICK
+            // ================================================================
+            // a140 measured where quick's black actually is: 97-100% of it sits
+            // in the outer 8% of the content, interior black is 0.00-0.09%. It
+            // is beyond-frame, and quick has NO beyond-frame coverage of any
+            // kind — the skirt is built in bgBuildFullPlanesCore (v2 only) and
+            // a114 established quick never reaches v1's scene extension. v2,
+            // which has a skirt, measures 0.00% black at every pose.
+            //
+            // SIZED BY THE a113 LAW, NOT BY A WORLD CONSTANT. a139 found v2's
+            // skirt is cone-blind (0.10 / 0.05 world hardcoded) — harmless
+            // there because it is 1.3x-190x oversized at 45 deg, but there is
+            // no reason to copy the mistake. The margin here is the shift
+            // envelope: max|shift| over the depth range at the cone rim, which
+            // is exactly what a113 established and a132 confirmed moves with
+            // the cone.
+            //
+            // GEOMETRY: fine ALONG the edge, two rings OUTWARD. Outside [0,1]
+            // the depth texture clamps to its edge texel, so the displacement
+            // is constant along an outward ray; and with constant depth the
+            // reprojection Sw = refEye + (Pw - refEye)*s is affine in Pw, so a
+            // two-ring strip is EXACT rather than an approximation. That is
+            // what keeps this at a few thousand triangles instead of the
+            // millions v1's scene extension cost.
+            if (window._noQuickSkirt !== true) {
+                try {
+                    const _gp = L.mesh.geometry.parameters || {};
+                    const W0 = _gp.width, H0 = _gp.height;
+                    const _sl = bgShiftLUTFor(pw, ph);
+                    const _kSk = Math.max(Math.abs(_sl.m0), Math.abs(_sl.m1));
+                    const mpx = Math.ceil(_kSk);
+                    if (W0 > 0 && H0 > 0 && mpx > 0) {
+                        const exW = W0 * mpx / pw, exH = H0 * mpx / ph;
+                        const STEP = 8;                       // texels per vertex along the edge (A32)
+                        const NX = Math.max(2, Math.ceil(pw / STEP));
+                        const NY = Math.max(2, Math.ceil(ph / STEP));
+                        const pos = [], uv = [], idx = [];
+                        const V = (x, y) => {
+                            const i = pos.length / 3;
+                            pos.push(x, y, 0);
+                            uv.push(x / W0 + 0.5, y / H0 + 0.5);
+                            return i;
+                        };
+                        // one outward strip along an edge, walking t in [0,1]
+                        const strip = (n, inner, outer) => {
+                            let a0 = -1, b0 = -1;
+                            for (let i = 0; i <= n; i++) {
+                                const t = i / n;
+                                const pi = inner(t), po = outer(t);
+                                const a1 = V(pi[0], pi[1]), b1 = V(po[0], po[1]);
+                                if (i > 0) { idx.push(a0, b0, b1, a0, b1, a1); }
+                                a0 = a1; b0 = b1;
+                            }
+                        };
+                        const hw = W0 / 2, hh = H0 / 2;
+                        // top / bottom run the full extended width so the corner
+                        // wedges are covered by the same strips — no separate
+                        // corner quads, no seam where they would have met
+                        strip(NX + 2, (t) => [-hw - exW + t * (W0 + 2 * exW),  hh],
+                                      (t) => [-hw - exW + t * (W0 + 2 * exW),  hh + exH]);
+                        strip(NX + 2, (t) => [-hw - exW + t * (W0 + 2 * exW), -hh],
+                                      (t) => [-hw - exW + t * (W0 + 2 * exW), -hh - exH]);
+                        strip(NY, (t) => [-hw,       -hh + t * H0],
+                                  (t) => [-hw - exW, -hh + t * H0]);
+                        strip(NY, (t) => [ hw,       -hh + t * H0],
+                                  (t) => [ hw + exW, -hh + t * H0]);
+                        const gSk = new THREE.BufferGeometry();
+                        gSk.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                        gSk.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+                        gSk.setIndex(idx);
+                        gSk.computeVertexNormals();
+                        bgSkirtMesh = new THREE.Mesh(gSk, matQ);   // SHARES the plate material
+                        bgSkirtMesh.position.copy(bgLayerMesh.position);
+                        bgSkirtMesh.rotation.copy(bgLayerMesh.rotation);
+                        bgSkirtMesh.scale.copy(bgLayerMesh.scale);
+                        bgSkirtMesh.renderOrder = bgLayerMesh.renderOrder - 1e-4;
+                        bgSkirtMesh.visible = bgLayerMesh.visible;
+                        bgSkirtMesh.userData.isQuickSkirt = true;
+                        scene.add(bgSkirtMesh);
+                        console.log('[QUICK-BAKE] a149 skirt: margin ' + mpx + 'px (the a113 shift ' +
+                            'envelope at cone ' + bgViewFadeEndDeg + 'deg, k=' + _kSk.toFixed(0) + '), ' +
+                            (idx.length / 3) + ' triangles, ' + (pos.length / 3) + ' vertices. ' +
+                            'Extends the plate ' + (100 * mpx / pw).toFixed(0) + '% of image width past ' +
+                            'each edge; uv runs past [0,1] under clamp-to-edge so it paints the edge ' +
+                            'continuation and is invisible where the edge texel is empty.');
+                    }
+                } catch (e) { console.warn('[QUICK-BAKE] a149 skirt failed: ' + e.message); }
+            }
             const showQ = document.getElementById('bgLayerToggle');
             bgLayerMesh.visible = showQ ? showQ.checked : true;
             scene.add(bgLayerMesh);
@@ -15749,6 +15841,8 @@ function _wireDebugSheetControls() {
         // disarm it whenever the BG layer is hidden, re-arm when shown.
         const fu = mediaLayers[0]?.mesh?.material?.uniforms;
         if (fu && fu.u_useBandCut) fu.u_useBandCut.value = on && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
+        // A149: the skirt is part of the plate, so it follows the same toggle.
+        if (typeof bgSkirtMesh !== 'undefined' && bgSkirtMesh) bgSkirtMesh.visible = on;
     });
     // --- a130 simulated viewer controls -----------------------------------
     {
@@ -18840,6 +18934,7 @@ function renderPortalFrame() {
             }
         };
         if (typeof bgLayerMesh !== 'undefined') setSup(bgLayerMesh);
+        if (typeof bgSkirtMesh !== 'undefined') setSup(bgSkirtMesh);   // A149: the skirt hides with its plate
         if (typeof mpiMidMesh !== 'undefined') setSup(mpiMidMesh);
         if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setSup(m);
         if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setSup(m);
