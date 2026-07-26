@@ -255,6 +255,24 @@
           <span id="inpaintingSplitDepthNormSliderValue">0.500</span>
         </div>
 
+        <!-- a130 SIMULATED VIEWER. The portal render is a PRE-DISTORTION: it is
+             only the intended image when it is viewed from the eye it was built
+             for. Scrubbing a virtual eye while sitting head-on to the monitor
+             shows raw pre-distortion, which looks catastrophically wrong while
+             being entirely correct. This mode adds the missing second half of
+             the optical chain — the physical viewer — so artifacts can be
+             triaged as real or as un-cancelled pre-distortion. -->
+        <div class="slider-container" style="border-top:1px solid #2a2a2a;padding-top:6px;">
+          <label style="font-size:0.85em;" title="Render the frame from the simulated eye, then photograph that panel FROM the same eye. If the pre-distortion is right, the two cancel."><input type="checkbox" id="svEnableChk"> 👁 Simulated viewer</label>
+          <label style="margin-left:8px;font-size:0.85em;" title="Horizontal eye angle. The eye moves on a SPHERE of fixed radius, so theta changes without |E| changing.">yaw <input type="range" id="svYaw" min="-70" max="70" step="0.5" value="0" style="width:120px;"><span id="svYawVal">0.0</span>&deg;</label>
+          <label style="margin-left:6px;font-size:0.85em;" title="Vertical eye angle, same sphere.">pitch <input type="range" id="svPitch" min="-70" max="70" step="0.5" value="0" style="width:100px;"><span id="svPitchVal">0.0</span>&deg;</label>
+          <label style="margin-left:6px;font-size:0.85em;" title="Eye distance as a multiple of D_REF. Separate from the scrub so theta stays unambiguous.">dolly <input type="range" id="svDolly" min="0.4" max="2.5" step="0.01" value="1" style="width:90px;"><span id="svDollyVal">1.00</span>&times;</label>
+          <label style="margin-left:6px;font-size:0.85em;" title="Picture-in-picture A/B on the same canvas, same frame, same buffer."><input type="checkbox" id="svPipChk" checked> A/B inset</label>
+          <button type="button" id="svSwapBtn" style="margin-left:4px;padding:2px 8px;" title="Swap which of simulated / raw pre-distortion is the big view">&#8646; swap</button>
+          <label style="margin-left:6px;font-size:0.85em;" title="Geometric (Lambertian) irradiance bound cos(theta)/r^2, applied in linear light. A BOUND: real panels fall off faster off-axis, so this understates how dark a wide pose looks."><input type="checkbox" id="svFalloffChk" checked> falloff</label>
+          <button type="button" id="svTestBtn" style="margin-left:4px;padding:2px 8px;" title="A1 frame-convention assert, then anchor drift across +/-40 deg, then the A2 known-perturbation check. Results in the console.">&#10003; acceptance test</button>
+        </div>
+
         <div class="slider-container">
           <label for="debugViewSelect">Debug View:</label>
           <button type="button" id="debugSheetBtn" style="margin-left:8px; padding:2px 8px;" title="Download one PNG with all pipeline buffers + settings stamp — drag it into the chat">📸 Debug Sheet</button>

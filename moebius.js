@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a130 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -6448,7 +6448,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a128';
+const MOEBIUS_BUILD = 'v3.13.25-a130';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -9490,7 +9490,10 @@ function bgBackstopSweep() {
         const vec = new THREE.Vector3();
         for (const [PX, PY] of poses) {
             camera.position.set(PX, PY, _scanZ);
-            render();   // updates the portal frusta + all matrixWorlds
+            // a130: explicitly the RAW portal frame. The scan measures the portal
+            // render; routing it through the simulated viewer would measure the
+            // simulated viewer instead.
+            renderPortalFrame();   // updates the portal frusta + all matrixWorlds
             if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = false;
             const fg = grab();
             if (typeof _depthPassIncludeBG !== 'undefined') _depthPassIncludeBG = true;
@@ -15054,6 +15057,35 @@ function _wireDebugSheetControls() {
         const fu = mediaLayers[0]?.mesh?.material?.uniforms;
         if (fu && fu.u_useBandCut) fu.u_useBandCut.value = on && !!bgCutFGOnPlug && !!fu.u_bandMask.value;
     });
+    // --- a130 simulated viewer controls -----------------------------------
+    {
+        const num = (id) => document.getElementById(id);
+        const sync = () => {
+            const yv = num('svYawVal'), pv = num('svPitchVal'), dv = num('svDollyVal');
+            if (yv) yv.textContent = svState.yawDeg.toFixed(1);
+            if (pv) pv.textContent = svState.pitchDeg.toFixed(1);
+            if (dv) dv.textContent = svState.dollyGain.toFixed(2);
+        };
+        num('svEnableChk')?.addEventListener('change', (e) => {
+            if (e.target.checked) window.simViewer.on(); else window.simViewer.off();
+        });
+        num('svYaw')?.addEventListener('input', (e) => { svState.yawDeg = parseFloat(e.target.value); sync(); });
+        num('svPitch')?.addEventListener('input', (e) => { svState.pitchDeg = parseFloat(e.target.value); sync(); });
+        num('svDolly')?.addEventListener('input', (e) => { svState.dollyGain = parseFloat(e.target.value); sync(); });
+        num('svPipChk')?.addEventListener('change', (e) => { svState.pip = e.target.checked; });
+        num('svFalloffChk')?.addEventListener('change', (e) => { svState.falloff = e.target.checked; });
+        num('svSwapBtn')?.addEventListener('click', () => { console.log('[SV] ' + window.simViewer.swap()); });
+        num('svTestBtn')?.addEventListener('click', () => {
+            const wasOn = svState.active;
+            svState.active = true;
+            const r = window.svAcceptanceTest();
+            svState.active = wasOn;
+            const chk = num('svEnableChk'); if (chk) chk.checked = wasOn;
+            window._svLastTest = r;
+        });
+        sync();
+    }
+
     document.getElementById('bgSoloToggle')?.addEventListener('change', (e) => {
         const solo = e.target.checked;
         if (mpiFullMeshes && mpiFullMeshes.length) {
@@ -15636,7 +15668,9 @@ function updateCameraAndProjection() {
         oY_current = cRect.height > 0 ? -(cCY - mCY) / cRect.height : 0;
     }
 
-    if (!isSweeping) {
+    // a130: _svEyeLock is the simulated viewer holding the eye it just placed —
+    // same reason isSweeping is here, an external owner of camera.position.
+    if (!isSweeping && !window._svEyeLock) {
         const currentCombinedX = (latestDetectedFaceX - 0.5) + oX_current;
         const currentCombinedY = (latestDetectedFaceY - 0.5) + oY_current;
         const effectiveDeviationX = currentCombinedX - baselineFaceTrackerOffsetX;
@@ -15674,6 +15708,18 @@ function updateCameraAndProjection() {
         // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
         camera.position.x = (faceTrackCamX + gyroCamX + manualCamDX) * dollyLatGain;
         camera.position.y = (faceTrackCamY + gyroCamY + manualCamDY) * dollyLatGain;
+        // a130 / A8: record where the head ACTUALLY goes. The simulated viewer
+        // answers "what does an off-axis viewer see?"; this answers "does
+        // anyone ever go there?" — the other half of the cone question, and the
+        // only one of the two that no amount of rendering can decide. Logged
+        // with its source, because the gyro and the webcam are different
+        // instruments with different reach.
+        if (typeof svRecordPose === 'function') {
+            svRecordPose(camera.position.x, camera.position.y,
+                Math.abs(camera.position.z - portalPlaneWorldZ),
+                (gyroActive && (Math.abs(gyroCamX) + Math.abs(gyroCamY)) >
+                               (Math.abs(faceTrackCamX) + Math.abs(faceTrackCamY))) ? 'gyro' : 'webcam');
+        }
     }
     updateViewFade();
 
@@ -17325,8 +17371,706 @@ function setLetterboxedViewport(targetAspect) {
     renderer.setScissorTest(true);
 }
 
+// =============================================================================
+// a130 — SIMULATED VIEWER   (handoff brief 4.3 + 5; REPLY01 6)
+// =============================================================================
+// WHY THIS EXISTS. frameCorners() builds an OFF-AXIS frustum from the eye E to
+// the fixed portal rect. That render is a PRE-DISTORTION: it is the intended
+// image only when it is viewed from E. A tester who scrubs a virtual eye while
+// sitting head-on to a monitor is looking at raw pre-distortion, and it will
+// look catastrophically wrong while being entirely correct. A114 records
+// exactly that confusion ("looking broken from almost any angle"), so an
+// unknown fraction of the open defect list is un-triaged pre-distortion.
+//
+// This mode renders the SECOND half of the optical chain:
+//   pass 1  the normal frame from E, into a supersampled buffer. Unchanged
+//           code path — renderPortalFrame(), whatever bake mode / debug view
+//           is up. SV never forks the renderer it is measuring.
+//   pass 2  that buffer pasted on a REAL 3D quad at the physical panel rect,
+//           photographed from E through a LOCKED lens.
+// If the pre-distortion is right, the two cancel and content sits where the
+// world says it should.
+//
+// NOT NEGOTIABLE (brief 5), and why:
+//   - Real 3D quad, not a screen-space quad with displaced corners: a 2D quad
+//     interpolates affinely per triangle and creases along the diagonal; a 3D
+//     quad under a perspective camera is perspective-correct for free.
+//   - The lens is LOCKED at activation and never autoscaled. Off-axis the
+//     panel shrinks. The shrink IS the measurement.
+//   - Pass 1 is supersampled, so pass 2's resample is not the limiting filter
+//     and cannot hide the fragment stretch the stretch net exists to catch.
+//   - The falloff multiply happens in LINEAR light, not on sRGB code values.
+//   - The mode is NOT gated on the fade cone. The fade is a product decision;
+//     an instrument that inherits it cannot see past it. The fade opacity the
+//     shipping viewer WOULD apply is reported on the HUD instead of applied.
+//   - PiP A/B through setViewport/setScissor on the one canvas, so both views
+//     are the same frame, the same buffer and the same pose by construction.
+//
+// SCOPE (brief 5, "scope caveat"). The cancellation premise is that the assumed
+// eye is the real eye. That holds on the webcam path. On the gyro path the eye
+// is inferred, so this mode shows A plausible viewer, not THE viewer.
+// -----------------------------------------------------------------------------
+// SV_SUPERSAMPLE: the spec's 1.75x LINEAR factor = 3.0625x the pixels. Not
+// tuned — it is "enough that pass 2's filter is not the limit". The cap that
+// can reduce it is LOGGED (A7 / the A115 Math.min lesson: no silent caps).
+const SV_SUPERSAMPLE = 1.75;
+// Pass-1 buffers are capped at this many pixels before the supersample is cut
+// back. 16 Mpx ~ a 4K canvas at 1.75x; above it a phone GPU stalls. Logged.
+const SV_PIXEL_CAP = 16e6;
+// The look-at up-vector is DERIVED (panel +y projected into the view plane), so
+// there is no 0.999 snap band (A6). It degenerates only when the eye is exactly
+// over the panel's up axis; pitch is clamped short of that, and the clamp is
+// logged the first time it bites.
+const SV_PITCH_LIMIT_DEG = 85;
+// Head-pose recorder (A8): ~8 Hz for ~8.5 minutes of history.
+const SV_POSE_CAP = 4096, SV_POSE_MIN_MS = 125;
+
+const svState = {
+    active: false,
+    yawDeg: 0, pitchDeg: 0, dollyGain: 1,
+    falloff: true, pip: true, pipShowsRaw: true, showHud: true,
+    refD: 0, fovDeg: 0, ss: 1, ssNote: '',
+    perturb: null,          // A2: {x,y,z} world offset applied to the PASS-1 eye only
+    rt: null, scene2: null, cam2: null, quad: null, mat: null, hud: null, poseCanvas: null,
+    vp: null,               // pass-1 viewport actually used, in RT px (the panel rect)
+    lastFade: 0, lastDrift: 0, pitchClampLogged: false
+};
+window.svState = svState;
+
+// --- head-pose recorder (A8) -------------------------------------------------
+// Answers the other half of the cone question: the simulated viewer says what
+// an off-axis viewer sees; the recorder says whether anyone ever goes there.
+const svPoseLog = { x: [], y: [], th: [], src: [], t: 0 };
+window.svPoseLog = svPoseLog;
+function svRecordPose(x, y, dist, src) {
+    const now = performance.now();
+    if (now - svPoseLog.t < SV_POSE_MIN_MS) return;
+    svPoseLog.t = now;
+    const th = Math.atan2(Math.hypot(x, y), Math.max(1e-6, dist)) * 180 / Math.PI;
+    svPoseLog.x.push(x); svPoseLog.y.push(y); svPoseLog.th.push(th); svPoseLog.src.push(src);
+    if (svPoseLog.th.length > SV_POSE_CAP) {
+        svPoseLog.x.shift(); svPoseLog.y.shift(); svPoseLog.th.shift(); svPoseLog.src.shift();
+    }
+}
+function svPoseStats() {
+    const n = svPoseLog.th.length;
+    if (!n) return { n: 0, p50: NaN, p95: NaN, p99: NaN, max: NaN, webcam: 0, gyro: 0 };
+    const s = svPoseLog.th.slice().sort((a, b) => a - b);
+    const q = (p) => s[Math.min(n - 1, Math.max(0, Math.round(p * (n - 1))))];
+    let webcam = 0, gyro = 0;
+    for (const v of svPoseLog.src) { if (v === 'gyro') gyro++; else webcam++; }
+    return { n, p50: q(0.50), p95: q(0.95), p99: q(0.99), max: s[n - 1], webcam, gyro };
+}
+window.svPoseStats = svPoseStats;
+window.svPoseReset = () => { svPoseLog.x.length = svPoseLog.y.length = svPoseLog.th.length = svPoseLog.src.length = 0; };
+
+// --- exact geometry helpers --------------------------------------------------
+const _svA = new THREE.Vector3(), _svB = new THREE.Vector3(), _svC = new THREE.Vector3(),
+      _svD = new THREE.Vector3(), _svX = new THREE.Vector3(), _svTmp = new THREE.Vector3();
+// Van Oosterom & Strackee (1983), "The solid angle of a plane triangle", IEEE
+// Trans. Biomed. Eng. BME-30(2):125-126 — exact, not a small-angle
+// approximation. The panel subtends ~44 deg at the reference distance, where
+// area*cos/r^2 is already several percent wrong.
+function _svTriOmega(a, b, c) {
+    const la = a.length(), lb = b.length(), lc = c.length();
+    const num = Math.abs(a.dot(_svTmp.crossVectors(b, c)));
+    const den = la * lb * lc + a.dot(b) * lc + a.dot(c) * lb + b.dot(c) * la;
+    let t = 2 * Math.atan2(num, den);
+    if (t < 0) t += 2 * Math.PI;
+    return t;
+}
+function svPanelRect() {
+    // THE panel rect — the same three corners frameCorners() is handed in
+    // updateCameraAndProjection(). A1 requires pass 1 and pass 2 to share it,
+    // so both read it from here and nowhere else.
+    const P = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    return {
+        W: terrariumWidth, H: terrariumHeight, P,
+        bl: new THREE.Vector3(-terrariumWidth / 2, -terrariumHeight / 2, P),
+        br: new THREE.Vector3(terrariumWidth / 2, -terrariumHeight / 2, P),
+        tl: new THREE.Vector3(-terrariumWidth / 2, terrariumHeight / 2, P),
+        c: new THREE.Vector3(0, 0, P)
+    };
+}
+function svOmegaFrac(E) {
+    const R = svPanelRect();
+    const tr = new THREE.Vector3(R.W / 2, R.H / 2, R.P);
+    const a = R.bl.clone().sub(E), b = R.br.clone().sub(E), c = tr.clone().sub(E), d = R.tl.clone().sub(E);
+    const om = _svTriOmega(a, b, c) + _svTriOmega(a, c, d);
+    // head-on reference at the SAME |E| (svState.refD * dollyGain), so the
+    // number isolates the off-axis collapse and not the dolly.
+    const r = E.clone().sub(R.c).length();
+    const E0 = new THREE.Vector3(0, 0, R.P + r);
+    const a0 = R.bl.clone().sub(E0), b0 = R.br.clone().sub(E0), c0 = tr.clone().sub(E0), d0 = R.tl.clone().sub(E0);
+    const om0 = _svTriOmega(a0, b0, c0) + _svTriOmega(a0, c0, d0);
+    return { om, om0, frac: om / Math.max(1e-12, om0) };
+}
+function svSubtenseDeg(E) {
+    const R = svPanelRect();
+    const mid = (ax, ay) => new THREE.Vector3(ax, ay, R.P).sub(E).normalize();
+    const l = mid(-R.W / 2, 0), r = mid(R.W / 2, 0), b = mid(0, -R.H / 2), t = mid(0, R.H / 2);
+    const ang = (u, v) => Math.acos(Math.min(1, Math.max(-1, u.dot(v)))) * 180 / Math.PI;
+    return { h: ang(l, r), v: ang(b, t) };
+}
+// The eye, on a SPHERE of radius refD*dollyGain about the panel centre (A3):
+// a lateral slide would move theta and |E| together and make the HUD's theta
+// ambiguous. Scrub moves theta at fixed radius; the dolly moves the radius.
+function svEye() {
+    const R = svPanelRect();
+    const r = Math.max(1e-4, svState.refD * svState.dollyGain);
+    const yaw = svState.yawDeg * Math.PI / 180;
+    let pDeg = svState.pitchDeg;
+    if (Math.abs(pDeg) > SV_PITCH_LIMIT_DEG) {
+        if (!svState.pitchClampLogged) {
+            console.warn('[SV] pitch clamped to +/-' + SV_PITCH_LIMIT_DEG + ' deg (requested ' +
+                pDeg.toFixed(1) + '); beyond it the derived up-vector degenerates. Clamp is reported, not silent.');
+            svState.pitchClampLogged = true;
+        }
+        pDeg = Math.sign(pDeg) * SV_PITCH_LIMIT_DEG;
+    }
+    const pit = pDeg * Math.PI / 180;
+    return new THREE.Vector3(
+        r * Math.sin(yaw) * Math.cos(pit),
+        r * Math.sin(pit),
+        R.P + r * Math.cos(yaw) * Math.cos(pit)
+    );
+}
+
+function svEnsure() {
+    if (svState.rt) return true;
+    if (!renderer || !scene || !camera) return false;
+
+    const cw = renderer.domElement.width, ch = renderer.domElement.height;
+    const maxTex = renderer.capabilities.maxTextureSize || 4096;
+    let s = SV_SUPERSAMPLE, note = 'uncapped';
+    const capBy = (lim, why) => { if (s > lim) { s = lim; note = why; } };
+    capBy(maxTex / Math.max(cw, ch), 'GPU maxTextureSize ' + maxTex);
+    capBy(Math.sqrt(SV_PIXEL_CAP / (cw * ch)), 'pixel budget ' + (SV_PIXEL_CAP / 1e6) + ' Mpx');
+    s = Math.max(1, s);
+    svState.ss = s; svState.ssNote = note;
+    const rw = Math.max(2, Math.round(cw * s)), rh = Math.max(2, Math.round(ch * s));
+    console.log('[SV] a130 pass-1 buffer ' + rw + 'x' + rh + ' = ' + s.toFixed(3) + 'x linear (' +
+        (s * s).toFixed(2) + 'x pixels) from canvas ' + cw + 'x' + ch +
+        (s < SV_SUPERSAMPLE ? '  <-- CAPPED from ' + SV_SUPERSAMPLE + 'x by ' + note : '  (' + note + ')'));
+
+    svState.rt = new THREE.WebGLRenderTarget(rw, rh, {
+        minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+        format: THREE.RGBAFormat, stencilBuffer: false, depthBuffer: true
+    });
+
+    const R = svPanelRect();
+    // A REAL 3D quad at the panel rect. Two triangles under a perspective
+    // camera => perspective-correct interpolation, no diagonal crease.
+    const geo = new THREE.PlaneGeometry(R.W, R.H, 1, 1);
+    svState.mat = new THREE.ShaderMaterial({
+        uniforms: {
+            tPass1: { value: svState.rt.texture },
+            uUvScale: { value: new THREE.Vector2(1, 1) },
+            uUvOffset: { value: new THREE.Vector2(0, 0) },
+            uAtten: { value: 1.0 }
+        },
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+        // LINEAR-LIGHT falloff. renderer.outputEncoding is r128's default
+        // (LinearEncoding = pass-through) and every source texture is loaded
+        // without an encoding, so the values sitting in the pass-1 buffer are
+        // the sRGB-encoded code values of the source art. Multiplying those
+        // directly would dim by the wrong curve, so decode -> multiply ->
+        // re-encode with the exact IEC 61966-2-1 sRGB transfer functions.
+        fragmentShader: [
+            'uniform sampler2D tPass1; uniform vec2 uUvScale, uUvOffset; uniform float uAtten;',
+            'varying vec2 vUv;',
+            'vec3 s2l(vec3 c){ return mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c)); }',
+            'vec3 l2s(vec3 c){ return mix(c*12.92, 1.055*pow(max(c,vec3(0.0)), vec3(1.0/2.4))-0.055, step(vec3(0.0031308), c)); }',
+            'void main(){',
+            '  vec4 t = texture2D(tPass1, vUv*uUvScale + uUvOffset);',
+            '  gl_FragColor = vec4(l2s(s2l(t.rgb) * uAtten), 1.0);',
+            '}'
+        ].join('\n'),
+        depthTest: false, depthWrite: false, side: THREE.DoubleSide
+    });
+    svState.quad = new THREE.Mesh(geo, svState.mat);
+    svState.quad.position.set(0, 0, R.P);
+    svState.scene2 = new THREE.Scene();
+    svState.scene2.add(svState.quad);
+
+    // The lens is DERIVED once, then locked: the vertical FOV that makes the
+    // panel exactly fill the pass-2 viewport head-on at the reference distance.
+    // At yaw=pitch=0, dolly=1 the simulated view is therefore framed exactly
+    // like the raw view, and every departure from that framing off-axis is the
+    // physical foreshortening, not a lens choice.
+    svState.refD = Math.max(1e-4, Math.abs(camera.position.z - R.P));
+    svState.fovDeg = 2 * Math.atan((R.H / 2) / svState.refD) * 180 / Math.PI;
+    svState.cam2 = new THREE.PerspectiveCamera(svState.fovDeg, R.W / R.H, 0.001, 1000);
+    console.log('[SV] a130 lens LOCKED at ' + svState.fovDeg.toFixed(2) + ' deg vertical (D_REF = ' +
+        svState.refD.toFixed(4) + ' world units, panel ' + R.W + ' x ' + R.H +
+        '). Never autoscaled: the off-axis shrink is the signal.');
+    return true;
+}
+
+function svHudEnsure() {
+    if (svState.hud) return;
+    const d = document.createElement('div');
+    d.id = 'svHud';
+    d.style.cssText = 'position:fixed;z-index:60;pointer-events:none;font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;' +
+        'color:#9fe8ff;background:rgba(0,0,0,0.62);padding:6px 8px;border:1px solid #1d6b80;white-space:pre;';
+    document.body.appendChild(d);
+    const c = document.createElement('canvas');
+    c.width = 108; c.height = 108;
+    c.style.cssText = 'display:block;margin-top:5px;background:rgba(0,0,0,0.35);border:1px solid #1d6b80;';
+    d.appendChild(c);
+    svState.hud = d; svState.poseCanvas = c;
+}
+
+// The k the HUD reports. k is the screen displacement in SOURCE texels between
+// the near and far ends of the depth range — the number the whole arc turns on
+// (fold limit sqrt(2)/k, reveal width dd*k, hidden-depth precision 1/k, MPI
+// plane count ~k). "needed here" evaluates the a102 envelope at THIS pose's
+// lateral offset; "budgeted" evaluates it at the cone rim, which is what the
+// bake actually paid for.
+function svKAt(E) {
+    try {
+        const L = mediaLayers && mediaLayers[0];
+        const im = L && L.textures && L.textures.depth && L.textures.depth.image;
+        const pw = (im && (im.naturalWidth || im.width)) || 0;
+        const ph = (im && (im.naturalHeight || im.height)) || 0;
+        if (!pw || !ph) return null;
+        const R = svPanelRect();
+        const D = Math.max(1e-3, Math.abs(E.z - R.P));
+        const off = Math.hypot(E.x, E.y);
+        const here = bgShiftLUTFor(pw, ph, off);
+        const kHere = Math.max(Math.abs(here.m0), Math.abs(here.m1));
+        // "budgeted" is what the PLATE ACTUALLY PAID FOR, which is the cone rim
+        // at the BAKE pose — not at this one. bgShiftLUTFor reads D from
+        // camera.position.z, so the only way to evaluate the shipped law at
+        // another pose is to stand the eye there for the call. Saved and
+        // restored immediately; nothing renders in between.
+        const zWas = camera.position.z;
+        let kBudget;
+        try {
+            camera.position.z = R.P + svState.refD;
+            const budg = bgShiftLUTFor(pw, ph, svState.refD * Math.tan(bgViewFadeEndDeg * Math.PI / 180));
+            kBudget = Math.max(Math.abs(budg.m0), Math.abs(budg.m1));
+        } finally { camera.position.z = zWas; }
+        return { pw, ph, kHere, kBudget, D };
+    } catch (e) { return null; }
+}
+
+// The completion budget the mark-dilation pass can actually deliver: the
+// shader clamps its per-texel reach to BUDGET_NORM-1 = 63 texels
+// (u_fgReachPx * step, clamp(...,1.0,63.0)), so 63 source texels is the hard
+// ceiling on how far a completion can carry regardless of the slider.
+const SV_COMPLETION_CAP_TEXELS = 63;
+
+function svRenderFrame() {
+    if (!svEnsure()) { renderPortalFrame(); return; }
+    svHudEnsure();
+
+    const R = svPanelRect();
+    const E = svEye();
+    const rt = svState.rt;
+
+    // ---- PASS 1 -------------------------------------------------------------
+    // Same code path, same frame, same everything — only the destination and
+    // the eye are ours. setRenderTarget(null) is redirected to the supersampled
+    // buffer, and any viewport/scissor set while that redirect is live is
+    // scaled by the same factor, so the letterbox rect the app computes in
+    // CANVAS pixels lands correctly in BUFFER pixels. Offscreen pipeline passes
+    // bind their own targets and pass their own explicit sizes, so the redirect
+    // is inactive for them and they are untouched. Patches are installed and
+    // removed inside this one call.
+    const oSRT = renderer.setRenderTarget, oVP = renderer.setViewport, oSC = renderer.setScissor;
+    const S = svState.ss;
+    let bound = false;
+    svState.vp = null;
+    const prevFade = bgViewFadeEnabled;
+    window._svEyeLock = true;
+    // Not gated on the fade cone (brief 5). The fade is a DOM overlay; leaving
+    // it armed would black the instrument out past 45 deg, which is exactly the
+    // region the instrument exists to look at. Its value is reported instead.
+    {
+        const dist = Math.max(1e-3, Math.abs(E.z - R.P)), off = Math.hypot(E.x, E.y);
+        const ang = Math.atan2(off, dist) * 180 / Math.PI;
+        svState.lastFade = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) /
+            Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    }
+    bgViewFadeEnabled = false;
+    if (typeof _viewFadeEl !== 'undefined' && _viewFadeEl) _viewFadeEl.style.opacity = '0';
+
+    // A2: the perturbation displaces the PASS-1 eye only. Pass 2 keeps the true
+    // E, so the pre-distortion no longer matches the viewer and the anchor must
+    // swim by a predictable amount.
+    const p = svState.perturb;
+    camera.position.set(E.x + (p ? p.x : 0), E.y + (p ? p.y : 0), E.z + (p ? p.z : 0));
+
+    try {
+        renderer.setRenderTarget = function (t, a, b) {
+            bound = (t === null || t === undefined);
+            if (bound) { svState.vp = { x: 0, y: 0, w: rt.width, h: rt.height }; }
+            return oSRT.call(this, bound ? rt : t, a, b);
+        };
+        renderer.setViewport = function (x, y, w, h) {
+            if (bound && typeof x === 'number') {
+                svState.vp = { x: x * S, y: y * S, w: w * S, h: h * S };
+                return oVP.call(this, x * S, y * S, w * S, h * S);
+            }
+            return oVP.apply(this, arguments);
+        };
+        renderer.setScissor = function (x, y, w, h) {
+            if (bound && typeof x === 'number') return oSC.call(this, x * S, y * S, w * S, h * S);
+            return oSC.apply(this, arguments);
+        };
+        renderPortalFrame();
+    } finally {
+        renderer.setRenderTarget = oSRT;
+        renderer.setViewport = oVP;
+        renderer.setScissor = oSC;
+        renderer.setScissorTest(false);
+        renderer.setRenderTarget(null);
+        window._svEyeLock = false;
+        bgViewFadeEnabled = prevFade;
+    }
+
+    // The panel rect in the pass-1 buffer is the viewport pass 1 actually drew
+    // into (frameCorners maps the portal rect onto the whole viewport, so the
+    // viewport rect IS the panel rect). Recovering it here rather than assuming
+    // "the whole buffer" keeps the debug views — which letterbox — exact.
+    const vp = svState.vp || { x: 0, y: 0, w: rt.width, h: rt.height };
+    svState.mat.uniforms.uUvScale.value.set(vp.w / rt.width, vp.h / rt.height);
+    svState.mat.uniforms.uUvOffset.value.set(vp.x / rt.width, vp.y / rt.height);
+
+    // ---- PASS 2 -------------------------------------------------------------
+    const cam2 = svState.cam2;
+    cam2.position.copy(E);
+    // Up-vector by construction, not by threshold (A6): the panel's +y
+    // projected into the view plane. Continuous everywhere the pitch clamp
+    // allows, so there is no band in which the roll can snap.
+    const dir = R.c.clone().sub(E).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    up.addScaledVector(dir, -up.dot(dir));
+    if (up.lengthSq() < 1e-12) up.set(0, 0, -Math.sign(dir.y) || 1);
+    cam2.up.copy(up.normalize());
+    cam2.lookAt(R.c);
+    cam2.fov = svState.fovDeg;          // LOCKED. Never autoscaled.
+    cam2.updateProjectionMatrix();
+    cam2.updateMatrixWorld(true);
+
+    // Geometric (Lambertian) falloff bound: irradiance from a diffuse patch is
+    // cos(theta)/r^2, i.e. a = Ez/r^3 * D_REF^2, normalised to 1 head-on at the
+    // reference distance. uRefD and D_REF are the SAME constant (A5). This is a
+    // BOUND, not a display model: real LCDs fall off faster off-axis than
+    // cos(theta) and OLED differs again, so the mode UNDERSTATES how dark a
+    // wide pose really looks.
+    const rlen = Math.max(1e-6, E.clone().sub(R.c).length());
+    const atten = svState.falloff
+        ? Math.max(0, (E.z - R.P)) / (rlen * rlen * rlen) * svState.refD * svState.refD
+        : 1.0;
+    svState.mat.uniforms.uAtten.value = atten;
+
+    const cw = renderer.domElement.width, ch = renderer.domElement.height;
+    const aspect = R.W / R.H;
+    let mw = cw, mh = Math.round(cw / aspect);
+    if (mh > ch) { mh = ch; mw = Math.round(ch * aspect); }
+    const mx = Math.round((cw - mw) / 2), my = Math.round((ch - mh) / 2);
+    cam2.aspect = aspect; cam2.updateProjectionMatrix();
+
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, cw, ch);
+    renderer.setClearColor(0x000000, 1);
+    renderer.clear();
+
+    const drawSim = (x, y, w, h) => {
+        renderer.setViewport(x, y, w, h);
+        renderer.setScissor(x, y, w, h);
+        renderer.setScissorTest(true);
+        renderer.render(svState.scene2, cam2);
+    };
+    const drawRaw = (x, y, w, h) => {
+        // The raw pre-distortion: the pass-1 buffer, flat, no falloff. Same
+        // frame, same buffer, same pose as the simulated view by construction.
+        renderer.setViewport(x, y, w, h);
+        renderer.setScissor(x, y, w, h);
+        renderer.setScissorTest(true);
+        const savedA = svState.mat.uniforms.uAtten.value;
+        svState.mat.uniforms.uAtten.value = 1.0;
+        const flat = svState.cam2Flat || (svState.cam2Flat = new THREE.OrthographicCamera(-R.W / 2, R.W / 2, R.H / 2, -R.H / 2, 0.001, 10));
+        flat.position.set(0, 0, R.P + 1); flat.up.set(0, 1, 0); flat.lookAt(R.c);
+        flat.updateProjectionMatrix(); flat.updateMatrixWorld(true);
+        renderer.render(svState.scene2, flat);
+        svState.mat.uniforms.uAtten.value = savedA;
+    };
+
+    if (svState.pipShowsRaw) drawSim(mx, my, mw, mh); else drawRaw(mx, my, mw, mh);
+    if (svState.pip) {
+        const iw = Math.round(mw * 0.28), ih = Math.round(iw / aspect);
+        const ix = mx + mw - iw - Math.round(mw * 0.015), iy = my + Math.round(mw * 0.015);
+        renderer.setScissorTest(false);
+        renderer.setViewport(ix - 2, iy - 2, iw + 4, ih + 4);
+        renderer.setScissor(ix - 2, iy - 2, iw + 4, ih + 4);
+        renderer.setScissorTest(true);
+        renderer.setClearColor(0x1d6b80, 1); renderer.clear();
+        if (svState.pipShowsRaw) drawRaw(ix, iy, iw, ih); else drawSim(ix, iy, iw, ih);
+    }
+    renderer.setScissorTest(false);
+    renderer.setClearColor(0x000000, 0);
+
+    // The live camera is LEFT at the pass-1 eye on purpose. Restoring it here
+    // was the first thing A1 caught: every downstream reader (the anchor drift,
+    // bgShiftLUTFor's D, the A1 eye-agreement assert itself) would then be
+    // reading the app's head-tracked eye while the frame on screen was rendered
+    // from the simulated one — an instrument reporting on a pose it is not
+    // showing. Nothing needs the restore: updateCameraAndProjection() rewrites
+    // camera.position from head tracking on the first frame after SV is off.
+    svHudUpdate(E, atten);
+}
+
+function svHudUpdate(E, atten) {
+    if (!svState.hud) return;
+    if (!svState.showHud) { svState.hud.style.display = 'none'; return; }
+    svState.hud.style.display = 'block';
+    const r = canvasElement.getBoundingClientRect();
+    svState.hud.style.left = (r.left + 8) + 'px';
+    svState.hud.style.top = (r.top + 8) + 'px';
+
+    const R = svPanelRect();
+    const D = Math.max(1e-3, Math.abs(E.z - R.P));
+    const off = Math.hypot(E.x, E.y);
+    const th = Math.atan2(off, D) * 180 / Math.PI;
+    const om = svOmegaFrac(E), sub = svSubtenseDeg(E), K = svKAt(E);
+    const st = svPoseStats();
+    const drift = svAnchorDrift(E);
+    svState.lastDrift = drift.maxPx;
+
+    const pad = (s, n) => (s + '                    ').slice(0, n);
+    const L = [];
+    L.push('SIMULATED VIEWER  a130' + (svState.perturb ? '   [A2 PERTURBED]' : ''));
+    L.push(pad('theta', 17) + th.toFixed(1) + ' deg   (yaw ' + svState.yawDeg.toFixed(1) +
+        ', pitch ' + svState.pitchDeg.toFixed(1) + ')');
+    L.push(pad('|E|', 17) + (svState.refD * svState.dollyGain).toFixed(4) + '  (D_REF ' +
+        svState.refD.toFixed(4) + ' x dolly ' + svState.dollyGain.toFixed(2) + ')');
+    if (K) {
+        L.push(pad('k needed here', 17) + K.kHere.toFixed(0) + ' px   (' + (100 * K.kHere / K.pw).toFixed(0) + '% of image width)');
+        L.push(pad('k budgeted', 17) + K.kBudget.toFixed(0) + ' px   (cone ' + bgViewFadeEndDeg +
+            ' deg rim at the BAKE pose, D_REF ' + svState.refD.toFixed(3) + ')');
+        L.push(pad('completion used', 17) + (100 * K.kHere / SV_COMPLETION_CAP_TEXELS).toFixed(0) +
+            '% of the ' + SV_COMPLETION_CAP_TEXELS + '-texel ceiling on mark reach');
+    } else {
+        L.push(pad('k', 17) + 'unavailable (no depth map loaded)');
+    }
+    L.push(pad('Omega', 17) + (100 * om.frac).toFixed(0) + '% of head-on   subtense ' +
+        sub.h.toFixed(1) + ' x ' + sub.v.toFixed(1) + ' deg');
+    L.push(pad('falloff', 17) + atten.toFixed(3) + 'x  (geometric bound; real panels fall off faster)');
+    L.push(pad('shipping fade', 17) + svState.lastFade.toFixed(2) + ' opaque black  (cone ' +
+        bgViewFadeStartDeg + '/' + bgViewFadeEndDeg + ', not applied here)');
+    L.push(pad('anchor drift', 17) + drift.maxPx.toFixed(3) + ' px' + (drift.maxPx > 0.5 ? '   <-- SWIMMING' : ''));
+    L.push(pad('supersample', 17) + svState.ss.toFixed(2) + 'x linear (' + (svState.ss * svState.ss).toFixed(2) +
+        'x px)' + (svState.ss < SV_SUPERSAMPLE ? ' CAPPED: ' + svState.ssNote : ''));
+    L.push(pad('lens', 17) + svState.fovDeg.toFixed(2) + ' deg LOCKED');
+    L.push(pad('head poses', 17) + (st.n ? ('n=' + st.n + '  p50 ' + st.p50.toFixed(1) + '  p95 ' +
+        st.p95.toFixed(1) + '  p99 ' + st.p99.toFixed(1) + '  max ' + st.max.toFixed(1) + ' deg') : 'none recorded yet'));
+
+    // keep the child canvas, replace only the text
+    let txt = svState.hud.firstChild;
+    if (!txt || txt.nodeType !== 3) { txt = document.createTextNode(''); svState.hud.insertBefore(txt, svState.hud.firstChild); }
+    txt.nodeValue = L.join('\n') + '\n';
+    svDrawPosePlot(th);
+}
+
+// A8's second half: where the head actually goes. Dots are recorded poses in
+// (x, y) offset normalised by the cone rim at their own distance; the rings are
+// the fade start / fade end and the recorded p95 / p99.
+function svDrawPosePlot(thNow) {
+    const c = svState.poseCanvas; if (!c) return;
+    const g = c.getContext('2d'); const w = c.width, h = c.height, cx = w / 2, cy = h / 2;
+    g.clearRect(0, 0, w, h);
+    const st = svPoseStats();
+    const maxDeg = Math.max(bgViewFadeEndDeg * 1.35, st.n ? st.max * 1.1 : 0, Math.abs(thNow) * 1.1, 10);
+    const rOf = (deg) => (deg / maxDeg) * (Math.min(w, h) / 2 - 3);
+    const ring = (deg, col, dash) => {
+        g.strokeStyle = col; g.setLineDash(dash || []); g.beginPath();
+        g.arc(cx, cy, rOf(deg), 0, Math.PI * 2); g.stroke(); g.setLineDash([]);
+    };
+    ring(bgViewFadeStartDeg, '#2e8fa8');
+    ring(bgViewFadeEndDeg, '#39c3e6');
+    if (st.n) { ring(st.p95, '#e8c14a', [3, 3]); ring(st.p99, '#e86a4a', [3, 3]); }
+    g.fillStyle = 'rgba(160,230,255,0.55)';
+    const n = svPoseLog.th.length;
+    for (let i = 0; i < n; i++) {
+        const t = svPoseLog.th[i], a = Math.atan2(svPoseLog.y[i], svPoseLog.x[i]), rr = rOf(t);
+        g.fillRect(cx + rr * Math.cos(a) - 0.5, cy - rr * Math.sin(a) - 0.5, 1.5, 1.5);
+    }
+    const rr = rOf(thNow);
+    const a = Math.atan2(svEye().y, svEye().x);
+    g.strokeStyle = '#fff'; g.lineWidth = 1; g.beginPath();
+    g.arc(cx + rr * Math.cos(a), cy - rr * Math.sin(a), 3, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = '#9fe8ff'; g.font = '8px monospace';
+    g.fillText(maxDeg.toFixed(0) + 'deg', 2, 9);
+}
+
+// -----------------------------------------------------------------------------
+// A1 / A2 — the instrument's own acceptance test.
+//
+// WHAT IS BEING TESTED. Pass 1 puts world point Q somewhere on the panel; call
+// that panel point X. Pass 2 photographs the panel from E. If the
+// pre-distortion is right, X lies exactly on the ray E->Q, so the pasted image
+// of Q and the real object at Q project to the SAME pass-2 pixel. The residual
+// is the drift. Under a pass-1-only eye perturbation the two stop agreeing by a
+// predictable amount, which is what A2 asks for.
+//
+// WHAT IS NOT BEING TESTED. This is a FRUSTUM test on the real matrices, not a
+// photometric or shader test: it proves pass 1 and pass 2 agree about E and the
+// panel rect, which is precisely the failure mode A1 flags (a confident false
+// positive from a frame-convention mismatch). It does not prove the content's
+// depth is right.
+const SV_ANCHOR_UV = [[0.5, 0.5], [0.08, 0.08], [0.92, 0.08], [0.08, 0.92], [0.92, 0.92], [0.25, 0.62]];
+function svAnchorDrift(E, depthFrac) {
+    const R = svPanelRect();
+    const dfrac = (typeof depthFrac === 'number') ? depthFrac : 0.7;   // behind the panel
+    const zBack = R.P - dfrac * Math.max(1e-4, svState.refD * 0.5);
+    const cam2 = svState.cam2;
+    if (!cam2) return { maxPx: NaN, n: 0 };
+    const vpH = renderer.domElement.height;
+    let maxPx = 0;
+    for (const [u, v] of SV_ANCHOR_UV) {
+        // Q: a world point BEHIND the panel, chosen so its unperturbed panel
+        // hit is at panel-uv (u,v). Solving the ray gives Q directly.
+        const Xw = new THREE.Vector3((u - 0.5) * R.W, (v - 0.5) * R.H, R.P);
+        const t = (E.z - R.P) / (E.z - zBack);
+        const Q = new THREE.Vector3(E.x + (Xw.x - E.x) / t, E.y + (Xw.y - E.y) / t, zBack);
+        // where pass 1 (the LIVE camera matrices, perturbation included) puts Q
+        const nd = Q.clone().project(camera);
+        const Xh = new THREE.Vector3(nd.x * R.W / 2, nd.y * R.H / 2, R.P);
+        const a = Xh.clone().project(cam2), b = Q.clone().project(cam2);
+        const dpx = Math.hypot((a.x - b.x) * 0.5 * (vpH * cam2.aspect), (a.y - b.y) * 0.5 * vpH);
+        if (dpx > maxPx) maxPx = dpx;
+    }
+    return { maxPx, n: SV_ANCHOR_UV.length };
+}
+
+window.svAcceptanceTest = function (opts) {
+    opts = opts || {};
+    const sweep = opts.sweep || 40, step = opts.step || 5;
+    if (!svEnsure()) { console.error('[SV] acceptance test: renderer not ready'); return null; }
+    const R = svPanelRect();
+    const y0 = svState.yawDeg, p0 = svState.pitchDeg, pert0 = svState.perturb;
+    const out = { a1: null, sweep: [], a2: null, pass: false };
+
+    // ---- A1 (load-bearing): pass 1 and pass 2 must share E and the panel rect
+    // BEFORE any drift number is believed. Both projections are logged.
+    svState.perturb = null;
+    svState.yawDeg = 0; svState.pitchDeg = 0;
+    svRenderFrame();
+    const E = svEye();
+    const dE = camera.position.distanceTo(E);
+    // frameCorners maps the portal rect to NDC [-1,1]^2 exactly. Project the
+    // panel corners through the LIVE pass-1 camera and require that.
+    const corners = [[-1, -1, R.bl], [1, -1, R.br], [-1, 1, R.tl]];
+    let rectErr = 0;
+    for (const [nx, ny, P] of corners) {
+        const q = P.clone().project(camera);
+        rectErr = Math.max(rectErr, Math.abs(q.x - nx), Math.abs(q.y - ny));
+    }
+    out.a1 = {
+        eyeAgreement: dE, rectErrNdc: rectErr,
+        pass1Proj: Array.from(camera.projectionMatrix.elements),
+        pass2Proj: Array.from(svState.cam2.projectionMatrix.elements),
+        panelRect: { W: R.W, H: R.H, z: R.P },
+        ok: (dE < 1e-9) && (rectErr < 1e-5)
+    };
+    console.log('[SV][A1] eye agreement |E_pass1 - E_pass2| = ' + dE.toExponential(3) +
+        ' world units; panel rect -> NDC corner error = ' + rectErr.toExponential(3) +
+        '  => ' + (out.a1.ok ? 'AGREE' : 'MISMATCH'));
+    console.log('[SV][A1] pass1 projection', out.a1.pass1Proj);
+    console.log('[SV][A1] pass2 projection', out.a1.pass2Proj);
+    console.log('[SV][A1] panel rect', out.a1.panelRect);
+    if (!out.a1.ok) {
+        console.error('[SV][A1] pass 1 and pass 2 do NOT share a frame convention. ' +
+            'The acceptance test does not run — any drift number from here would be a ' +
+            'confident false positive about the frustum, which is the failure this ' +
+            'amendment exists to prevent.');
+        svState.yawDeg = y0; svState.pitchDeg = p0; svState.perturb = pert0;
+        return out;
+    }
+
+    // ---- the scrub: anchor drift across +/- sweep, on the sphere (A3)
+    for (let a = -sweep; a <= sweep + 1e-9; a += step) {
+        svState.yawDeg = a; svState.pitchDeg = 0;
+        svRenderFrame();
+        out.sweep.push({ yaw: a, driftPx: svAnchorDrift(svEye()).maxPx });
+    }
+    for (let a = -sweep; a <= sweep + 1e-9; a += step) {
+        svState.yawDeg = 0; svState.pitchDeg = a;
+        svRenderFrame();
+        out.sweep.push({ pitch: a, driftPx: svAnchorDrift(svEye()).maxPx });
+    }
+    const maxDrift = out.sweep.reduce((m, s) => Math.max(m, s.driftPx), 0);
+
+    // ---- A2: prove the instrument can SEE a break. Displace the pass-1 eye
+    // laterally by a known delta; the anchor must swim by the closed-form
+    // amount. Closed form (head-on, delta lateral, panel at z=P, eye at z=e,
+    // point at z=q): the panel hit moves by delta*(1 - t), t = (e-P)/(e-q), and
+    // the pass-2 lens is locked so that the panel height H fills viewportH
+    // pixels => drift_px = delta*(1-t)*viewportH/H. Derived independently of
+    // the matrix path that measures it.
+    const delta = opts.delta || (R.W * 0.05);
+    svState.yawDeg = 0; svState.pitchDeg = 0;
+    svState.perturb = { x: delta, y: 0, z: 0 };
+    svRenderFrame();
+    const Ea = svEye();
+    const zBack = R.P - 0.7 * Math.max(1e-4, svState.refD * 0.5);
+    const t = (Ea.z - R.P) / (Ea.z - zBack);
+    const aspect = R.W / R.H;
+    const cw = renderer.domElement.width, ch = renderer.domElement.height;
+    let mh = Math.min(ch, Math.round(cw / aspect));
+    const predicted = Math.abs(delta * (1 - t)) * (mh / R.H);
+    const measured = svAnchorDrift(Ea).maxPx;
+    svState.perturb = pert0;
+    out.a2 = { deltaWorld: delta, predictedPx: predicted, measuredPx: measured,
+               ratio: measured / Math.max(1e-9, predicted) };
+    console.log('[SV][A2] pass-1 eye perturbed by ' + delta.toFixed(5) + ' world units laterally: ' +
+        'predicted anchor swim ' + predicted.toFixed(2) + ' px (closed form), measured ' +
+        measured.toFixed(2) + ' px (matrix path), ratio ' + out.a2.ratio.toFixed(4));
+
+    svState.yawDeg = y0; svState.pitchDeg = p0; svState.perturb = pert0;
+    out.maxDriftPx = maxDrift;
+    out.pass = out.a1.ok && maxDrift < 0.5 && Math.abs(out.a2.ratio - 1) < 0.05;
+    console.log('[SV] acceptance: max anchor drift over +/-' + sweep + ' deg = ' + maxDrift.toFixed(4) +
+        ' px across ' + out.sweep.length + ' poses; A2 ratio ' + out.a2.ratio.toFixed(4) +
+        '  => ' + (out.pass ? 'PASS' : 'FAIL'));
+    if (!out.pass) {
+        console.error('[SV] acceptance FAILED. Report it. Do NOT tune the overlay to hide it — ' +
+            'a swimming anchor means the two passes disagree about the geometry, and every ' +
+            'judgement made through this mode afterwards inherits that error.');
+    }
+    return out;
+};
+
+window.simViewer = {
+    on() { svState.active = true; console.log('[SV] on. Pre-distortion is now being cancelled by a simulated physical viewer.'); return svState; },
+    off() {
+        svState.active = false;
+        if (svState.hud) svState.hud.style.display = 'none';
+        console.log('[SV] off.');
+    },
+    pose(yaw, pitch) { svState.yawDeg = yaw || 0; svState.pitchDeg = pitch || 0; return svState; },
+    dolly(g) { svState.dollyGain = Math.max(0.05, g || 1); return svState; },
+    pip(on, showRawInInset) { svState.pip = on !== false; if (showRawInInset !== undefined) svState.pipShowsRaw = !!showRawInInset; return svState; },
+    swap() { svState.pipShowsRaw = !svState.pipShowsRaw; return svState.pipShowsRaw ? 'main=sim inset=raw' : 'main=raw inset=sim'; },
+    falloff(on) { svState.falloff = on !== false; return svState; },
+    hud(on) { svState.showHud = on !== false; return svState; },
+    state: svState,
+    test: (o) => window.svAcceptanceTest(o),
+    poses: svPoseStats
+};
+
 function render() {
     requestAnimationFrame(render);
+    // a130: the simulated viewer owns the frame when it is on. Pass 1 is
+    // renderPortalFrame() unchanged — SV never forks the renderer it measures.
+    if (svState.active) { try { svRenderFrame(); return; } catch (e) { console.error('[SV] frame failed, falling back to the raw portal render:', e); svState.active = false; } }
+    renderPortalFrame();
+}
+
+function renderPortalFrame() {
 
     // Lock to prevent rendering during clearing
     if (isClearing) {
