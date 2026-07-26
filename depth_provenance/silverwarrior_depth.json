@@ -1,0 +1,28 @@
+{
+  "_schema": "moebius depth provenance v1",
+  "_why": "A120 found the asset pipeline has no provenance record at all: no PNG text chunks, no estimator named in README/HANDOFF/assets.json/spec, no float artefacts, bulk commits. a133 then showed the depth SOURCE is 8-bit, which is an asset-pipeline fact the renderer cannot fix. Every future depth map records these fields at generation time, from its first commit.",
+  "file": "silverwarrior_depth.png",
+  "asset": "warrior",
+  "container": {
+    "width": 3000,
+    "height": 3000,
+    "bitDepth": 8,
+    "colorType": 0,
+    "informationQuantum": "1/255 (measured by a89 at bake time, NOT the container)"
+  },
+  "sha256": "6450b684f7c2c06083ece150d2f0c8ed4fdf9ecfa971dad97b5a60b97d93662c",
+  "estimator": null,
+  "estimatorVersion": null,
+  "estimatorCommit": null,
+  "settings": null,
+  "generatedUTC": null,
+  "floatOriginal": null,
+  "status": "UNKNOWN \u2014 predates this record. See REVIEW.md Addendum 120.",
+  "REQUIRED_FOR_NEW_ASSETS": [
+    "estimator",
+    "estimatorVersion",
+    "settings",
+    "generatedUTC",
+    "floatOriginal"
+  ]
+}

@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a138 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a143 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -533,8 +533,34 @@ function updateViewFade() {
         const D2R = Math.PI / 180;
         const aH = Math.atan(Math.abs(latestDetectedFaceX - 0.5) * 2 * Math.tan(p.hfov * 0.5 * D2R)) / D2R;
         const aV = Math.atan(Math.abs(latestDetectedFaceY - 0.5) * 2 * Math.tan(p.vfov * 0.5 * D2R)) / D2R;
-        const fH = (aH - (p.hfov * 0.5 - 10)) / 10;
-        const fV = (aV - (p.vfov * 0.5 - 10)) / 10;
+        // A143 THE BAND IS DERIVED FROM THE TRACKER'S OWN JITTER, not a fixed
+        // 10 degrees. MEASURED with the shipped constants (harness/fadecurve.js,
+        // default profile hfov 60, scalar 1, lens 90):
+        //     darkening BEGINS at virtual theta 18.0 deg   (documented 35)
+        //     FULLY BLACK at   virtual theta 26.6 deg      (documented 45)
+        // The user reported exactly this ("even 10 degrees off and it's
+        // darkening"). Cause: a 10-degree band out of a 30-degree half-FOV is a
+        // THIRD of the entire trackable range, and camOff=0.2 maps the whole
+        // half-frame onto only 26.6 deg of virtual angle — so the face-frame
+        // term is the only fade that ever fires and it fires early.
+        //
+        // The band's job is to hide poses the tracker is about to lose, so its
+        // width should come from how unreliable the tracker actually is, not
+        // from a guess. sigma is a running standard deviation of the detected
+        // nose angle; the band is 3 sigma, floored at 2 degrees so it never
+        // vanishes and capped at the old 10 so this can only ever be LESS
+        // conservative than what shipped. Self-calibrating: a steady tracker
+        // gets a narrow band, a noisy one widens it on its own evidence.
+        if (!window._faceJit) window._faceJit = { n: 0, mH: 0, sH: 0, mV: 0, sV: 0 };
+        const J = window._faceJit, w = 0.02;          // ~1s at 50Hz
+        J.n++;
+        J.mH += w * (aH - J.mH); J.sH += w * ((aH - J.mH) * (aH - J.mH) - J.sH);
+        J.mV += w * (aV - J.mV); J.sV += w * ((aV - J.mV) * (aV - J.mV) - J.sV);
+        const bandOf = (v) => Math.min(10, Math.max(2, 3 * Math.sqrt(Math.max(0, v))));
+        const bH = (J.n > 25) ? bandOf(J.sH) : 10, bV = (J.n > 25) ? bandOf(J.sV) : 10;
+        window._faceBand = { h: bH, v: bV };
+        const fH = (aH - (p.hfov * 0.5 - bH)) / bH;
+        const fV = (aV - (p.vfov * 0.5 - bV)) / bV;
         f = Math.max(f, Math.min(1, Math.max(0, fH)), Math.min(1, Math.max(0, fV)));
     }
     _viewFadeEl.style.opacity = f > 0.003 ? f.toFixed(3) : '0';
@@ -6467,7 +6493,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a138';
+const MOEBIUS_BUILD = 'v3.13.25-a143';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -9222,6 +9248,30 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         const exR = wantFar ? MXf : (bx1 === pw-1 ? MXn : 0);
         const exT = wantFar ? MYf : (by0 === 0    ? MYn : 0);
         const exB = wantFar ? MYf : (by1 === ph-1 ? MYn : 0);
+        // A139 IS THE SKIRT CONE-BLIND? Print the shipped margin beside the law
+        // that a113 established and measured, for THIS bin's own depth, at the
+        // live cone. 0.10 / 0.05 world are hardcoded and the comment says they
+        // were sized for "the 45-degree pan with headroom" — so by inspection
+        // they cannot move with bgViewFadeEndDeg, and this is the shipped
+        // default path (a114: quick and v2 never reach v1's scene extension,
+        // where the corrected law actually lives). Same shape as the a132
+        // sweep: print at two cones and assert it moved.
+        //
+        // The law: a texel at depth d shifts ex*z(d)/(D-z(d)) * pxPerWorld at
+        // the rim, ex = D*tan(cone). bgShiftLUTFor's fwd table IS that
+        // function, so the bin's requirement is |fwd(meanDepth)| in source px.
+        // NOT changed here — measured first, per REPLY01 3.
+        {
+            const _lut = bgShiftLUTFor(pw, ph);
+            const _md = Math.max(0, Math.min(1, meanDV[k0]));
+            const _need = Math.abs(_lut.fwd[Math.round(_md * _lut.N)]);
+            const _shipX = wantFar ? MXf : MXn, _shipY = wantFar ? MYf : MYn;
+            console.log('[MPI-V2] a139 skirt ' + tag + '/bin' + k + ' meanD=' + _md.toFixed(3) +
+                (wantFar ? ' (BACKDROP)' : '') + ': shipped ' + _shipX + 'x' + _shipY + ' px' +
+                ' (' + (wantFar ? '0.10' : '0.05') + ' world, HARDCODED); the a113 law asks ' +
+                _need.toFixed(0) + ' px at cone ' + bgViewFadeEndDeg + 'deg' +
+                (_need > Math.max(_shipX, _shipY) ? '  <-- SHORT by ' + (_need - Math.max(_shipX, _shipY)).toFixed(0) + 'px' : ''));
+        }
         const bw = bx1-bx0+1, bh = by1-by0+1, BN = bw*bh;
         // textures over the in-frame bbox only (rows flipped:
         // uv v=1 at top, flipY=false data)
@@ -17629,10 +17679,13 @@ const SV_SUPERSAMPLE = 1.75;
 // back. 16 Mpx ~ a 4K canvas at 1.75x; above it a phone GPU stalls. Logged.
 const SV_PIXEL_CAP = 16e6;
 // The look-at up-vector is DERIVED (panel +y projected into the view plane), so
-// there is no 0.999 snap band (A6). It degenerates only when the eye is exactly
-// over the panel's up axis; pitch is clamped short of that, and the clamp is
-// logged the first time it bites.
-const SV_PITCH_LIMIT_DEG = 85;
+// there is no 0.999 snap band (A6). At exactly +/-90 the eye lies in the panel
+// PLANE: the panel is edge-on, subtends zero solid angle, and the up-vector's
+// projection vanishes. The range is the full hemisphere on the user's call —
+// the degenerate poses are the endpoints, they are reachable, and the derived
+// up-vector falls back rather than producing NaN. Both axes, same limit.
+const SV_PITCH_LIMIT_DEG = 90;
+const SV_YAW_LIMIT_DEG = 90;
 // Head-pose recorder (A8): ~8 Hz for ~8.5 minutes of history.
 const SV_POSE_CAP = 4096, SV_POSE_MIN_MS = 125;
 
@@ -17642,9 +17695,10 @@ const svState = {
     falloff: true, pip: true, pipShowsRaw: true, showHud: true,
     refD: 0, fovDeg: 0, ss: 1, ssNote: '',
     perturb: null,          // A2: {x,y,z} world offset applied to the PASS-1 eye only
+    clampLogged: {},        // per-axis, so each clamp reports once
     rt: null, scene2: null, cam2: null, quad: null, mat: null, hud: null, poseCanvas: null,
     vp: null,               // pass-1 viewport actually used, in RT px (the panel rect)
-    lastFade: 0, lastDrift: 0, pitchClampLogged: false
+    lastFade: 0, lastDrift: 0, hudOpen: false, hudHead: null, hudBody: null
 };
 window.svState = svState;
 
@@ -17729,16 +17783,19 @@ function svSubtenseDeg(E) {
 function svEye() {
     const R = svPanelRect();
     const r = Math.max(1e-4, svState.refD * svState.dollyGain);
-    const yaw = svState.yawDeg * Math.PI / 180;
-    let pDeg = svState.pitchDeg;
-    if (Math.abs(pDeg) > SV_PITCH_LIMIT_DEG) {
-        if (!svState.pitchClampLogged) {
-            console.warn('[SV] pitch clamped to +/-' + SV_PITCH_LIMIT_DEG + ' deg (requested ' +
-                pDeg.toFixed(1) + '); beyond it the derived up-vector degenerates. Clamp is reported, not silent.');
-            svState.pitchClampLogged = true;
+    let yDeg = svState.yawDeg, pDeg = svState.pitchDeg;
+    const clampAx = (v, lim, ax) => {
+        if (Math.abs(v) <= lim) return v;
+        if (!svState.clampLogged[ax]) {
+            console.warn('[SV] ' + ax + ' clamped to +/-' + lim + ' deg (requested ' + v.toFixed(1) +
+                '). At the limit the eye lies in the panel plane and it is edge-on. Reported, not silent.');
+            svState.clampLogged[ax] = true;
         }
-        pDeg = Math.sign(pDeg) * SV_PITCH_LIMIT_DEG;
-    }
+        return Math.sign(v) * lim;
+    };
+    yDeg = clampAx(yDeg, SV_YAW_LIMIT_DEG, 'yaw');
+    pDeg = clampAx(pDeg, SV_PITCH_LIMIT_DEG, 'pitch');
+    const yaw = yDeg * Math.PI / 180;
     const pit = pDeg * Math.PI / 180;
     return new THREE.Vector3(
         r * Math.sin(yaw) * Math.cos(pit),
@@ -17818,18 +17875,32 @@ function svEnsure() {
     return true;
 }
 
+// A142 THE HUD IS COLLAPSED BY DEFAULT. It was a 13-line block plus a 108px
+// plot sitting over the top-left of the image — in a mode whose entire purpose
+// is looking at the image. Collapsed it is one line; click the header to
+// expand. The instrument should not occlude the thing it instruments.
 function svHudEnsure() {
     if (svState.hud) return;
     const d = document.createElement('div');
     d.id = 'svHud';
     d.style.cssText = 'position:fixed;z-index:60;pointer-events:none;font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;' +
-        'color:#9fe8ff;background:rgba(0,0,0,0.62);padding:6px 8px;border:1px solid #1d6b80;white-space:pre;';
-    document.body.appendChild(d);
+        'color:#9fe8ff;background:rgba(0,0,0,0.55);border:1px solid #1d6b80;white-space:pre;';
+    const head = document.createElement('div');
+    head.style.cssText = 'padding:3px 7px;cursor:pointer;pointer-events:auto;user-select:none;';
+    head.title = 'Click to expand / collapse the simulated-viewer readout';
+    head.addEventListener('click', (e) => {
+        svState.hudOpen = !svState.hudOpen;
+        e.preventDefault(); e.stopPropagation();
+    });
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:0 7px 5px 7px;border-top:1px solid #17505f;';
     const c = document.createElement('canvas');
     c.width = 108; c.height = 108;
     c.style.cssText = 'display:block;margin-top:5px;background:rgba(0,0,0,0.35);border:1px solid #1d6b80;';
-    d.appendChild(c);
-    svState.hud = d; svState.poseCanvas = c;
+    body.appendChild(c);
+    d.appendChild(head); d.appendChild(body);
+    document.body.appendChild(d);
+    svState.hud = d; svState.hudHead = head; svState.hudBody = body; svState.poseCanvas = c;
 }
 
 // The k the HUD reports. k is the screen displacement in SOURCE texels between
@@ -18052,8 +18123,17 @@ function svHudUpdate(E, atten) {
     svState.lastDrift = drift.maxPx;
 
     const pad = (s, n) => (s + '                    ').slice(0, n);
+    // The collapsed line carries the four numbers worth glancing at: where the
+    // eye is, what the reveal costs here, what the bake paid for, and how much
+    // of the panel is left. Everything else is one click away.
+    svState.hudHead.textContent = (svState.hudOpen ? '\u25be' : '\u25b8') + ' SV  ' +
+        th.toFixed(1) + '\u00b0   k ' + (K ? (K.kHere.toFixed(0) + '/' + K.kBudget.toFixed(0)) : '-') +
+        '   \u03a9 ' + (100 * om.frac).toFixed(0) + '%' +
+        (svState.perturb ? '   [A2 PERTURBED]' : '') +
+        (drift.maxPx > 0.5 ? '   DRIFT ' + drift.maxPx.toFixed(1) + 'px' : '');
+    svState.hudBody.style.display = svState.hudOpen ? 'block' : 'none';
+    if (!svState.hudOpen) return;
     const L = [];
-    L.push('SIMULATED VIEWER  a130' + (svState.perturb ? '   [A2 PERTURBED]' : ''));
     L.push(pad('theta', 17) + th.toFixed(1) + ' deg   (yaw ' + svState.yawDeg.toFixed(1) +
         ', pitch ' + svState.pitchDeg.toFixed(1) + ')');
     L.push(pad('|E|', 17) + (svState.refD * svState.dollyGain).toFixed(4) + '  (D_REF ' +
@@ -18080,8 +18160,8 @@ function svHudUpdate(E, atten) {
         st.p95.toFixed(1) + '  p99 ' + st.p99.toFixed(1) + '  max ' + st.max.toFixed(1) + ' deg') : 'none recorded yet'));
 
     // keep the child canvas, replace only the text
-    let txt = svState.hud.firstChild;
-    if (!txt || txt.nodeType !== 3) { txt = document.createTextNode(''); svState.hud.insertBefore(txt, svState.hud.firstChild); }
+    let txt = svState.hudBody.firstChild;
+    if (!txt || txt.nodeType !== 3) { txt = document.createTextNode(''); svState.hudBody.insertBefore(txt, svState.hudBody.firstChild); }
     txt.nodeValue = L.join('\n') + '\n';
     svDrawPosePlot(th);
 }
@@ -20881,16 +20961,43 @@ function setupStaticControlListeners() {
         // head. Grab metaphor: drag the scene right = camera moves left.
         // Double-click resets to the tracked pose. Capture-phase listeners on
         // window so no other canvas handler can swallow the gesture.
+        // A141 IN SIMULATED-VIEWER MODE THE DRAG MOVES THE SIMULATED EYE, and it
+        // needs no modifier: SV is a deliberate mode you switch into to look
+        // around, so a plain drag is the gesture. The head-tracking drag still
+        // owns the modifier version, and both remain available.
+        // Mapping: dragging RIGHT swings the eye LEFT, the same grab metaphor
+        // the head-offset drag uses. A full canvas width of travel sweeps the
+        // whole +/-90 range, so the endpoints are reachable in one gesture.
+        const _svDragging = () => (typeof svState !== 'undefined') && svState.active;
         const _viewDragStart = (e) => {
             if (e.target !== canvasElement) return;
-            if (!(e.metaKey || e.ctrlKey || e.shiftKey) || e.button !== 0) return;
-            _viewDragActive = true; _viewDragLX = e.clientX; _viewDragLY = e.clientY;
+            const sv = _svDragging();
+            if (!sv && (!(e.metaKey || e.ctrlKey || e.shiftKey) || e.button !== 0)) return;
+            if (sv && e.button !== 0) return;
+            _viewDragActive = sv ? 'sv' : true;
+            _viewDragLX = e.clientX; _viewDragLY = e.clientY;
             e.preventDefault(); e.stopPropagation();
-            console.log('[VIEW] drag start');
+            console.log(sv ? '[SV] scrub start' : '[VIEW] drag start');
         };
         const _viewDragMove = (e) => {
             if (!_viewDragActive) return;
             const r = canvasElement.getBoundingClientRect();
+            if (_viewDragActive === 'sv') {
+                const gx = (2 * SV_YAW_LIMIT_DEG) / Math.max(1, r.width);
+                const gy = (2 * SV_PITCH_LIMIT_DEG) / Math.max(1, r.height);
+                svState.yawDeg = Math.max(-SV_YAW_LIMIT_DEG, Math.min(SV_YAW_LIMIT_DEG,
+                    svState.yawDeg - (e.clientX - _viewDragLX) * gx));
+                svState.pitchDeg = Math.max(-SV_PITCH_LIMIT_DEG, Math.min(SV_PITCH_LIMIT_DEG,
+                    svState.pitchDeg + (e.clientY - _viewDragLY) * gy));
+                const yEl = document.getElementById('svYaw'), pEl = document.getElementById('svPitch');
+                const yV = document.getElementById('svYawVal'), pV = document.getElementById('svPitchVal');
+                if (yEl) yEl.value = svState.yawDeg; if (pEl) pEl.value = svState.pitchDeg;
+                if (yV) yV.textContent = svState.yawDeg.toFixed(1);
+                if (pV) pV.textContent = svState.pitchDeg.toFixed(1);
+                _viewDragLX = e.clientX; _viewDragLY = e.clientY;
+                e.preventDefault(); e.stopPropagation();
+                return;
+            }
             const sx = terrariumWidth / Math.max(1, r.width);   // full canvas drag ~ one frame width of travel
             manualCamDX -= (e.clientX - _viewDragLX) * sx * 2;
             manualCamDY += (e.clientY - _viewDragLY) * sx * 2;  // screen y down = camera up (grab)
@@ -20899,14 +21006,27 @@ function setupStaticControlListeners() {
         };
         const _viewDragEnd = (e) => {
             if (!_viewDragActive) return;
+            const wasSv = (_viewDragActive === 'sv');
             _viewDragActive = false;
-            console.log('[VIEW] manual offset:', manualCamDX.toFixed(3), manualCamDY.toFixed(3));
+            if (wasSv) console.log('[SV] yaw ' + svState.yawDeg.toFixed(1) + ' pitch ' + svState.pitchDeg.toFixed(1));
+            else console.log('[VIEW] manual offset:', manualCamDX.toFixed(3), manualCamDY.toFixed(3));
         };
         window.addEventListener('pointerdown', _viewDragStart, true);
         window.addEventListener('pointermove', _viewDragMove, true);
         window.addEventListener('pointerup', _viewDragEnd, true);
         window.addEventListener('pointercancel', _viewDragEnd, true);
         canvasElement.addEventListener('dblclick', () => {
+            if (typeof svState !== 'undefined' && svState.active) {
+                svState.yawDeg = 0; svState.pitchDeg = 0; svState.dollyGain = 1;
+                for (const [id, v] of [['svYaw', 0], ['svPitch', 0], ['svDolly', 1]]) {
+                    const el = document.getElementById(id); if (el) el.value = v;
+                }
+                for (const [id, v] of [['svYawVal', '0.0'], ['svPitchVal', '0.0'], ['svDollyVal', '1.00']]) {
+                    const el = document.getElementById(id); if (el) el.textContent = v;
+                }
+                console.log('[SV] pose reset to head-on');
+                return;
+            }
             manualCamDX = 0; manualCamDY = 0;
             console.log('[VIEW] manual offset reset');
         });
