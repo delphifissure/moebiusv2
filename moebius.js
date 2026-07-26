@@ -15853,6 +15853,40 @@ function bgBuildBackgroundLayerCore() {
 // A try/finally wrapper is the single point that covers all three bake modes'
 // return paths (quick, v2, v1) without threading a claim through each one.
 function buildBackgroundLayer() {
+    // A151 EVERY BAKE DROPS THE PREVIOUS BAKE'S SKIRT.
+    //
+    // The skirt is a quick-path object, but nothing removed it on a REBUILD:
+    // bgResetBakedState is called only when a new image is loaded. So baking
+    // quick and then switching the dropdown to v2 left the quick skirt standing
+    // in the scene, and a150 had just made that skirt a full-frame opaque
+    // backdrop that opts out of the island gate — it painted the quick plate's
+    // sky, with the mountain inpainted out of it, over v2's layers.
+    //
+    // MEASURED on starwatcher, luma standard deviation inside the crystal
+    // mountain (texture present = high, flat silhouette = low):
+    //     a81 v2                     106.4 mean / 60.3 std   textured
+    //     a150 v2 from a cold page   106.4 mean / 60.3 std   textured
+    //     a150 v2 AFTER a quick bake  69.1 mean / 11.6 std   FLAT
+    // Cold v2 is identical to a81 to the digit — the arc did not degrade it.
+    // The mode SWITCH did, and only after a149 put a skirt in the scene.
+    //
+    // Note what missed this: black% and ABSENT% were 0.00 in every one of those
+    // rows. A flat dark-blue blob is painted, and it is nowhere near the black
+    // threshold, so a hole-counting metric cannot see a large object losing its
+    // texture. That is a gap in the instruments, recorded in the addendum.
+    if (typeof bgSkirtMesh !== 'undefined' && bgSkirtMesh) {
+        try {
+            if (bgSkirtMesh.parent) bgSkirtMesh.parent.remove(bgSkirtMesh);
+            bgSkirtMesh.geometry.dispose();
+            if (bgSkirtMesh.userData.ownsMaterial) {
+                const _m = bgSkirtMesh.material;
+                const _d = _m && _m.uniforms && _m.uniforms.displacementMap && _m.uniforms.displacementMap.value;
+                if (_d && _d.dispose) _d.dispose();
+                if (_m) _m.dispose();
+            }
+        } catch (e) {}
+        bgSkirtMesh = null;
+    }
     try {
         return bgBuildBackgroundLayerCore();
     } finally {
