@@ -1,0 +1,85 @@
+{
+  "_schema": "moebius camera-fov-lut v1",
+  "_purpose": "Map a browser-reported camera identity to that camera's true field of view, so a head tracker can compute fx without a user-facing calibration step. Consumer: Z = fx*IPD/d in the head-Z path. fx cancels out of X and Y, so FOV error corrupts the depth axis only.",
+  "_authoringStatus": {
+    "state": "SCHEMA AND ROSTER COMPLETE, VALUES UNSOURCED",
+    "reason": "The authoring environment has no outbound network (curl to any external host returns 000). Every numeric FOV would therefore be recalled rather than sourced, which the brief's constraint 1 defines as fabrication, and uncitable under constraint 2. Per constraint 1, unsourced entries are null with a reason string rather than guessed.",
+    "howToPopulate": "See camera/CAMERA_FOV_FINDINGS.md section 6. Each entry needs raw+type+aspect+source+tier. The resolver already consumes populated entries with no code change.",
+    "priorState": "NOT DERIVED. The brief requires the prior to come from the distribution of the assembled table. With zero populated rows there is no distribution. resolve-intrinsics.js therefore prefers a live per-session estimate from the observed face over any constant, and refuses to invent one."
+  },
+  "_valueSchema": {
+    "raw": "the number AS QUOTED by the source. Never store only a derived number.",
+    "type": "diagonal | horizontal | vertical",
+    "aspect": "the aspect the quoted figure applies to, e.g. '16:9' or '4:3'",
+    "tier": "A measured | B spec sheet | C marketing",
+    "source": { "url": "...", "kind": "calibration | teardown | review-with-method | vendor-spec | vendor-marketing" },
+    "conflicts": "array of alternative {raw,type,aspect,tier,source} when sources disagree; never silently pick one"
+  },
+  "_modeRules": {
+    "crop-v": "16:9 is a vertical crop of the 4:3 sensor. Horizontal FOV preserved, vertical lost.",
+    "crop-h": "wider output is a horizontal crop. Vertical FOV preserved, horizontal lost.",
+    "scale": "the full sensor is scaled to the output. Both FOVs preserved, only sampling changes.",
+    "unknown": "not established. The resolver emits a warning and assumes crop-v, which is the common case for USB UVC cameras, and says so in warnings."
+  },
+  "prior": {
+    "hFovDeg": null,
+    "reason": "unsourced — see _authoringStatus.priorState. Do not fill this in by feel; run derivePrior() over the populated table.",
+    "errorBoundDeg": null
+  },
+  "byVidPid": {},
+  "byLabel": {},
+  "byPattern": [
+    {
+      "pattern": "facetime",
+      "family": "apple-facetime-builtin",
+      "note": "Apple built-in. Splits into at least two generations (720p and 1080p) with different modules; the label alone does not separate them. getSettings().height is a weak discriminator (720 vs 1080) but a 1080p module can stream 720p, so it is not sufficient. Needs VID:PID or a resolution-ladder fingerprint.",
+      "sensorAspect": null,
+      "modeRule": "unknown",
+      "value": null,
+      "reasonNull": "unsourced in this environment"
+    },
+    {
+      "pattern": "studio display",
+      "family": "apple-studio-display",
+      "sensorAspect": null,
+      "modeRule": "unknown",
+      "value": null,
+      "reasonNull": "unsourced in this environment",
+      "warn": ["Center Stage is on by default on this device and dynamically crops and pans the sensor. See findings section 4 — with auto-framing active there is no static FOV and a correct fx does not rescue the tracker."]
+    },
+    {
+      "pattern": "^integrated camera$",
+      "family": "GENERIC-DO-NOT-POPULATE",
+      "value": null,
+      "reasonNull": "This label is shared across a very large number of unrelated Lenovo and Dell machines with completely different camera modules. A value attached to this key would be wrong for most of the machines that match it. Present as a NEGATIVE entry so that nobody adds one: the resolver treats family GENERIC-DO-NOT-POPULATE as an immediate fall-through to the prior, with a warning naming the ambiguity.",
+      "generic": true
+    },
+    {
+      "pattern": "^integrated[_ ]webcam",
+      "family": "GENERIC-DO-NOT-POPULATE",
+      "value": null,
+      "reasonNull": "Dell's generic string, same problem as 'Integrated Camera'.",
+      "generic": true
+    },
+    {
+      "pattern": "^(hd |usb )?(user facing|webcam|camera)$",
+      "family": "GENERIC-DO-NOT-POPULATE",
+      "value": null,
+      "reasonNull": "Catch-all generic labels seen across many OEMs.",
+      "generic": true
+    },
+    { "pattern": "logitech.*(c270|c 270)", "family": "logitech-c270", "sensorAspect": null, "modeRule": "unknown", "value": null, "reasonNull": "unsourced in this environment" },
+    { "pattern": "logitech.*(c920|c922|c925)", "family": "logitech-c92x", "sensorAspect": null, "modeRule": "unknown", "value": null, "reasonNull": "unsourced in this environment; C920/C922/C925e are NOT necessarily identical optics and must be sourced separately before sharing a family value" },
+    { "pattern": "logitech.*brio", "family": "logitech-brio", "sensorAspect": null, "modeRule": "unknown", "value": null, "reasonNull": "unsourced; Brio ships selectable FOV modes, so a single number is meaningless without the mode — see findings section 3", "warn": ["This device exposes user-selectable FOV modes. The active mode is not reported to the web platform."] },
+    { "pattern": "streamcam", "family": "logitech-streamcam", "value": null, "reasonNull": "unsourced in this environment" },
+    { "pattern": "razer kiyo", "family": "razer-kiyo", "value": null, "reasonNull": "unsourced in this environment" },
+    { "pattern": "facecam", "family": "elgato-facecam", "value": null, "reasonNull": "unsourced in this environment" },
+    { "pattern": "insta360 link", "family": "insta360-link", "value": null, "reasonNull": "unsourced in this environment", "warn": ["Gimbal-mounted with subject tracking; the optical axis moves. Treat as auto-framing."] }
+  ],
+  "_rosterNotSourced": [
+    "Apple: FaceTime HD 720p generation, FaceTime HD 1080p generation, Studio Display, iPhone front (per-generation), iPad front",
+    "Laptop OEM integrated: Dell, HP, Lenovo, ASUS, Acer, Framework — see findings section 2 on whether module-level (Chicony, Sunplus, Sonix, Bison, Luxvisions) sourcing is tractable",
+    "USB: Logitech C270 / C920 / C922 / C925e / StreamCam / Brio / MX Brio, Razer Kiyo, Elgato Facecam, Insta360 Link, NexiGo, Anker",
+    "Mobile front cameras: top iPhone and Android models"
+  ]
+}

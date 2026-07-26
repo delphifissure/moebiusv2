@@ -644,5 +644,16 @@
   
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection@latest/dist/face-landmarks-detection.min.js"></script>
 
+  <!-- A148: camera intrinsics resolver. Loaded BEFORE moebius.js so the fade
+       and the head-Z path read one resolved set rather than two private
+       guesses. The LUT itself is fetched at runtime (see below) and is
+       optional — without it the resolver falls through to the per-session
+       face-derived estimate and says so. -->
+  <script src=camera/resolve-intrinsics.js></script>
+  <script>
+    fetch('camera/camera-fov-lut.json').then(r => r.json())
+      .then(j => { window._cameraFovLut = j; })
+      .catch(() => console.warn('[A148] camera-fov-lut.json not loaded; resolver will use the face-derived estimate'));
+  </script>
 <script src="moebius.js"></script> </body>
 </html>
