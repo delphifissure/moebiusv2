@@ -48,6 +48,7 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
     if (o.noSkirt) window._noQuickSkirt = true;
+    if (o.edgeDepth) window._skirtEdgeDepth = true;   // A150: revert to a149's continuation
     bgQuickBake = (o.mode === 'quick');
     bgMPIFullPlanes = (o.mode === 'v2'); bgMPIMode = (o.mode === 'v2');
     bgBuildStamp = null; buildBackgroundLayer();
@@ -58,8 +59,18 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
       const cv = document.createElement('canvas'); cv.width = W; cv.height = Hh;
       const cx = cv.getContext('2d'); cx.drawImage(renderer.domElement, 0, 0, W, Hh);
       return cx.getImageData(0, 0, W, Hh).data; };
+    // A150: THE MEASUREMENT POLYGON MUST NOT MOVE BETWEEN ARMS. The bbox was
+    // derived from the rest frame with everything visible, so a skirt that
+    // paints further out enlarged the very region its black% is divided by —
+    // the a149 and a150 arms were being scored over different areas, and the
+    // interior band silently acquired territory that had never been covered by
+    // anything. Derive it with the SKIRT HIDDEN, so it is a property of the
+    // plate and the foreground only and is identical in every arm.
     camera.position.set(0, 0, dist);
+    const _skV = (typeof bgSkirtMesh !== 'undefined' && bgSkirtMesh) ? bgSkirtMesh.visible : null;
+    if (_skV !== null) bgSkirtMesh.visible = false;
     const d0 = grab();
+    if (_skV !== null) bgSkirtMesh.visible = _skV;
     let x0 = W, x1 = -1, y0 = Hh, y1 = -1;
     for (let y = 0; y < Hh; y++) for (let x = 0; x < W; x++) { const i = (y * W + x) * 4;
       if (d0[i] + d0[i + 1] + d0[i + 2] > 24) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
@@ -91,11 +102,14 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     }
     camera.position.set(0, 0, dist); render();
     return out;
-  }, { degs: DEGS, band: BAND, mode: MODE, noSkirt: process.env.NOSKIRT === '1' });
+  }, { degs: DEGS, band: BAND, mode: MODE, noSkirt: process.env.NOSKIRT === '1',
+                             edgeDepth: process.env.EDGEDEPTH === '1' });
 
   const pad = (s, n) => String(s).padStart(n);
   console.log('\n' + ASSET + '  mode=' + MODE + '  WHERE IS THE BLACK? (outer ' + (BAND * 100) +
-              '% of the content bbox = "edge")' + (process.env.NOSKIRT === '1' ? '   [SKIRT OFF]' : '   [skirt on]'));
+              '% of the content bbox = "edge")' + (process.env.NOSKIRT === '1' ? '   [SKIRT OFF]'
+                : process.env.EDGEDEPTH === '1' ? '   [skirt on, a149 EDGE-depth continuation]'
+                : '   [skirt on, a150 FAR-ENVELOPE continuation]'));
   console.log('  deg   black% edge   ABSENT% edge   black% interior   total black%   edge share');
   for (const r of rows)
     console.log('  ' + pad(r.deg, 3) + pad(r.edgePct, 13) + pad(r.edgeAbsentPct, 15) +
