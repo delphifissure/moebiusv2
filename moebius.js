@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a126 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it; holes at 0.85x rim 5.21%% -> 3.17%%); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -82,7 +82,49 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 //   fraction on every asset. Those are consequences to measure and re-pin, not
 //   reasons to refuse — the range is a product decision.
 // The 10-degree fade band is kept: full support to 50, black by 60.
-let bgViewFadeStartDeg = 50, bgViewFadeEndDeg = 60;
+//
+// A127 REVERTED TO 35 / 45. a109's premise was "~120 degrees is becoming the
+// horizontal FOV of front-facing cams", but THIS FILE'S OWN per-device LUT
+// (a33) contradicts it — no device in it reaches 120:
+//     mac      cam 54 x 32   trackable +/-27 / +/-16   fade from +/-17 / +/-6
+//     iphone   cam 65 x 50   trackable +/-32.5 / +/-25
+//     ipad     cam 105 x 80  trackable +/-52.5 / +/-40
+// On a Mac the geometry was budgeted for poses the tracker cannot see, by 2.2x
+// horizontally and 3.75x vertically.
+//
+// AND THE COST LANDED THREE ADDENDA LATER WITHOUT BEING ATTRIBUTED BACK. a109
+// honestly predicted its own bill (reach x1.73, fold limit tightened by the
+// same factor), measured the MASK, found it barely moved, and shipped. Then
+// a117 found the fold tear dropping 692469 of 1737400 triangles — 40% — and
+// shipping the debris as a 1px comb, which is the "banded to oblivion" report.
+// k scales as tan(theta): 60 deg costs 1.73x the reach of 45 for poses no
+// webcam can even see.
+//
+// THE CONE IS FREE; RELIEF IS NOT. bgViewFadeEndDeg sizes ex = D*tan(fadeEnd)
+// — the excursion the geometry is BUDGETED for. The shift actually applied at
+// a live head angle theta is -D*tan(theta)*z/(D-z), in which bgViewFadeEndDeg
+// does not appear. At any pose inside the cone the image is byte-identical
+// whether the cone is 45 or 60. Narrowing costs no depth impression; it only
+// stops sizing the machinery for poses nobody reaches.
+//
+// 35/45 is also the last envelope MEASURED hole-free on all assets (a30: zero
+// holes at nine poses across 35; a32: full 45-degree 12-pose scan, starwatcher
+// 0 hole px, frazetta 74k -> 10-42 px). a32 also wrote the trigger that was
+// missed: "If the envelope ever widens toward the 'gyro past face-cam FOV'
+// regime, revisit."
+//
+// STANDING CAVEAT: on phone/tablet the GYRO takes over where the camera loses
+// the face, and device tilt genuinely reaches 45-60+. Narrowing is free only up
+// to the reachable limit of the POSE SOURCE. The correct fix is to split the
+// budget from the fade and add a graceful-degradation band between them
+// (handoff brief 2.4); until that exists, 35/45 is the measured-safe envelope
+// and window._coneWide = true restores 50/60.
+// NOT a window flag: this is read at module load, so a hatch here cannot be
+// toggled at runtime — measured, an A/B that set window._coneWide after load
+// compared 45 against itself and printed identical numbers. The cone is two
+// plain globals; anything wanting to change it assigns them directly (the
+// shift LUT keys on bgViewFadeEndDeg, so the cache follows).
+let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
 
 // ===================== CONE SLOPE: ONE DEFINITION =====================
 // A90. The plate's maximum rise per source pixel. Five call sites had
@@ -6404,7 +6446,11 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // settings/pose stamp. Purpose: a single drag-and-drop artifact that lets an
 // external reviewer (human or AI) see the full pipeline state for THIS pose.
 // ============================================================================
-const MOEBIUS_DEBUG_VERSION = 'FG-SUB rimdepth v3.13.25-a126 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it; holes at 0.85x rim 5.21%% -> 3.17%%); conservative defaults kept (membrane/row-colours OPT-IN)';
+// A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
+// feature list still prints to the console at load; the grid gets the version.
+const MOEBIUS_BUILD = 'v3.13.25-a128';
+const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
+const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
 let _dbgPanelMaterial = null;
 // A123: the SD bundle borrowed this material from the debug-sheet exporter,
@@ -10499,6 +10545,25 @@ function bgBuildBackgroundLayerCore() {
                 if (!_qStep) console.log('[QUICK-BAKE] a89: depth is continuous (no quantisation grid found) — dequantise skipped');
                 else console.log('[QUICK-BAKE] a89: source depth quantum = 1/' + Math.round(1 / _qStep) + (Math.round(1/_qStep) === 255 ? ' (8-bit)' : ''));
             }
+            // A127b PRINT k. k is the screen displacement in SOURCE TEXELS
+            // between the near and far ends of the depth range, at the rim of
+            // the supported cone. Nearly every open thread in this arc is one
+            // inequality in k — the fold limit is sqrt(2)/k, the reveal a depth
+            // step opens is dd*k, the hidden-depth precision budget is 1/k, and
+            // an MPI plane count only works if N >~ k. It was computable all
+            // along (max(|m0|,|m1|) from the a102 envelope) and never printed,
+            // so every one of those threads was argued instead of checked.
+            try {
+                const _kL = bgShiftLUTFor(pw, ph);
+                const _k = Math.max(Math.abs(_kL.m0), Math.abs(_kL.m1));
+                const _fold = Math.SQRT2 / Math.max(1e-6, _k);
+                const _lv = _qStep > 0 ? (_fold / _qStep) : NaN;
+                console.log('[QUICK-BAKE] a127b k = ' + _k.toFixed(0) + ' px (' +
+                    (100 * _k / pw).toFixed(0) + '% of image width) at cone ' + bgViewFadeEndDeg +
+                    'deg | fold limit sqrt(2)/k = ' + _fold.toFixed(5) + ' depth' +
+                    (_qStep > 0 ? ' = ' + _lv.toFixed(2) + ' source quanta' + (_lv < 1 ? '  <-- BELOW ONE QUANTUM: the smallest step the source can express already folds' : '') : '') +
+                    ' | 1px hidden-depth precision needs ' + (1 / Math.max(1e-6, _k)).toFixed(5) + ' depth');
+            } catch (e) { console.warn('[QUICK-BAKE] a127b k unavailable:', e); }
             if (window._noDequant !== true && _qStep > 0) {
                 const _qDen = Math.round(1 / _qStep);
                 const lvQ = new Int32Array(PNq);
@@ -11852,7 +11917,51 @@ function bgBuildBackgroundLayerCore() {
                 if (window._legacyPlateTear !== true) {
                     if (plateF) {
                         const _t0P = Date.now();
-                        const _st = bgConeSlopePerPx(pw), _stD = _st * 1.41421356;
+                        // A128 THE STEP IS 1/k FROM THE ENVELOPE, NOT THE STALE SLOPE.
+                        // a126 shipped with step = bgConeSlopePerPx(pw) and its log
+                        // line called that "1/k". It is not. Printing k (a127b)
+                        // exposed the contradiction in one run:
+                        //     bgConeSlopePerPx(851)      = 0.00564
+                        //     1/k from the a102 envelope = 1/568 = 0.00176  (45 deg)
+                        // 3.2x LOOSER, so the plate was under-limited by that factor.
+                        // It is also cone-BLIND: bgConeSlopePerPx returned 0.00564 at
+                        // BOTH 45 and 60 degrees while the true 1/k moved 0.00176 ->
+                        // 0.00102 — which is exactly why narrowing the cone changed no
+                        // rendered pixel (measured: black% identical to +/-0.01 at
+                        // every fixed angle).
+                        // Root cause: bgConeSlopePerPx ships `0.0025 * (1920/pw)`,
+                        // calibrated when k was believed to be 396 at 1920; a101/a102
+                        // measured ~1282. The function HAS a derived branch, but it is
+                        // opt-in behind window._coneSlopeDerived — so a90's "one
+                        // cone-slope definition" unified the call sites while leaving
+                        // the default on the stale constant. Its other consumers each
+                        // need their own measurement; this fixes the one a126 owns.
+                        // The stale value nonetheless MEASURES BETTER (table below), so it stays
+                        // the default and the mislabel is fixed instead of the value.
+                        const _plL = bgShiftLUTFor(pw, ph);
+                        const _kPl = Math.max(Math.abs(_plL.m0), Math.abs(_plL.m1));
+                        // MEASURED, AND THE FOLD-CORRECT VALUE LOSES. Three arms,
+                        // troll, black% inside the footprint at fixed angles:
+                        //     arm               0    15    25    32    38 deg
+                        //     step = 1/k        0  0.48  0.97  1.44  1.98
+                        //     step = the above  0  0.55  0.98  1.30  1.63
+                        //     a87 tear          0  0.76  1.53  1.98  2.47
+                        // 1/k is fold-CORRECT and better at 15 deg, but worse at 32
+                        // and 38 — the angles inside and just past fade-start, which
+                        // is where the user looks. Plausible mechanism, NOT verified:
+                        // a tighter limit lowers the plate further, and a plate pushed
+                        // back parallaxes LESS (shift = ex*z/(D-z), so far content
+                        // moves less than near), so it lags the widening reveal and
+                        // under-covers. Stated as a hypothesis because the a128 arm's
+                        // texels-lowered figure was not captured in that run.
+                        // So the looser step SHIPS, on measurement, with its identity
+                        // stated honestly rather than mislabelled "1/k".
+                        // window._envelopePlateStep = true selects the fold-correct
+                        // 1/k for anyone re-testing this trade.
+                        const _st = (window._envelopePlateStep === true)
+                                  ? 1 / Math.max(1e-6, _kPl)
+                                  : bgConeSlopePerPx(pw);
+                        const _stD = _st * 1.41421356;
                         let _moved = 0, _maxMove = 0;
                         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                             const i = y*pw + x; const v0 = plateF[i]; let v = v0;
@@ -11873,7 +11982,7 @@ function bgBuildBackgroundLayerCore() {
                         plateDT.needsUpdate = true;
                         console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + _moved + ' texels lowered of ' + PNq +
                                     ' (' + (100*_moved/Math.max(1,PNq)).toFixed(2) + '%), max ' + _maxMove.toFixed(4) +
-                                    ' depth, step 1/k = ' + _st.toFixed(5) + '/texel, ' + (Date.now()-_t0P) + 'ms');
+                                    ' depth, step = ' + _st.toFixed(5) + '/texel (k=' + _kPl.toFixed(0) + '), ' + (Date.now()-_t0P) + 'ms');
                     }
                 } else if (window._noPlateTear !== true) {
                     const gpP = L.mesh.geometry.parameters || {};

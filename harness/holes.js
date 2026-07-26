@@ -38,9 +38,18 @@ const SRC = { troll: ['defaultImgColor.png','defaultImgDepth.png'],
 // Round 3: a126 replaces the plate TEAR with a plate SLOPE LIMIT. Compare
 // against the old tear and against simply not tearing, so the slope limit has
 // to beat both to earn the default.
-const ARMS = [ ['a126 slope-limit', {}],
-               ['a87 tear (old)',   { _legacyPlateTear: true }],
-               ['no plate tear',    { _legacyPlateTear: true, _noPlateTear: true }] ];
+// A127: rim fractions are of the LIVE cone (now 45deg, was 60), so 0.85
+// means 0.85 of the supported rim in both arms rather than a fixed angle.
+// Cone is set by assigning the globals directly — a load-time const cannot be
+// toggled by a window flag, which is how the first attempt compared 45 to
+// itself. Poses here are ABSOLUTE degrees, identical in both arms, because the
+// question is "at the same viewing angle, does a narrower BUDGET help?" — the
+// rendered shift does not contain bgViewFadeEndDeg, so any difference is the
+// machinery it sizes (fold limit, tear, plate slope limit, margins).
+const ARMS = [ ['a128 step=1/k',   { cone: 45 }],
+               ['a126 stale step', { cone: 45, _legacyPlateStep: true }],
+               ['a87 tear (old)',  { cone: 45, _legacyPlateTear: true }] ];
+const DEGS = [0, 15, 25, 32, 38];
 (async () => {
   fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(H, 'defaultImgColor.png'));
   fs.copyFileSync(path.join(WT, SRC[ASSET][1]), path.join(H, 'defaultImgDepth.png'));
@@ -53,14 +62,18 @@ const ARMS = [ ['a126 slope-limit', {}],
     const page = await browser.newPage({ viewport: { width: 720, height: 450 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0,160)));
     const logs = [];
-    page.on('console', m => { const t = m.text(); if (/plate plugs|cliff tear|plate tear|slope-limited/.test(t)) logs.push(t); });
+    page.on('console', m => { const t = m.text(); if (/plate plugs|cliff tear|plate tear|slope-limited|a127b k =/.test(t)) logs.push(t); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 40; t++) {
       const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch(e){ return false; } }).catch(()=>false);
       if (ok) break; await new Promise(r => setTimeout(r, 1000));
     }
     const rows = await page.evaluate(async (f) => {
-      window._rayReproject = true; Object.assign(window, f);
+      const degs = f.degs;
+      window._rayReproject = true;
+      if (f.cone) { bgViewFadeStartDeg = f.cone - 10; bgViewFadeEndDeg = f.cone; }
+      if (f._legacyPlateStep) window._legacyPlateStep = true;
+      if (f._legacyPlateTear) window._legacyPlateTear = true;
       bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
       bgBuildStamp = null; buildBackgroundLayer();
       if (f._noCut) setAllLayerUniforms('u_cutSharp', false);
@@ -78,18 +91,18 @@ const ARMS = [ ['a126 slope-limit', {}],
       for (let y=0;y<Hh;y++) for (let x=0;x<W;x++){ const i=(y*W+x)*4;
         if (d0[i]+d0[i+1]+d0[i+2] > 24){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; } }
       const out=[];
-      for (const frac of [0.0, 0.30, 0.52, 0.70, 0.85]) {
-        camera.position.set(frac*dist*Math.tan(60*Math.PI/180), 0, dist);
+      for (const frac of degs) {
+        camera.position.set(dist*Math.tan(frac*Math.PI/180), 0, dist);
         const d = grab();
         let n=0, tot=0;
         for (let y=y0;y<=y1;y++) for (let x=x0;x<=x1;x++){ const i=(y*W+x)*4; tot++;
           if (d[i]+d[i+1]+d[i+2] < 24) n++; }
         out.push({ frac, black: +(100*n/Math.max(1,tot)).toFixed(2),
-                   png: (frac===0.85) ? renderer.domElement.toDataURL('image/png') : null });
+                   png: (frac===38) ? renderer.domElement.toDataURL('image/png') : null });
       }
       camera.position.set(0,0,dist); render();
       return out;
-    }, flags);
+    }, Object.assign({degs: DEGS}, flags));
     for (const r of rows) { if (r.png) {
       try { fs.writeFileSync(path.join(OUTD,'HOLE_'+ASSET+'_'+tag.replace(/[^a-z]/gi,'')+'_085.png'),
             Buffer.from(r.png.split(',')[1],'base64')); } catch(e){} }
@@ -101,7 +114,7 @@ const ARMS = [ ['a126 slope-limit', {}],
     await page.close();
   }
   console.log('\n' + ASSET + '  black% INSIDE the layer footprint (letterbox excluded)');
-  console.log('  arm                 0.00    0.30    0.52    0.70    0.85');
+  console.log('  arm                  0deg   15deg   25deg   32deg   38deg');
   for (const [tag] of ARMS) console.log('  ' + tag.padEnd(18) + all[tag].map(r=>String(r.black).padStart(8)).join(''));
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });
