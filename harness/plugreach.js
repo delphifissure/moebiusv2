@@ -58,6 +58,32 @@ const POSES = [{ tag: '35deg', x: 0.140, y: 0.002 }, { tag: '52deg', x: 0.219, y
       for (let i = 0, p = 0; i < d.length; i += 4, p++) m[p] = d[i + 3] >= 8 ? 1 : 0; return m; };
     const out = { poses: {}, png: {}, gateTest: {} };
     const L = mediaLayers[0];
+    // THE INVARIANT'S OWN ACCEPTANCE TEST, stated as the thing it forbids:
+    // does the plate ever OVERWRITE A FOREGROUND PIXEL? Render the foreground
+    // alone, then the full frame; a pixel the foreground painted whose colour
+    // changed in the full frame is a pixel the backstop occluded, which is the
+    // violation. No gate toggling, no conflation with hole-filling.
+    {
+      const others = [];
+      for (const p of [{ tag: '0deg', x: 0, y: 0 }].concat(o.poses)) {
+        camera.position.set(p.x, p.y, 0.2);
+        const full = grab().slice();
+        others.length = 0;
+        scene.traverse(m => { if (m.isMesh && m !== L.mesh) { others.push([m, m.visible]); m.visible = false; } });
+        const fg = grab().slice();
+        for (const [m, v] of others) m.visible = v;
+        let fgPx = 0, over = 0, worst = 0;
+        for (let i = 0; i < fg.length; i += 4) {
+          if (fg[i + 3] < 8) continue;
+          fgPx++;
+          const dm = Math.max(Math.abs(fg[i] - full[i]), Math.abs(fg[i+1] - full[i+1]), Math.abs(fg[i+2] - full[i+2]));
+          if (dm > 2) { over++; if (dm > worst) worst = dm; }
+        }
+        out.gateTest['OVERWRITE ' + p.tag] = {
+          uncoveredGateOn: +(100 * over / Math.max(1, fgPx)).toFixed(2),
+          uncoveredGateOff: worst, alreadyPaintedPixelsChanged: fgPx };
+      }
+    }
     // IS THE GATE DOING ANY WORK THE DEPTH TEST DOES NOT ALREADY DO?
     // The plate is a backstop at background depth. Wherever the foreground
     // survives, the plate is BEHIND it and the depth test discards it for free.
@@ -138,9 +164,13 @@ const POSES = [{ tag: '35deg', x: 0.140, y: 0.002 }, { tag: '52deg', x: 0.219, y
     console.log('  ' + tag.padEnd(9) + String(v.uncoveredPct).padStart(9) +
       String(v.gateKilledPct + '%').padStart(22) + String(v.geometryMissingPct + '%').padStart(15) +
       String(v.plateOpenCoverPct + '% / ' + v.plateGatedCoverPct + '%').padStart(24));
+  console.log('\n  DOES THE BACKSTOP EVER OVERWRITE A FOREGROUND PIXEL? (the invariant, directly)');
+  for (const [tag, v] of Object.entries(res.gateTest)) if (tag.startsWith('OVERWRITE'))
+    console.log('  ' + tag.padEnd(20) + String(v.uncoveredGateOn).padStart(8) + '% of foreground pixels, worst delta ' +
+                v.uncoveredGateOff + ' levels (of ' + v.alreadyPaintedPixelsChanged + ' fg px)');
   console.log('\n  IS THE ISLAND GATE DOING WORK THE DEPTH TEST DOES NOT?');
   console.log('  pose      uncovered% gate ON   gate OFF   already-painted pixels that CHANGED');
-  for (const [tag, v] of Object.entries(res.gateTest))
+  for (const [tag, v] of Object.entries(res.gateTest)) if (!tag.startsWith('OVERWRITE'))
     console.log('  ' + tag.padEnd(9) + String(v.uncoveredGateOn).padStart(15) +
       String(v.uncoveredGateOff).padStart(11) + String(v.alreadyPaintedPixelsChanged + '%').padStart(38));
   for (const [tag, png] of Object.entries(res.png))
