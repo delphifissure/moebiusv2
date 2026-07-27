@@ -21,16 +21,22 @@ const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headl
 const WT = '/workspace/mm';
 const TMP = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/ucfg';
 const REVS = process.argv.slice(2);
+const ASSET = process.env.ASSET || 'troll';
+const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
+              star: ['starwatcher_color.png', 'starwatcher_depth.png'],
+              warrior: ['silverwarrior_color.png', 'silverwarrior_depth.png'] };
 // straight off the two sheets
-const POSES = [{ tag: '35deg', x: 0.140, y: 0.002 }, { tag: '52deg', x: 0.219, y: 0.138 }];
+const POSES = (process.env.REST === '1')
+  ? [{ tag: 'rest', x: 0, y: 0 }]
+  : [{ tag: '35deg', x: 0.140, y: 0.002 }, { tag: '52deg', x: 0.219, y: 0.138 }];
 const CTRL = { fgReachSlider: '60', fgSubThresholdSlider: '0.03',
                bgSeedModeSel: '2', bgRelaxModeSel: 'harmonic' };
 
 const materialise = (rev, dir) => {
   fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(dir, { recursive: true });
   execSync(`git archive ${rev} | tar -x -C ${dir}`, { cwd: WT });
-  fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(dir, 'defaultImgColor.png'));
-  fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(dir, 'defaultImgDepth.png'));
+  fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(dir, 'defaultImgColor.png'));
+  fs.copyFileSync(path.join(WT, SRC[ASSET][1]), path.join(dir, 'defaultImgDepth.png'));
   fs.copyFileSync(path.join(WT, 'harness', 'scratch_server.js'), path.join(dir, 'scratch_server.js'));
   fs.cpSync(path.join(WT, 'harness', 'vendor'), path.join(dir, 'vendor'), { recursive: true });
   const hp = path.join(dir, 'moebius.html');
@@ -42,8 +48,10 @@ const materialise = (rev, dir) => {
 
 (async () => {
   fs.mkdirSync(TMP, { recursive: true });
-  const browser = await chromium.launch({ executablePath: CHROME, headless: true,
-    args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const launch = () => chromium.launch({ executablePath: CHROME, headless: true,
+    args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+           '--ignore-gpu-blocklist', '--disable-dev-shm-usage', '--js-flags=--max-old-space-size=2048'] });
+  let browser = await launch();
   const rows = [];
   for (const spec of REVS) {
     const [rev, label] = spec.split(':');
@@ -51,7 +59,8 @@ const materialise = (rev, dir) => {
     materialise(rev, dir);
     const srv = spawn('node', ['scratch_server.js'], { cwd: dir, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 1500));
-    const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
+    const VW = parseInt(process.env.VW || '912', 10), VH = Math.round(VW * 513 / 912);
+    const page = await browser.newPage({ viewport: { width: VW, height: VH } });
     page.on('pageerror', e => console.log('  [' + label + ' PAGEERR] ' + e.message.slice(0, 140)));
     try {
       await page.goto('http://localhost:8099/moebius.html', { waitUntil: 'load', timeout: 90000 });
@@ -99,12 +108,18 @@ const materialise = (rev, dir) => {
       }, { poses: POSES, ctrl: CTRL });
       rows.push({ label, out });
       for (const [tag, png] of Object.entries(out.png))
-        fs.writeFileSync(path.join(TMP, label + '_' + tag + '.png'), Buffer.from(png.split(',')[1], 'base64'));
-    } catch (e) { rows.push({ label, err: e.message.slice(0, 200) }); }
-    await page.close(); srv.kill();
+        fs.writeFileSync(path.join(TMP, ASSET + '_' + label + '_' + tag + '.png'), Buffer.from(png.split(',')[1], 'base64'));
+    } catch (e) { rows.push({ label, err: e.message.slice(0, 200) });
+      // a dead page usually means the renderer process was killed; restart the
+      // browser so the remaining revisions still get measured
+      try { await browser.close(); } catch (e2) {}
+      browser = await launch();
+    }
+    try { await page.close(); } catch (e) {}
+    srv.kill();
     await new Promise(r => setTimeout(r, 800));
   }
-  console.log('\nTROLL, QUICK, THE USER\'S CONTROLS (fgReach 60, fgThresh 0.03, seed 2, relax harmonic)');
+  console.log('\n' + ASSET.toUpperCase() + ', QUICK, THE USER\'S CONTROLS (fgReach 60, fgThresh 0.03, seed 2, relax harmonic)');
   console.log('  build        pose      uncovered%   black%');
   for (const r of rows) {
     if (r.err) { console.log('  ' + r.label.padEnd(12) + ' FAILED: ' + r.err); continue; }
