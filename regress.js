@@ -17,9 +17,32 @@ const path = require('path');
 const CHROME = process.env.MOEBIUS_CHROME || '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const HARNESS = path.join(__dirname, 'harness');
 
+// A165 SMEAR-GATE COLUMNS (stLo, stHi, stMax) — pinned on a162, the build that
+// fixed the a117 regression, with roughly 55% headroom on the fold percentage:
+//     measured   star 15.5% / worst 6.2x   warrior 6.1% / 14.1x
+//                photo 9.3% / 6.4x         troll 14.3% / 4.8x
+// The lower bound is 0 deliberately: tearing MORE is not the failure this gate
+// exists for, and a build that tears everything is caught by coverage instead.
+// The upper bound is what a loosening trips — a117 would have read around 40%
+// on troll with far larger ratios, and this suite would have failed the day it
+// landed instead of eight builds later on a user's screenshot.
+// warrior's 14.1x worst ratio is the outlier and is not yet explained; it is
+// recorded rather than smoothed away.
+//
+// THREE COLUMNS BECAUSE THEY CARRY DIFFERENT AMOUNTS OF SIGNAL, established by
+// running the gate against the a117 criterion itself (control, then reverted):
+//     column               a162            a117 restored
+//     folding survivors%   15.5/6.1/9.3/14.3   16.3/7.2/14.9/22.8
+//     worst fold ratio      6.2/14.1/6.4/4.8   67.5/213.9/94.0/49.6
+//     mean fold ratio       2.4/2.3/2.0/1.9    (rises with it)
+// The PERCENTAGE is the weak column — a117 keeps far more triangles, so the
+// denominator grows with the numerator and it barely moves. The RATIOS are the
+// discriminating ones, up 10-15x, and only troll's percentage crossed. So the
+// gate is pinned on all three but the ratios are what actually catch it. With
+// these bands the a117 build fails on all four assets.
 const ASSETS = [
   // [tag, color, depth, sdMin%, sdMax%, groundMin%, groundMax%]
-  ['star',    'starwatcher_color.png',   'starwatcher_depth.png',   11.0, 16.0, 74.0, 84.0],
+  ['star',    'starwatcher_color.png',   'starwatcher_depth.png',   11.0, 16.0, 74.0, 84.0,  0, 24.0, 10.0, 3.4],
   // A106 RE-PIN (warrior SD 6.5..11.5 -> 8.0..14.0). The old band encoded the
   // a80 scan's linear-in-depth warp. That warp displaced the FG with a SCALAR
   // k, i.e. as if the head moved a fraction of its real excursion — measured
@@ -41,7 +64,7 @@ const ASSETS = [
   // legacy warp removed were reveals that genuinely open — texels that were
   // never inpainted. Re-pinned to the corrected behaviour, not widened to
   // accommodate it.
-  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  8.0, 14.0, 79.0, 88.0],
+  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  8.0, 14.0, 79.0, 88.0,  0, 12.0, 22.0, 3.3],
   // photo's higher SD% is the known dense-texture pocket cost of leaving
   // pocket promotion opt-in (a63b decision, made on star+warrior evidence:
   // promotion amplified painterly boundary leaks). Revisit if SD budget
@@ -52,7 +75,7 @@ const ASSETS = [
   // mask (29.1 measured) — the ORIGINAL a63b range is restored. If this
   // drifts high again, claims are spilling past their own physics
   // (REVIEW Addenda 78, 80, 81).
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0],
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0,  0, 16.0, 10.0, 3.0],
   // TROLL = the app's SHIPPED DEFAULT (defaultImg*.png) and the one asset the
   // a62+ sweeps never covered (harness probes overwrite its filename).
   // a73 cure + a78 prominence bound: farther-value-wins fills reveals at
@@ -75,7 +98,7 @@ const ASSETS = [
   //     photo  2047  1.07x too small 28.7 -> 27.5
   //     warrior 3000 1.56x too small  8.7 ->  9.3
   // Re-pinned to the corrected behaviour, not widened to accommodate it.
-  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',      9.0, 18.0, 90.0, 98.0],
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',      9.0, 18.0, 90.0, 98.0,  0, 22.0,  8.0, 2.9],
 ];
 
 let pass = 0, fail = 0;
@@ -132,7 +155,7 @@ const check = (label, val, lo, hi) => {
   };
 
   // ---- mask numbers per asset (quick-bake SD region + ground class) ----
-  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi] of ASSETS) {
+  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi, stLo, stHi, stMax, stMean] of ASSETS) {
     fs.copyFileSync(path.join(__dirname, color), path.join(HARNESS, 'defaultImgColor.png'));
     fs.copyFileSync(path.join(__dirname, depth), path.join(HARNESS, 'defaultImgDepth.png'));
     await load();
@@ -142,11 +165,35 @@ const check = (label, val, lo, hi) => {
       const mk = window._qbMask; if (!mk) return null;
       let nD = 0, nG = 0; const N = mk.pw * mk.ph;
       for (let i = 0; i < N; i++) { if (mk.disocc[i]) nD++; if (mk.ground && mk.ground[i]) nG++; }
-      return { sd: 100 * nD / N, g: 100 * nG / N };
+      return { sd: 100 * nD / N, g: 100 * nG / N, st: window._qbStretch || null };
     });
     if (!r) { console.log('FAIL  ' + tag + ' build (no capture)'); fail++; continue; }
     check(tag + ' SD%', r.sd, sdLo, sdHi);
     check(tag + ' ground%', r.g, gLo, gHi);
+    // ---- A165 THE SMEAR GATE ----
+    // The a117 regression — a triangle left in the mesh to stretch across a
+    // reveal — was invisible to every metric in this suite, because SD% and
+    // ground% are mask areas and the two metrics a117 DID cite (comb energy and
+    // black%) both reward the artifact: a stretched triangle is smooth, so comb
+    // falls, and it covers, so black falls. This measures the artifact itself.
+    //
+    // For each SURVIVING triangle, the ratio of its reprojected shift span at
+    // the cone rim to its own cell extent. Above 1 the cell cannot be drawn
+    // without folding. Scale-free, computed at bake time, no render and no
+    // reference image.
+    //
+    // IT IS A TRIPWIRE, NOT A PROOF, and the distinction is worth stating. The
+    // band cannot be zero: with the a160 criterion a cell survives when its
+    // depth span is within one source quantum, and near the near end of the
+    // range one quantum is still several pixels of parallax, so some surviving
+    // cells fold benignly across a sub-quantum step. What it catches is a
+    // LOOSENING — a117 would have read around 40% here with far larger ratios,
+    // and this suite would have failed the day it landed.
+    if (r.st) {
+        check(tag + ' folding survivors%', r.st.foldPct, stLo, stHi);
+        check(tag + ' worst fold ratio', r.st.maxRatio, 1.0, stMax);
+        check(tag + ' mean fold ratio', r.st.meanRatio, 1.0, stMean);
+    } else { console.log('FAIL  ' + tag + ' smear gate (no _qbStretch capture)'); fail++; }
   }
 
   // ---- 3-path build sanity on the reference (throws/holes get caught by build failure or blank canvas) ----
