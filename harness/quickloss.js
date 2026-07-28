@@ -59,7 +59,19 @@ const OUT = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c7099
         if (n < T * T * 0.5) { r.push(null); continue; }
         const m = s / n; r.push(Math.sqrt(Math.max(0, s2 / n - m * m))); }
       return r; };
+    // IS THE REFERENCE ITSELF STABLE? The whole 31% figure rests on this one
+    // capture. Take it, render a great deal more, take it again, compare — if
+    // the two disagree, the reference was caught before the scene settled and
+    // every number derived from it is an artefact of that.
+    const ref0 = tiles(grab().data);
+    for (let n = 0; n < 40; n++) render();
     const ref = tiles(grab().data);
+    let refDrift = 0;
+    { let moved = 0, tot = 0;
+      for (let i = 0; i < ref.length; i++) {
+        if (ref0[i] === null || ref[i] === null || ref0[i] < 3) continue;
+        tot++; if (Math.abs(ref[i] - ref0[i]) / ref0[i] > 0.5) moved++; }
+      refDrift = +(100 * moved / Math.max(1, tot)).toFixed(2); }
     const refPng = renderer.domElement.toDataURL('image/png');
     const score = (t) => { let lost = 0, tot = 0;
       for (let i = 0; i < ref.length; i++) {
@@ -67,7 +79,7 @@ const OUT = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c7099
         tot++; if (t[i] / ref[i] < 0.5) lost++; }
       return +(100 * lost / Math.max(1, tot)).toFixed(2); };
 
-    const out = { steps: [], pngs: {} };
+    const out = { steps: [], pngs: {}, refDrift };
     const take = (name) => { const im = grab(); const s = score(tiles(im.data));
       out.steps.push([name, s]); out.pngs[name] = renderer.domElement.toDataURL('image/png'); return s; };
 
@@ -99,10 +111,120 @@ const OUT = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c7099
       } catch (e) { return { err: e.message }; }
     };
     out.texBefore = hashTex(L.mesh.material.uniforms.map ? L.mesh.material.uniforms.map.value : null);
+    // THE DECISIVE ISOLATION. Every ablation of the bake's added meshes leaves
+    // the score at ~41%, which is WORSE than the 31% with them shown — so the
+    // added geometry is helping and the difference lives in the FOREGROUND MESH
+    // itself. Score the foreground ALONE before the bake and again after: that
+    // brackets it with nothing else in the frame.
+    const fgAlone = () => {
+      const hid = [];
+      scene.traverse(m => { if (m.isMesh && m !== L.mesh) { hid.push([m, m.visible]); m.visible = false; } });
+      const im = grab(); const sc = score(tiles(im));
+      for (const [m, v] of hid) m.visible = v;
+      return sc;
+    };
+    out.fgAloneBefore = fgAlone();
+    out.matIdBefore = L.mesh.material.uuid;
+    out.geoIdBefore = L.mesh.geometry.uuid;
+    out.posVerBefore = L.mesh.geometry.attributes.position.version;
+    out.uvVerBefore = L.mesh.geometry.attributes.uv ? L.mesh.geometry.attributes.uv.version : -1;
     bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
     bgBuildStamp = null; buildBackgroundLayer();
     out.texAfter = hashTex(L.mesh.material.uniforms.map ? L.mesh.material.uniforms.map.value : null);
+    // DOES THE BAKED FRAME SETTLE? The reference is stable across 40 extra
+    // renders, but the late measurement in this same run scores 0% where the
+    // baseline scored 32% — so the thing that moved is the BAKED frame, not the
+    // reference. grab() renders three times; the bake creates new textures,
+    // targets and materials, and three frames may not be enough for all of them
+    // to be uploaded and compiled. Score immediately, then after 40 more.
+    out.settleImmediate = score(tiles(grab().data));
+    for (let n = 0; n < 40; n++) render();
+    out.settleAfter40 = score(tiles(grab().data));
+    out.fgAloneAfter = fgAlone();
+    out.matIdAfter = L.mesh.material.uuid;
+    out.geoIdAfter = L.mesh.geometry.uuid;
+    out.posVerAfter = L.mesh.geometry.attributes.position.version;
+    out.uvVerAfter = L.mesh.geometry.attributes.uv ? L.mesh.geometry.attributes.uv.version : -1;
     take('quick baked (baseline)');
+    // THE POPULATION SPLIT THAT SETTLES IT. The foreground is identical before
+    // and after the bake, and hiding every added mesh moves the score by about a
+    // point — so the difference cannot be something drawn OVER the picture. What
+    // is left is WHERE THE FOREGROUND WAS TORN: those pixels are the plug, and
+    // the plug's colour is the pull-push wash, which is blurry by construction.
+    // Split the tiles into those that contain plug pixels and those that do not.
+    // If the plug-free tiles score ~0, the "detail loss" is the wash showing
+    // through the tear, which is the placeholder SD is meant to replace, not a
+    // defect in the render.
+    {
+      // grab() returns an ImageData; tiles() and the loops below index the raw
+      // byte array. The first version of this block passed the ImageData
+      // straight through, so every comparison was against `undefined`, every
+      // tile std came back NaN, and it reported "300 tiles, 0% lost" — a clean
+      // zero produced entirely by a type error, which then looked like it
+      // contradicted the 32% baseline.
+      const full = grab().data;
+      const hid = [];
+      scene.traverse(m => { if (m.isMesh && m !== L.mesh) { hid.push([m, m.visible]); m.visible = false; } });
+      const fgOnly = grab().data;
+      for (const [m, v] of hid) m.visible = v;
+      // a pixel is PLUG if the foreground alone did not paint it but the full
+      // frame did — i.e. the tear opened it and something behind filled it
+      const T2 = 24, tw = Math.floor(W / T2);
+      const plugTile = [];
+      for (let ty = 0; ty + T2 <= Hh; ty += T2) for (let tx = 0; tx + T2 <= W; tx += T2) {
+        let hasPlug = false;
+        for (let y = ty; y < ty + T2 && !hasPlug; y++) for (let x = tx; x < tx + T2; x++) {
+          const i = (y * W + x) * 4;
+          if (fgOnly[i + 3] < 8 && full[i + 3] >= 8) { hasPlug = true; break; }
+        }
+        plugTile.push(hasPlug);
+      }
+      const t = tiles(full);
+      let lostFree = 0, totFree = 0, lostPlug = 0, totPlug = 0;
+      for (let i = 0; i < ref.length; i++) {
+        if (ref[i] === null || t[i] === null || ref[i] < 3) continue;
+        const r = t[i] / ref[i];
+        if (plugTile[i]) { totPlug++; if (r < 0.5) lostPlug++; }
+        else { totFree++; if (r < 0.5) lostFree++; }
+      }
+      out.plugSplit = {
+        plugFreeTiles: totFree, plugFreeLostPct: +(100 * lostFree / Math.max(1, totFree)).toFixed(2),
+        plugTiles: totPlug, plugLostPct: +(100 * lostPlug / Math.max(1, totPlug)).toFixed(2) };
+    }
+    // ONE CLEAN, ISOLATED ABLATION PER OBJECT. The earlier list was CUMULATIVE
+    // and the fishtank came second, so every later row was measured with the
+    // tank already hidden — which is itself a large change, since the reference
+    // frame has the tank in it. Each row here hides exactly one thing.
+    {
+      const one = (name, pick) => {
+        const hid = [];
+        scene.traverse(m => { if (m.isMesh && pick(m)) { hid.push([m, m.visible]); m.visible = false; } });
+        if (!hid.length) { out.steps.push(['ONLY ' + name + ' (absent)', null]); return; }
+        take('ONLY ' + name + ' hidden');
+        for (const [m, v] of hid) m.visible = v;
+      };
+      one('plate',    m => m === bgLayerMesh);
+      one('fishtank', m => typeof bgFishtankMesh !== 'undefined' && m === bgFishtankMesh);
+      one('skirt',    m => typeof bgSkirtMesh !== 'undefined' && m === bgSkirtMesh);
+      one('cards',    m => typeof bgCardMesh !== 'undefined' && m === bgCardMesh);
+    }
+    // THE GHOST MESH — the one object a152's ablation never hid, and the only
+    // remaining candidate. It is a clone of the layer's geometry AND material
+    // with the depth forced flat to the far plane, BackSide, drawn first
+    // (renderOrder -5), and its fragment darkened to 30% brightness with alpha
+    // forced to 1. A second copy of the sheet compositing under a foreground
+    // that is alpha-blended would lower local contrast exactly as measured.
+    {
+      const gh = [];
+      for (const Lr of mediaLayers) if (Lr && Lr.ghostMesh) gh.push([Lr.ghostMesh, Lr.ghostMesh.visible]);
+      out.ghostCount = gh.length;
+      out.ghostVisible = gh.filter(([m]) => m.visible).length;
+      if (gh.length) {
+        for (const [m] of gh) m.visible = false;
+        take('- ghost mesh');
+        for (const [m, v] of gh) m.visible = v;
+      } else out.steps.push(['- ghost mesh (none in scene)', null]);
+    }
     // the FG's OWN FRAGMENT SHADER — the only place left after every mesh was
     // ablated and the FG's map, depth and index were all restored.
     {
@@ -163,6 +285,20 @@ const OUT = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c7099
 
   console.log('\n' + ASSET + '  WHERE QUICK LOSES DETAIL AT REST (lost% of tiles vs the realtime reference)');
   for (const [name, s] of res.steps) console.log('  ' + name.padEnd(32) + (s === null ? 'n/a' : s + '%'));
+  console.log('\n  BAKED-FRAME SETTLING: ' + res.settleImmediate + '% immediately after the bake, ' +
+              res.settleAfter40 + '% after 40 more renders of the same frame');
+  console.log('\n  REFERENCE STABILITY: ' + res.refDrift + '% of tiles changed by >50% between the ' +
+              'first capture and one 40 renders later (same scene, same pose, nothing touched)');
+  if (res.plugSplit) { const p2 = res.plugSplit;
+    console.log('\n  TILES CONTAINING PLUG PIXELS vs TILES WITHOUT:');
+    console.log('    plug-free tiles: ' + p2.plugFreeTiles + ', lost ' + p2.plugFreeLostPct + '%');
+    console.log('    plug tiles:      ' + p2.plugTiles + ', lost ' + p2.plugLostPct + '%'); }
+  console.log('\n  FOREGROUND ALONE, before -> after the bake:  ' + res.fgAloneBefore + '% -> ' + res.fgAloneAfter + '%');
+  console.log('    material uuid  ' + (res.matIdBefore === res.matIdAfter ? 'SAME' : 'REPLACED'));
+  console.log('    geometry uuid  ' + (res.geoIdBefore === res.geoIdAfter ? 'SAME' : 'REPLACED'));
+  console.log('    position ver   ' + res.posVerBefore + ' -> ' + res.posVerAfter +
+              '     uv ver ' + res.uvVerBefore + ' -> ' + res.uvVerAfter);
+  console.log('\n  ghost meshes in scene: ' + res.ghostCount + ' (' + res.ghostVisible + ' visible)');
   console.log('\n  FG colour texture DATA, before -> after the bake:');
   console.log('    ' + JSON.stringify(res.texBefore) + '\n    ' + JSON.stringify(res.texAfter));
   if (res.fgFlags) console.log('\n  FG fragment flags after the bake: ' + JSON.stringify(res.fgFlags));
