@@ -76,6 +76,10 @@ const materialise = (rev, dir) => {
         const res = {};
         const measure = () => {
           if (typeof bgFishtankMesh !== 'undefined' && bgFishtankMesh) bgFishtankMesh.visible = false;
+          // a168 split the frame in two; the outer matte is opaque and covers
+          // the whole canvas, so leaving it visible makes the content bbox the
+          // whole canvas and the source gets resampled to the wrong rect.
+          if (typeof bgOuterFrameMesh !== 'undefined' && bgOuterFrameMesh) bgOuterFrameMesh.visible = false;
           if (typeof bgSkirtMesh !== 'undefined' && bgSkirtMesh) bgSkirtMesh.visible = false;
           camera.position.set(0, 0, dist);
           for (let n = 0; n < 4; n++) render();

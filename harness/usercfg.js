@@ -69,6 +69,7 @@ const materialise = (rev, dir) => {
         if (ok) break; await new Promise(r => setTimeout(r, 1000));
       }
       const out = await page.evaluate(async (o) => {
+        const process_env_keepframe = o.keepFrame ? '1' : '0';
         // set the sheet's controls, firing the events the app listens for
         const set = (id, v) => { const el = document.getElementById(id); if (!el) return false;
           el.value = v; el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -89,6 +90,7 @@ const materialise = (rev, dir) => {
         // hole is still there. Hide it, so every build is scored on the same
         // question: did the geometry cover this pixel?
         if (typeof bgFishtankMesh !== 'undefined' && bgFishtankMesh) bgFishtankMesh.visible = false;
+        if (process_env_keepframe !== '1' && typeof bgOuterFrameMesh !== 'undefined' && bgOuterFrameMesh) bgOuterFrameMesh.visible = false;
         for (const p of o.poses) {
           camera.position.set(p.x, p.y, 0.2);
           for (let n = 0; n < 3; n++) render();
@@ -105,7 +107,7 @@ const materialise = (rev, dir) => {
           res.png[p.tag] = renderer.domElement.toDataURL('image/png');
         }
         return res;
-      }, { poses: POSES, ctrl: CTRL });
+      }, { poses: POSES, ctrl: CTRL, keepFrame: process.env.KEEPFRAME === '1' });
       rows.push({ label, out });
       for (const [tag, png] of Object.entries(out.png))
         fs.writeFileSync(path.join(TMP, ASSET + '_' + label + '_' + tag + '.png'), Buffer.from(png.split(',')[1], 'base64'));

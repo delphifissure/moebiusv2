@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a165 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing + a150 THE SKIRT CONTINUES AT THE PLATE GLOBAL FAR ENVELOPE (quick edge black 6.80%% -> 0.00%% at every pose 0-45deg, interior 0.00%%): the a149 skirt shared the plate depth texture, so beyond the frame it continued the EDGE TEXEL and parallaxed WITH whatever that texel held. Now it carries its own constant depth = min(plateF) — global, NOT per edge, because a per-edge minimum measured 9.27%% of the rest frame changed (it stood in front of interior sky) — overlaps the plate inward by the same k it is pushed back through, and opts out of the hole-only island gate because a skirt IS the backstop. Two instrument corrections came out of it: UniformsUtils.clone CLONES TEXTURES (the cloned material painted 0 pixels at every pose until every texture uniform was re-pointed at the plate live object), and edgeblack.js derived its measurement polygon from a frame WITH the skirt in it, so the two arms were scored over different areas — the a149 true figure is 0.13%% at 45deg, not the 1.91%% reported + a151 EVERY BAKE DROPS THE PREVIOUS BAKE SKIRT (user-reported visual degradation vs a81, and they were right): bgResetBakedState runs only on a new image, so baking quick and switching to v2 left the a149 skirt standing, and a150 had just made it a full-frame opaque backdrop — it painted the quick plate sky, with the mountain inpainted out of it, over v2. Mountain-box luma std: a81 60.3, a150 COLD 60.3 (identical — the arc did not degrade v2), a150 after a quick bake 11.6. Fixed, back to 60.3 + a152 TEXTURE INTEGRITY, THE METRIC THE ARC WAS MISSING (black%% and ABSENT%% were 0.00 in every broken row; a flat blob is painted and nowhere near the black threshold, so hole-counting cannot see an object losing its texture) + a153 THE LETTERBOX IS A BOX (user spec): opaque black glass in the viewport surface with the content rect cut out, plus four walls running back to the volume far extent ALONG THE REFERENCE RAYS — a prism was built first and measured wrong, its back rect projects smaller so it covered a border strip of the content at rest (black%% 0.0 -> 9.7); the flare uses the a104 law, so at rest the walls are edge-on and invisible + a154 tried and REVERTED: sliding the whole volume back by innerVolumeDepth to stop near content protruding through the glass distorts the scene + a155 THE COMPLETION EXTENT IS THE OCCLUDER FOOTPRINT: the flood bound was a hardcoded 192 whose own comment admitted it was a guess and which is resolution-blind; now min(w,h)/2, the provable maximum inradius of any connected region in the frame + a160 THE FOLD LIMIT IS THE TEAR CRITERION AGAIN, WITH THE NOISE FLOOR a117 WAS MISSING. a117 replaced the fold test with a cliff test on the evidence of comb energy and black%% — both of which REWARD the artifact, because a triangle stretched across a reveal is smooth (low comb) and it covers (low black). The arm that produced the taffy scored best on both and shipped. Verified by eye at the user own controls and pose: a99 clean with honest holes, a117 drags the light column and the figure into vertical streaks, every build after inherits it. a117 observation was right though — the fold limit at 851px is 0.47 of one 8-bit level, so on 8-bit depth the smallest expressible step already folds and the geometric test alone fires on quantisation noise (39.9%% of the mesh). So: tear when the cell FOLDS (a102 envelope, in texels, at its own depth) AND its depth span exceeds ONE SOURCE QUANTUM (the grid a89 measures from the data). Both derived, both tracking their inputs. Torn footprint 39.9%% -> ~3%%; the vertical smear is gone and the content is crisp again + a160b THE TORN FOOTPRINT IS THE PLUG REGION (the island mask was built from the occluder depth footprint hundreds of lines before the tear, so the plug region and the mesh holes were two different sets; unioned, they are one set by construction) + a160c CAP CARDS RETIRED (411529 one-texel splats read as the moire comb a117 measured and misattributed to the tear; with the plug owning the torn footprint there are no orphans to splat) + a161 THE DEPTH TEST IS THE GATE, THE MASK CANNOT BE. a58 gated the plate to a disocclusion band computed in SOURCE space, and that is the wrong space: the plate texel visible through a hole is NOT the texel the hole was torn from, because the two surfaces sit at different depths and reproject differently. Measured on the troll at the user controls — of the pixels left uncovered, the fraction that HAVE plate geometry behind them and are discarded by the gate is 89.3%% at 35deg and 99.8%% at 52deg. It was never the plug reach. Gate off: uncovered rest 1.60 -> 0.00, 35deg 2.68 -> 0.29, 52deg 2.73 -> 0.00. This is NOT background cloning — the plate lies BEHIND the foreground, so the depth test discards it for free wherever the foreground survives, and it can only reach the screen where the foreground is gone, which is the definition of a disocclusion. Cost, stated: 0.74%% of already-painted pixels change at rest, scattered along silhouettes, because the plate is not always behind (a135 measured 7401 same-texel inversions and cross-texel is worse). Polygon offset settles ties in the foreground favour; the rest is the cross-texel ordering invariant, still open + a162 THE CROSS-TEXEL ORDERING INVARIANT, IN CLOSED FORM. Open since a137. Under the a104 ray law screen(x,d) = f*(x/D - ex*g(d)), so a plate texel A and a source texel B land on the same pixel for some eye in the cone exactly when |xB-xA| <= |shift(dA)-shift(dB)|, and the plate occludes when shift(dA) > shift(dB). The invariant is therefore shift(plate at A) <= min over B [shift(src at B) + dist(A,B)] — a MIN-PLUS CHAMFER over the source shift field, one O(N) two-pass sweep, covering the cone CONTINUOUSLY instead of at 4 sampled poses, and a135 is its zero-distance case. Chamfer weights divided by 1.0396 so the (1,sqrt2) distance is a strict LOWER bound on Euclidean (Borgefors 1986 max error 3.96%%) — overestimating distance would loosen the bound and miss violations. Troll: 367060 texels (42.16%%) could occlude the foreground from some eye inside the 45deg cone and were pushed back, worst 0.4550 depth. Last holes closed (35deg 0.31%% -> 0.00%%, 52deg 0.29%% -> 0.00%%), rest frame unchanged (0.01%% of pixels differ, max 15 levels). Replaces the 63.5s GPU pose sweep with a few ms of CPU + a164 THE INVARIANT PROVEN IN A DEPTH BUFFER: zero violations at every pose INSIDE the 45deg cone (rest, 35, 43, 45), first non-zero at 47deg two degrees past the rim where the invariant promises nothing, growing smoothly to 0.222%% at 55deg. Without a162: 0.047%% at 35deg rising to 0.254%% at the rim, up to 43 levels of depth error. The first version of that test was DEAD and its known-positive control caught it — renderNormalizedDepthPass hides the background layer by design, so it was comparing the foreground against itself + a165 THE SMEAR GATE IS IN regress.js. For each SURVIVING triangle, the ratio of its reprojected shift span at the cone rim to its own cell extent; above 1 the cell cannot be drawn without folding. Scale-free, bake-time, no render and no reference. Validated by restoring the a117 criterion as a control: worst ratio 4.8 -> 49.6 on troll and 14.1 -> 213.9 on warrior, and the suite fails on all four assets. The percentage column is weak (a117 keeps more triangles so the denominator moves with the numerator); the RATIOS carry the signal + a149 THE SKIRT PORTED TO QUICK (948 triangles, margin from the a113 shift envelope not a world constant; edge black 6.80%% -> 1.91%% at 45deg, 1.78%% -> 0.04%% at 15deg, interior unchanged, no measurable bake cost)', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.25-a168 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing + a150 THE SKIRT CONTINUES AT THE PLATE GLOBAL FAR ENVELOPE (quick edge black 6.80%% -> 0.00%% at every pose 0-45deg, interior 0.00%%): the a149 skirt shared the plate depth texture, so beyond the frame it continued the EDGE TEXEL and parallaxed WITH whatever that texel held. Now it carries its own constant depth = min(plateF) — global, NOT per edge, because a per-edge minimum measured 9.27%% of the rest frame changed (it stood in front of interior sky) — overlaps the plate inward by the same k it is pushed back through, and opts out of the hole-only island gate because a skirt IS the backstop. Two instrument corrections came out of it: UniformsUtils.clone CLONES TEXTURES (the cloned material painted 0 pixels at every pose until every texture uniform was re-pointed at the plate live object), and edgeblack.js derived its measurement polygon from a frame WITH the skirt in it, so the two arms were scored over different areas — the a149 true figure is 0.13%% at 45deg, not the 1.91%% reported + a151 EVERY BAKE DROPS THE PREVIOUS BAKE SKIRT (user-reported visual degradation vs a81, and they were right): bgResetBakedState runs only on a new image, so baking quick and switching to v2 left the a149 skirt standing, and a150 had just made it a full-frame opaque backdrop — it painted the quick plate sky, with the mountain inpainted out of it, over v2. Mountain-box luma std: a81 60.3, a150 COLD 60.3 (identical — the arc did not degrade v2), a150 after a quick bake 11.6. Fixed, back to 60.3 + a152 TEXTURE INTEGRITY, THE METRIC THE ARC WAS MISSING (black%% and ABSENT%% were 0.00 in every broken row; a flat blob is painted and nowhere near the black threshold, so hole-counting cannot see an object losing its texture) + a153 THE LETTERBOX IS A BOX (user spec): opaque black glass in the viewport surface with the content rect cut out, plus four walls running back to the volume far extent ALONG THE REFERENCE RAYS — a prism was built first and measured wrong, its back rect projects smaller so it covered a border strip of the content at rest (black%% 0.0 -> 9.7); the flare uses the a104 law, so at rest the walls are edge-on and invisible + a154 tried and REVERTED: sliding the whole volume back by innerVolumeDepth to stop near content protruding through the glass distorts the scene + a155 THE COMPLETION EXTENT IS THE OCCLUDER FOOTPRINT: the flood bound was a hardcoded 192 whose own comment admitted it was a guess and which is resolution-blind; now min(w,h)/2, the provable maximum inradius of any connected region in the frame + a160 THE FOLD LIMIT IS THE TEAR CRITERION AGAIN, WITH THE NOISE FLOOR a117 WAS MISSING. a117 replaced the fold test with a cliff test on the evidence of comb energy and black%% — both of which REWARD the artifact, because a triangle stretched across a reveal is smooth (low comb) and it covers (low black). The arm that produced the taffy scored best on both and shipped. Verified by eye at the user own controls and pose: a99 clean with honest holes, a117 drags the light column and the figure into vertical streaks, every build after inherits it. a117 observation was right though — the fold limit at 851px is 0.47 of one 8-bit level, so on 8-bit depth the smallest expressible step already folds and the geometric test alone fires on quantisation noise (39.9%% of the mesh). So: tear when the cell FOLDS (a102 envelope, in texels, at its own depth) AND its depth span exceeds ONE SOURCE QUANTUM (the grid a89 measures from the data). Both derived, both tracking their inputs. Torn footprint 39.9%% -> ~3%%; the vertical smear is gone and the content is crisp again + a160b THE TORN FOOTPRINT IS THE PLUG REGION (the island mask was built from the occluder depth footprint hundreds of lines before the tear, so the plug region and the mesh holes were two different sets; unioned, they are one set by construction) + a160c CAP CARDS RETIRED (411529 one-texel splats read as the moire comb a117 measured and misattributed to the tear; with the plug owning the torn footprint there are no orphans to splat) + a161 THE DEPTH TEST IS THE GATE, THE MASK CANNOT BE. a58 gated the plate to a disocclusion band computed in SOURCE space, and that is the wrong space: the plate texel visible through a hole is NOT the texel the hole was torn from, because the two surfaces sit at different depths and reproject differently. Measured on the troll at the user controls — of the pixels left uncovered, the fraction that HAVE plate geometry behind them and are discarded by the gate is 89.3%% at 35deg and 99.8%% at 52deg. It was never the plug reach. Gate off: uncovered rest 1.60 -> 0.00, 35deg 2.68 -> 0.29, 52deg 2.73 -> 0.00. This is NOT background cloning — the plate lies BEHIND the foreground, so the depth test discards it for free wherever the foreground survives, and it can only reach the screen where the foreground is gone, which is the definition of a disocclusion. Cost, stated: 0.74%% of already-painted pixels change at rest, scattered along silhouettes, because the plate is not always behind (a135 measured 7401 same-texel inversions and cross-texel is worse). Polygon offset settles ties in the foreground favour; the rest is the cross-texel ordering invariant, still open + a162 THE CROSS-TEXEL ORDERING INVARIANT, IN CLOSED FORM. Open since a137. Under the a104 ray law screen(x,d) = f*(x/D - ex*g(d)), so a plate texel A and a source texel B land on the same pixel for some eye in the cone exactly when |xB-xA| <= |shift(dA)-shift(dB)|, and the plate occludes when shift(dA) > shift(dB). The invariant is therefore shift(plate at A) <= min over B [shift(src at B) + dist(A,B)] — a MIN-PLUS CHAMFER over the source shift field, one O(N) two-pass sweep, covering the cone CONTINUOUSLY instead of at 4 sampled poses, and a135 is its zero-distance case. Chamfer weights divided by 1.0396 so the (1,sqrt2) distance is a strict LOWER bound on Euclidean (Borgefors 1986 max error 3.96%%) — overestimating distance would loosen the bound and miss violations. Troll: 367060 texels (42.16%%) could occlude the foreground from some eye inside the 45deg cone and were pushed back, worst 0.4550 depth. Last holes closed (35deg 0.31%% -> 0.00%%, 52deg 0.29%% -> 0.00%%), rest frame unchanged (0.01%% of pixels differ, max 15 levels). Replaces the 63.5s GPU pose sweep with a few ms of CPU + a164 THE INVARIANT PROVEN IN A DEPTH BUFFER: zero violations at every pose INSIDE the 45deg cone (rest, 35, 43, 45), first non-zero at 47deg two degrees past the rim where the invariant promises nothing, growing smoothly to 0.222%% at 55deg. Without a162: 0.047%% at 35deg rising to 0.254%% at the rim, up to 43 levels of depth error. The first version of that test was DEAD and its known-positive control caught it — renderNormalizedDepthPass hides the background layer by design, so it was comparing the foreground against itself + a165 THE SMEAR GATE IS IN regress.js. For each SURVIVING triangle, the ratio of its reprojected shift span at the cone rim to its own cell extent; above 1 the cell cannot be drawn without folding. Scale-free, bake-time, no render and no reference. Validated by restoring the a117 criterion as a control: worst ratio 4.8 -> 49.6 on troll and 14.1 -> 213.9 on warrior, and the suite fails on all four assets. The percentage column is weak (a117 keeps more triangles so the denominator moves with the numerator); the RATIOS carry the signal + a166 the 31%% quick-vs-realtime detail loss CLOSED as the wrong reference (the ghost mesh does not exist; plug tiles lose 2.86%% and plug-FREE tiles lose 35.85%%, the opposite of the hypothesis — the foreground is alpha-blended and its alpha IS the FG-sub mask, so realtime composites those texels against the clear and the bake composites them against the plate; comparing the two measures the PRESENCE of the plug) + a167 THE VOLUME IS EMBEDDED BY DEFAULT (user: keep everything inside the box, nothing poking through): innerVolumeDepth put two thirds of the volume in FRONT of the screen where the glass could not occlude it; a pure z translation by -innerVolumeDepth puts its nearest extent ON the viewport surface, and rest fidelity against the SOURCE is unchanged (1.88 mean, 0.56%% off>8, identical to a162) + a168 TWO FRAMES, NOT ONE. INNER: four black walls from the aperture back to the volume far extent, flaring along the reference rays so they are edge-on and invisible at rest. OUTER: an opaque matte in the viewport surface with the content rect cut out, taking the BROWSER BACKGROUND COLOUR read from the live computed style, and REMOVED in fullscreen where the user rule is that content may spill past the letterbox + a149 THE SKIRT PORTED TO QUICK (948 triangles, margin from the a113 shift envelope not a world constant; edge black 6.80%% -> 1.91%% at 45deg, 1.78%% -> 0.04%% at 15deg, interior unchanged, no measurable bake cost)', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -2227,6 +2227,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_worldOuterVolumeDepth: { value: outerVolumeDepth },
         u_worldInnerVolumeDepth: { value: innerVolumeDepth },
         displacementBias: { value: 0.0 },
+        // A167: slides the whole depth volume back so its NEAREST extent lands
+        // on the viewport surface — nothing protrudes through the glass. See
+        // bgEmbedVolume; ON by default per the user's "keep everything inside
+        // the box" and the window-within-a-window plan that follows from it.
+        u_embedOffset: { value: 0.0 },
         u_useRayReproject: { value: false },                 // A59f: true anamorphic reprojection (opt-in)
         u_refEye: { value: new THREE.Vector3(0, 0, 0.2) },   // fixed reference (authoring) eye, world space
         u_textureSize: { value: new THREE.Vector2(1, 1) },
@@ -2583,6 +2588,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_worldOuterVolumeDepth;
         uniform float u_worldInnerVolumeDepth;
         uniform float displacementBias;
+        uniform float u_embedOffset;
         uniform bool  u_useRayReproject;
         uniform vec3  u_refEye;
     `;
@@ -2596,7 +2602,9 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             float t = smoothstep(u_portalPlaneDepthNorm, 1.0, vNormalizedDepth);
             displacement = mix(0.0, u_worldInnerVolumeDepth, t);
         }
-        float zOff = displacement + displacementBias;
+        // A167: a pure translation along z. The volume keeps its depth and the
+        // parallax law is untouched; only the plane it hangs from moves.
+        float zOff = displacement + displacementBias + u_embedOffset;
         vec4 viewPosition;
         if (u_useRayReproject) {
             // A59f TRUE REPROJECTION. The legacy path (else) is a fronto-parallel
@@ -6943,7 +6951,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.25-a165';
+const MOEBIUS_BUILD = 'v3.13.25-a168';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -16977,6 +16985,7 @@ function updateCameraAndProjection() {
             uniforms.u_splitPeekValue.value = depthPeekValue;
             uniforms.u_metricScale.value = metricScaleFactor;
             if (uniforms.u_useRayReproject) uniforms.u_useRayReproject.value = _rayReprojectNow();
+            if (uniforms.u_embedOffset)     uniforms.u_embedOffset.value     = bgEmbedOffsetNow();
             if (uniforms.u_refEye) uniforms.u_refEye.value.set(0, 0, camera.position.z);
 
             // --- NEW: Sync Ghost Mesh Uniforms ---
@@ -17016,6 +17025,7 @@ function updateCameraAndProjection() {
             if (u.u_worldOuterVolumeDepth) u.u_worldOuterVolumeDepth.value = outerVolumeDepth;
             if (u.u_worldInnerVolumeDepth) u.u_worldInnerVolumeDepth.value = innerVolumeDepth;
             if (u.u_metricScale)           u.u_metricScale.value           = metricScaleFactor;
+            if (u.u_embedOffset)           u.u_embedOffset.value           = bgEmbedOffsetNow();
             if (u.u_useRayReproject)       u.u_useRayReproject.value        = _rayReprojectNow();
             if (u.u_refEye)                u.u_refEye.value.set(0, 0, _cz);
         };
@@ -18620,15 +18630,91 @@ function toggleSDPatchVisibility() {
 // because it is a visible consequence rather than an oversight.
 //
 // window._noFishtank = true removes it.
+// A167 EMBED THE VOLUME — nothing pokes through the glass.
+//
+// User: "for now, let's keep everything inside the box (we assume the content
+// frame is a window, with nothing poking through) by default."
+//
+// innerVolumeDepth pushes near content TOWARD the viewer — 0.04 against outer
+// 0.02, so two thirds of the volume sat in FRONT of the screen plane and the
+// a153 glass could not occlude it. This slides the whole volume back by exactly
+// innerVolumeDepth, putting its nearest extent ON the viewport surface. It is a
+// translation, not a rescale: the volume keeps its depth, so the parallax law
+// and the shift LUT are untouched and only the plane the content hangs from
+// moves.
+//
+// ON BY DEFAULT now, which is a deliberate change to how every scene looks —
+// content that used to pop out of the screen now sits behind it. That is the
+// point: it is the "window" half of the window-within-a-window, and the popping
+// out comes back later as an explicit inner frame that is ALLOWED to break the
+// outer one. bgEmbedVolume = false restores protrusion.
+let bgEmbedVolume = true;
+function bgEmbedOffsetNow() {
+    return bgEmbedVolume ? -Math.max(0, innerVolumeDepth) : 0;
+}
+
+// =============================================================================
+// A153/A168 TWO FRAMES: THE INNER BOX AND THE OUTER MATTE
+// =============================================================================
+// User specification, across two messages:
+//   "the 3d letterbox / pillarbox should be a black, opaque double sided 3d
+//    rectangle that matches the x/y dimensions of the content. the extent
+//    closest to the user should be locked to the viewport surface, like a
+//    fishtank perfectly embedded in the screen."
+//   "we aren't creating an interior frame and an outer frame ... to make the
+//    illusion fun, the outer frame should match the color of the browser
+//    background, unless its full screen mode, which then means our content can
+//    spill out beyond the letterbox or pillar box (but only the immersive
+//    content of course)."
+//
+// So they are two objects with two different jobs, and a168 separates them:
+//
+//   THE INNER FRAME (bgFishtankMesh) — four black walls running from the
+//   aperture back to the volume's far extent. This is the tank the content
+//   lives in. Its walls flare ALONG THE REFERENCE RAYS (the a104 law), so at
+//   rest they are exactly edge-on and invisible, and moving off axis shows the
+//   inner wall on one side, which is what looking into an embedded tank does.
+//   A prism was built first and measured wrong — from a finite eye the back
+//   rect projects SMALLER, so the walls covered a border strip of the content
+//   at rest and black% over the canvas went 0.0 -> 9.7.
+//
+//   THE OUTER FRAME (bgOuterFrameMesh) — an opaque matte lying IN the viewport
+//   surface with the content rect cut out of it: the letterbox/pillarbox, in 3D
+//   rather than painted. It takes the BROWSER BACKGROUND COLOUR, read from the
+//   live computed style rather than assumed, so the frame reads as part of the
+//   page and the aperture reads as a window cut into it.
+//
+//   IN FULLSCREEN THE OUTER FRAME IS REMOVED. There is no page for it to match,
+//   and the user's rule is that fullscreen is where content may spill past the
+//   letterbox. The inner box stays, so the tank is still a tank.
+//
+// window._noFishtank removes both.
 let bgFishtankMesh = null;
+let bgOuterFrameMesh = null;
 let _bgFishtankKey = '';
+function bgPageBackgroundColor() {
+    // Read it; do not assume. An unset or transparent body falls back to the
+    // documentElement, and only then to the renderer's own clear colour.
+    try {
+        for (const el of [document.body, document.documentElement]) {
+            if (!el) continue;
+            const c = getComputedStyle(el).backgroundColor;
+            if (c && !/transparent|rgba\(0,\s*0,\s*0,\s*0\)/.test(c)) return new THREE.Color(c);
+        }
+    } catch (e) {}
+    return new THREE.Color(0x000000);
+}
+function bgIsFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
 function bgEnsureFishtank() {
     const L = (typeof mediaLayers !== 'undefined') ? mediaLayers[0] : null;
     const drop = () => {
-        if (!bgFishtankMesh) return;
-        try { if (bgFishtankMesh.parent) bgFishtankMesh.parent.remove(bgFishtankMesh);
-              bgFishtankMesh.geometry.dispose(); bgFishtankMesh.material.dispose(); } catch (e) {}
-        bgFishtankMesh = null; _bgFishtankKey = '';
+        for (const m of [bgFishtankMesh, bgOuterFrameMesh]) {
+            if (!m) continue;
+            try { if (m.parent) m.parent.remove(m); m.geometry.dispose(); m.material.dispose(); } catch (e) {}
+        }
+        bgFishtankMesh = null; bgOuterFrameMesh = null; _bgFishtankKey = '';
     };
     if (window._noFishtank === true || !L || !L.mesh || !L.mesh.geometry) { drop(); return; }
     const gp = L.mesh.geometry.parameters || {};
@@ -18639,54 +18725,65 @@ function bgEnsureFishtank() {
     const zN = L.mesh.position.z;                              // the viewport surface
     const eZ = (camera && camera.position) ? camera.position.z : zN + 0.2;
     const Hd = (Math.abs(eZ - zN) < 1e-4) ? 1e-4 : (eZ - zN);   // reference eye -> screen
-    const back = Math.max(1e-4, outerVolumeDepth);
+    // with the volume embedded the far extent moves back by the same offset
+    const back = Math.max(1e-4, outerVolumeDepth - bgEmbedOffsetNow());
     const sFar = (Hd + back) / Hd;                             // the a104 law at zOff = -back
     const zF = zN - back;
-    // The glass has to cover the canvas from any eye the cone allows. Size it
-    // from the camera's own frustum at the screen plane rather than a guessed
-    // multiple, then triple it so a dollied-in or off-axis eye still sees black.
     const vExt = Math.abs(Hd) * Math.tan((camera.fov || 50) * Math.PI / 360);
     const OUT_H = 3 * Math.max(vExt * (camera.aspect || 1.6), hw * 2);
     const OUT_V = 3 * Math.max(vExt, hh * 2);
-    const key = [hw, hh, cx, cy, zN, back, sFar, OUT_H, OUT_V].map(v => v.toFixed(6)).join(',');
+    const full = bgIsFullscreen();
+    const pageCol = bgPageBackgroundColor();
+    const key = [hw, hh, cx, cy, zN, back, sFar, OUT_H, OUT_V].map(v => v.toFixed(6)).join(',') +
+                '|' + (full ? 'fs' : 'win') + '|' + pageCol.getHexString();
     if (bgFishtankMesh && key === _bgFishtankKey) return;
     drop();
-    const pos = [], idx = [];
-    const quad = (a, b, c, d) => {
-        const i = pos.length / 3;
-        pos.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2], d[0],d[1],d[2]);
-        idx.push(i, i+1, i+2, i, i+2, i+3);
+    const mk = (pos, idx, colour, tag) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        g.setIndex(idx); g.computeVertexNormals();
+        const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+            color: colour, side: THREE.DoubleSide, transparent: false,
+            depthTest: true, depthWrite: true, fog: false }));
+        m.renderOrder = 0; m.frustumCulled = false; m.userData[tag] = true;
+        scene.add(m); return m;
     };
     const l = cx - hw, r = cx + hw, b = cy - hh, t = cy + hh;
-    // 1. the glass: four bands filling the screen plane outside the aperture
-    const OL = cx - OUT_H, OR = cx + OUT_H, OB = cy - OUT_V, OT = cy + OUT_V;
-    quad([OL,OT,zN], [OR,OT,zN], [OR,t,zN], [OL,t,zN]);        // above
-    quad([OL,b,zN],  [OR,b,zN],  [OR,OB,zN], [OL,OB,zN]);      // below
-    quad([OL,t,zN],  [l,t,zN],   [l,b,zN],   [OL,b,zN]);       // left
-    quad([r,t,zN],   [OR,t,zN],  [OR,b,zN],  [r,b,zN]);        // right
-    // 2. the tank: aperture -> the volume's far extent, along the reference rays
     const fx = (x) => cx + (x - cx) * sFar, fy = (y) => cy + (y - cy) * sFar;
-    quad([l,b,zN], [l,t,zN], [fx(l),fy(t),zF], [fx(l),fy(b),zF]);   // left wall
-    quad([r,b,zN], [fx(r),fy(b),zF], [fx(r),fy(t),zF], [r,t,zN]);   // right wall
-    quad([l,b,zN], [fx(l),fy(b),zF], [fx(r),fy(b),zF], [r,b,zN]);   // floor
-    quad([l,t,zN], [r,t,zN], [fx(r),fy(t),zF], [fx(l),fy(t),zF]);   // ceiling
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setIndex(idx);
-    g.computeVertexNormals();
-    bgFishtankMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-        color: 0x000000, side: THREE.DoubleSide, transparent: false,
-        depthTest: true, depthWrite: true, fog: false }));
-    bgFishtankMesh.renderOrder = 0;
-    bgFishtankMesh.userData.isFishtank = true;
-    bgFishtankMesh.frustumCulled = false;
+    // ---- the inner frame: four walls, aperture -> far extent, along the rays
+    {
+        const pos = [], idx = [];
+        const quad = (a, bb, c, d) => { const i = pos.length / 3;
+            pos.push(a[0],a[1],a[2], bb[0],bb[1],bb[2], c[0],c[1],c[2], d[0],d[1],d[2]);
+            idx.push(i, i+1, i+2, i, i+2, i+3); };
+        quad([l,b,zN], [l,t,zN], [fx(l),fy(t),zF], [fx(l),fy(b),zF]);   // left wall
+        quad([r,b,zN], [fx(r),fy(b),zF], [fx(r),fy(t),zF], [r,t,zN]);   // right wall
+        quad([l,b,zN], [fx(l),fy(b),zF], [fx(r),fy(b),zF], [r,b,zN]);   // floor
+        quad([l,t,zN], [r,t,zN], [fx(r),fy(t),zF], [fx(l),fy(t),zF]);   // ceiling
+        bgFishtankMesh = mk(pos, idx, 0x000000, 'isFishtank');
+    }
+    // ---- the outer frame: the matte in the screen plane, page-coloured.
+    // Removed in fullscreen, where the user's rule is that content may spill.
+    if (!full) {
+        const pos = [], idx = [];
+        const quad = (a, bb, c, d) => { const i = pos.length / 3;
+            pos.push(a[0],a[1],a[2], bb[0],bb[1],bb[2], c[0],c[1],c[2], d[0],d[1],d[2]);
+            idx.push(i, i+1, i+2, i, i+2, i+3); };
+        const OL = cx - OUT_H, OR = cx + OUT_H, OB = cy - OUT_V, OT = cy + OUT_V;
+        quad([OL,OT,zN], [OR,OT,zN], [OR,t,zN], [OL,t,zN]);        // above
+        quad([OL,b,zN],  [OR,b,zN],  [OR,OB,zN], [OL,OB,zN]);      // below
+        quad([OL,t,zN],  [l,t,zN],   [l,b,zN],   [OL,b,zN]);       // left
+        quad([r,t,zN],   [OR,t,zN],  [OR,b,zN],  [r,b,zN]);        // right
+        bgOuterFrameMesh = mk(pos, idx, pageCol, 'isOuterFrame');
+    }
     _bgFishtankKey = key;
-    scene.add(bgFishtankMesh);
-    console.log('[FISHTANK] aperture ' + (2*hw).toFixed(4) + ' x ' + (2*hh).toFixed(4) +
-        ' at the viewport surface z=' + zN.toFixed(4) + '; walls flare x' + sFar.toFixed(4) +
-        ' along the reference rays to z=' + zF.toFixed(4) + ' (outerVolumeDepth ' +
-        back.toFixed(4) + ', eye distance ' + Math.abs(Hd).toFixed(4) + '). 16 triangles, ' +
-        'double-sided, opaque black.');
+    console.log('[FRAME] inner box: aperture ' + (2*hw).toFixed(4) + ' x ' + (2*hh).toFixed(4) +
+        ' at the viewport surface z=' + zN.toFixed(4) + ', walls flaring x' + sFar.toFixed(4) +
+        ' along the reference rays to z=' + zF.toFixed(4) + '. Volume ' +
+        (bgEmbedVolume ? 'EMBEDDED (offset ' + bgEmbedOffsetNow().toFixed(4) + ', nothing in front of the glass)'
+                       : 'NOT embedded — near content protrudes') + '. Outer matte: ' +
+        (full ? 'REMOVED (fullscreen — content may spill past the letterbox)'
+              : 'page background #' + pageCol.getHexString()) + '.');
 }
 
 // --- Helper for Debug Views ---
@@ -19507,6 +19604,7 @@ function renderPortalFrame() {
         // black tube in front of it is unreadable, and the export bundle
         // renders through these same predicates.
         if (typeof bgFishtankMesh !== 'undefined') setSup(bgFishtankMesh);
+        if (typeof bgOuterFrameMesh !== 'undefined') setSup(bgOuterFrameMesh);
         if (typeof mpiMidMesh !== 'undefined') setSup(mpiMidMesh);
         if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setSup(m);
         if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setSup(m);
