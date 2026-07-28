@@ -32,25 +32,23 @@
 // depth-buffer measurement (a164):
 //
 //     pose    warp      browser
-//     rest    0.622%    0.000%     <- UNEXPLAINED, see below
+//     rest    0.000%    0.000%
 //     35      0.000%    0.000%
-//     43      0.005%    0.000%
-//     45      0.006%    0.000%
-//     47      0.424%    0.005%
-//     55      8.495%    0.222%
+//     43      0.000%    0.000%
+//     45      0.000%    0.000%
+//     47      0.351%    0.005%
+//     55      8.006%    0.222%
 //
-// INSIDE THE CONE — the operating range — it agrees: 0.000 to 0.006 against
-// 0.000. Outside the cone it EXAGGERATES by an order of magnitude, because the
-// linear-in-eye-offset model is the shift LUT's own calibration and the LUT is
-// built for the cone; past the rim the foreground's stretch cut and band cut,
-// which this does not model, are doing work in the real renderer.
+// INSIDE THE CONE — the operating range — it agrees EXACTLY: 0.000 against
+// 0.000 at every pose. Outside the cone it EXAGGERATES by an order of
+// magnitude, because the linear-in-eye-offset model is the shift LUT's own
+// calibration and the LUT is built for the cone; past the rim the foreground's
+// stretch cut and band cut, which this does not model, are doing work in the
+// real renderer. Treat anything beyond the rim as qualitative.
 //
-// THE REST-POSE 0.622% IS NOT EXPLAINED AND SHOULD NOT BE TRUSTED. At t = 0 the
-// warp is the identity, so the comparison reduces to plateF against dQ at the
-// same texel, and the a135 clamp guarantees plate <= dQ - one quantum there —
-// the answer has to be zero. The most likely cause is tie-breaking in this
-// rasteriser's edge rules rather than anything in the data, but I have not
-// proven that, so the rest pose is outside the validated envelope too.
+// (The rest pose read 0.622% until the depth key changed from z(d) to d — see
+// the note at the warp itself. The data was never at fault: the cached plate is
+// pointwise ordered, 0 of 870573 texels nearer than the source.)
 //
 // THE COVERAGE COLUMN MEASURES A DIFFERENT QUANTITY from the browser's and the
 // two are not comparable: this renders the foreground and the plate only, with
@@ -108,7 +106,17 @@ function raster(S, field, tx, ty, zbuf, own, tag, tear) {
   const X = new Float32Array(pw * ph), Y = new Float32Array(pw * ph), Z = new Float32Array(pw * ph);
   for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
     const i = y * pw + x, d = field[i], s = shiftPxAt(lut, d);
-    X[i] = x + tx * s; Y[i] = y + ty * s / Math.max(1e-6, aspect); Z[i] = zOffAt(vol, d);
+    // THE DEPTH KEY IS d, NOT z(d). Occlusion depends only on the ORDER of the
+    // two surfaces, and z(d) is monotone in d — so d is an equivalent key and a
+    // far better conditioned one. z(d) is a smoothstep, and a smoothstep has
+    // ZERO DERIVATIVE AT BOTH ENDS of its range, so near the near and far
+    // extremes a full source quantum of depth separation collapses into a z
+    // separation below float noise and the comparison is decided by rounding.
+    // That, not the data, was the rest-pose 0.622%: the cached plate is
+    // pointwise ordered — 0 of 870573 texels are nearer than the source — yet
+    // the z-space comparison still inverted at the flat ends. Using d removes
+    // the class of error outright rather than papering it with an epsilon.
+    X[i] = x + tx * s; Y[i] = y + ty * s / Math.max(1e-6, aspect); Z[i] = d;
   }
   let kept = 0, dropped = 0;
   const q = new Float64Array(8);
