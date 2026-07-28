@@ -24,8 +24,6 @@ const WT = '/workspace/mm', H = path.join(WT, 'harness');
   const res = await page.evaluate(async (ed) => {
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
-    if (ed.edgeDepth) window._skirtEdgeDepth = true;
-    if (ed.noInset) window._skirtNoInset = true;
     bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
     bgBuildStamp = null; buildBackgroundLayer();
     isSweeping = true;

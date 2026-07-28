@@ -36,7 +36,6 @@ const DEGS = [0, 25, 45];
     const out = await page.evaluate(async (o) => {
       window._rayReproject = true;
       bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
-      if (o.arm === 'a149') window._skirtEdgeDepth = true;
       bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
       bgBuildStamp = null; buildBackgroundLayer();
       isSweeping = true;

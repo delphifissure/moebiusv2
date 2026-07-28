@@ -44,11 +44,22 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
     if (ok) break; await new Promise(r => setTimeout(r, 1000));
   }
+  // A169: THE a110 SERVED-IDENTITY GUARD, PORTED HERE. This harness was used
+  // to A/B two versions of moebius.js by swapping the file between runs, and
+  // the two arms came back byte-identical in every cell. That is the RIGHT
+  // answer when the deletion is dead code, and it is also exactly what a stale
+  // served copy looks like — so the run cannot tell them apart unless it says
+  // out loud which build it measured. Only regress.js had this check.
+  const served = await page.evaluate(() => (typeof MOEBIUS_BUILD === 'string') ? MOEBIUS_BUILD : null);
+  const onDisk = (fs.readFileSync(path.join(WT, 'moebius.js'), 'utf8')
+                    .match(/MOEBIUS_BUILD\s*=\s*'([^']+)'/) || [])[1] || null;
+  console.log('served build = ' + served + (served === onDisk ? ' (matches this tree)'
+              : '  *** TREE SAYS ' + onDisk + ' — THE ARM DID NOT DIVERGE ***'));
+
   const rows = await page.evaluate(async (o) => {
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
     if (o.noSkirt) window._noQuickSkirt = true;
-    if (o.edgeDepth) window._skirtEdgeDepth = true;   // A150: revert to a149's continuation
     bgQuickBake = (o.mode === 'quick');
     bgMPIFullPlanes = (o.mode === 'v2'); bgMPIMode = (o.mode === 'v2');
     bgBuildStamp = null; buildBackgroundLayer();
@@ -80,7 +91,7 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
     for (const deg of o.degs) {
       camera.position.set(dist * Math.tan(deg * Math.PI / 180), 0, dist);
       const d = grab();
-      let eT = 0, eB = 0, iT = 0, iB = 0, eA = 0;
+      let eT = 0, eB = 0, iT = 0, iB = 0, eA = 0, iA = 0;
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const i = (y * W + x) * 4;
         const edge = (x - x0 < mx) || (x1 - x < mx) || (y - y0 < my) || (y1 - y < my);
@@ -90,30 +101,33 @@ const BAND = 0.08;   // fraction of the content bbox counted as "edge"
         // hole from a black border.
         const absent = d[i + 3] < 8;
         const black = absent || ((d[i] + d[i + 1] + d[i + 2]) < 24);
-        if (edge) { eT++; if (black) eB++; if (absent) eA++; } else { iT++; if (black) iB++; }
+        if (edge) { eT++; if (black) eB++; if (absent) eA++; } else { iT++; if (black) iB++; if (absent) iA++; }
       }
       out.push({ deg,
         edgePct: +(100 * eB / Math.max(1, eT)).toFixed(2),
         edgeAbsentPct: +(100 * eA / Math.max(1, eT)).toFixed(2),
         intPct: +(100 * iB / Math.max(1, iT)).toFixed(2),
+        intAbsentPct: +(100 * iA / Math.max(1, iT)).toFixed(2),
         edgeShare: +(100 * eB / Math.max(1, eB + iB)).toFixed(1),
         edgeAreaShare: +(100 * eT / Math.max(1, eT + iT)).toFixed(1),
         totalPct: +(100 * (eB + iB) / Math.max(1, eT + iT)).toFixed(2) });
     }
     camera.position.set(0, 0, dist); render();
     return out;
-  }, { degs: DEGS, band: BAND, mode: MODE, noSkirt: process.env.NOSKIRT === '1',
-                             edgeDepth: process.env.EDGEDEPTH === '1' });
+  }, { degs: DEGS, band: BAND, mode: MODE, noSkirt: process.env.NOSKIRT === '1' });
 
   const pad = (s, n) => String(s).padStart(n);
   console.log('\n' + ASSET + '  mode=' + MODE + '  WHERE IS THE BLACK? (outer ' + (BAND * 100) +
-              '% of the content bbox = "edge")' + (process.env.NOSKIRT === '1' ? '   [SKIRT OFF]'
-                : process.env.EDGEDEPTH === '1' ? '   [skirt on, a149 EDGE-depth continuation]'
-                : '   [skirt on, a150 FAR-ENVELOPE continuation]'));
-  console.log('  deg   black% edge   ABSENT% edge   black% interior   total black%   edge share');
+              '% of the content bbox = "edge")' + (process.env.NOSKIRT === '1' ? '   [SKIRT OFF]' : '   [skirt on]'));
+  console.log('  deg   black% edge   ABSENT% edge   black% int   ABSENT% int   total black%   edge share');
   for (const r of rows)
     console.log('  ' + pad(r.deg, 3) + pad(r.edgePct, 13) + pad(r.edgeAbsentPct, 15) +
-                pad(r.intPct, 18) + pad(r.totalPct, 15) + pad(r.edgeShare + '%', 14));
+                pad(r.intPct, 13) + pad(r.intAbsentPct, 13) +
+                pad(r.totalPct, 15) + pad(r.edgeShare + '%', 14));
+  console.log('\n  black% counts ABSENT (alpha 0) AND dark paint together. Where black% is high\n' +
+              '  and ABSENT% is 0, the geometry COVERED the pixel and the content there is dark —\n' +
+              '  that is not a hole, and a151/a152 are the reminder that covered is not the same\n' +
+              '  as correct. Where ABSENT% is high, the mesh let go and nothing filled it.');
   console.log('\n  the edge band is ' + rows[0].edgeAreaShare + '% of the measured area, so an edge share');
   console.log('  above that is a genuine edge concentration and below it is not.');
   await browser.close(); srv.kill(); process.exit(0);
