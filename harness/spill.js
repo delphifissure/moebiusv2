@@ -120,8 +120,13 @@ const DEGS = [0, 25, 45];
         insidePct: +(100 * inC / Math.max(1, inT)).toFixed(2), apertureAreaPx: inT });
     }
     camera.position.set(0, 0, dist); render();
+    // A171: the arm MUST be shown to have diverged. If the outer matte is still
+    // standing in the fullscreen arm then the containment number is the matte's,
+    // not the crop's, and the whole change is inert while looking like a pass.
     return { rows, fs: !!document.fullscreenElement, embed: bgEmbedOffsetNow(),
              inner: innerVolumeDepth, outer: outerVolumeDepth,
+             matte: (typeof bgOuterFrameMesh !== 'undefined' && !!bgOuterFrameMesh),
+             crop: (typeof bgAperture !== 'undefined' && bgAperture) ? bgAperture.crop : null,
              nearestZOff: bgEmbedOffsetNow() + Math.max(0, innerVolumeDepth) };
   }, { degs });
 
@@ -149,11 +154,15 @@ const DEGS = [0, 25, 45];
   const pad = (s, n) => String(s).padStart(n);
   const a0 = arms[0][1];
   console.log('\n' + ASSET + '  mode=' + MODE + '   inner=' + a0.inner + ' outer=' + a0.outer);
-  console.log('\n  arm            deg   embed    nearest zOff   content OUTSIDE aperture   % of outside   inside fill%');
+  console.log('\n  arm            deg   embed    nearest zOff   matte  crop   content OUTSIDE   % of outside   inside fill%');
   for (const [name, a] of arms) for (const r of a.rows)
     console.log('  ' + pad(name, 12) + pad(r.deg, 6) + pad(a.embed.toFixed(4), 9) +
-                pad(a.nearestZOff.toFixed(4), 15) + pad(r.outside, 27) +
+                pad(a.nearestZOff.toFixed(4), 15) + pad(a.matte ? 'on' : 'GONE', 7) +
+                pad(a.crop === null ? '-' : a.crop, 6) + pad(r.outside, 18) +
                 pad(r.outsidePct, 15) + pad(r.insidePct, 15));
+  console.log('\n  "matte GONE + crop 1" is the a171 arm: the frame is removed and the aperture');
+  console.log('  crop is the only thing bounding the apron. If matte reads "on" in the');
+  console.log('  fullscreen rows, the containment number belongs to the matte and a171 is inert.');
   console.log('\n  nearest zOff > 0 means content is IN FRONT of the glass and can cross the frame.');
   console.log('  windowed must be 0 outside. FULLSCREEN must be > 0 outside, and "FS inner=0"');
   console.log('  must return to 0 — that is what proves the spill is the inner volume and not');
