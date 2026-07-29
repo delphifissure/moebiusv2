@@ -126,7 +126,11 @@ const DEGS = [0, 25, 45];
     return { rows, fs: !!document.fullscreenElement, embed: bgEmbedOffsetNow(),
              inner: innerVolumeDepth, outer: outerVolumeDepth,
              matte: (typeof bgOuterFrameMesh !== 'undefined' && !!bgOuterFrameMesh),
-             crop: (typeof bgAperture !== 'undefined' && bgAperture) ? bgAperture.crop : null,
+             // the EFFECTIVE uniform, read off a live material — not bgAperture.crop,
+             // which is the build's intent and would mislabel an override arm
+             crop: (function () { try {
+                 return mediaLayers[0].mesh.material.uniforms.u_apertureCrop.value;
+             } catch (e) { return null; } })(),
              nearestZOff: bgEmbedOffsetNow() + Math.max(0, innerVolumeDepth) };
   }, { degs });
 
@@ -142,13 +146,21 @@ const DEGS = [0, 25, 45];
     console.log('  *** The fullscreen arms are NOT reported — a stubbed bgIsFullscreen would');
     console.log('  *** be testing the stub, not the build.');
   } else {
-    await page.evaluate(() => { bgBuildStamp = bgBuildStamp; bgEnsureFishtank(); });
+    await page.evaluate(() => { bgEnsureFishtank(); });
     arms.push(['FULLSCREEN', await measure(DEGS)]);
-    // control: no inner volume => nothing should be able to break out
-    await page.evaluate(() => { window.__savedInner = innerVolumeDepth; innerVolumeDepth = 0;
-      if (typeof _bgFishtankKey !== 'undefined') {} bgEnsureFishtank(); });
-    arms.push(['FS inner=0', await measure(DEGS)]);
-    await page.evaluate(() => { innerVolumeDepth = window.__savedInner; bgEnsureFishtank(); });
+    // A172 THE CONTROL. With nothing protruding, "outside == 0" in fullscreen is
+    // ALSO what you would measure if the apron simply were not there — so zero
+    // on its own proves nothing. Force the crop OFF with the matte still gone:
+    // if the crop is what bounds the apron, this must blow up to ~100%.
+    await page.evaluate(() => {
+      window.__realSync = bgSyncApertureUniforms;
+      window.bgSyncApertureUniforms = function (u) {
+        window.__realSync(u);
+        if (u && u.u_apertureCrop) u.u_apertureCrop.value = 0.0;
+      };
+    });
+    arms.push(['FS crop OFF', await measure(DEGS)]);
+    await page.evaluate(() => { window.bgSyncApertureUniforms = window.__realSync; });
   }
 
   const pad = (s, n) => String(s).padStart(n);
@@ -163,9 +175,9 @@ const DEGS = [0, 25, 45];
   console.log('\n  "matte GONE + crop 1" is the a171 arm: the frame is removed and the aperture');
   console.log('  crop is the only thing bounding the apron. If matte reads "on" in the');
   console.log('  fullscreen rows, the containment number belongs to the matte and a171 is inert.');
-  console.log('\n  nearest zOff > 0 means content is IN FRONT of the glass and can cross the frame.');
-  console.log('  windowed must be 0 outside. FULLSCREEN must be > 0 outside, and "FS inner=0"');
-  console.log('  must return to 0 — that is what proves the spill is the inner volume and not');
-  console.log('  the scene-extension apron.');
+  console.log('\n  A172: the embed is unconditional, so nearest zOff is 0.0000 in BOTH modes and');
+  console.log('  nothing is in front of the glass to cross the frame. windowed and FULLSCREEN');
+  console.log('  must both be 0 outside; "FS crop OFF" must be LARGE. Zero with the crop on is');
+  console.log('  only evidence if turning the crop off puts the apron back.');
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
