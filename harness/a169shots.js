@@ -29,7 +29,9 @@ const DEGS = [0, 25, 45];
   await new Promise(r => setTimeout(r, 1500));
   const browser = await chromium.launch({ executablePath: CHROME, headless: true,
     args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-  const dir = path.join(H, 'shots_a169_' + ASSET);
+  const onDisk = (fs.readFileSync(path.join(WT, 'moebius.js'), 'utf8')
+                    .match(/MOEBIUS_BUILD\s*=\s*'([^']+)'/) || [])[1] || null;
+  const dir = path.join(H, 'shots_' + (onDisk || 'x').replace(/[^A-Za-z0-9.-]/g, '') + '_' + ASSET);
   fs.mkdirSync(dir, { recursive: true });
 
   for (const mode of ['v2', 'quick']) {
@@ -44,8 +46,6 @@ const DEGS = [0, 25, 45];
     // with the previous build is indistinguishable from a shot sheet of the
     // previous build.
     const served = await page.evaluate(() => (typeof MOEBIUS_BUILD === 'string') ? MOEBIUS_BUILD : null);
-    const onDisk = (fs.readFileSync(path.join(WT, 'moebius.js'), 'utf8')
-                      .match(/MOEBIUS_BUILD\s*=\s*'([^']+)'/) || [])[1] || null;
     console.log(mode + ': served build = ' + served +
       (served === onDisk ? ' (matches this tree)' : '  *** TREE SAYS ' + onDisk + ' ***'));
 
