@@ -16793,9 +16793,13 @@ function updateCameraAndProjection() {
         // realtime too, where there is no bake at all.
         try { bgEnsureFishtank(); } catch (e) {}
         _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
-        // A150: the quick skirt no longer shares the plate's material (it carries
-        // the far-envelope depth texture), so it needs its own sync — a cloned
-        // ShaderMaterial gets cloned uniform objects, including u_refEye.
+        // A170: this comment used to say the quick skirt carries its own cloned
+        // material and therefore needs its own sync. a169 deleted that material
+        // along with the far envelope it existed to hold, so the skirt shares the
+        // plate's material again and this call is a no-op that re-syncs the same
+        // uniform object. Kept because it is free and it is the line that would
+        // have to exist the moment the skirt gets its own material again — but
+        // NOT kept with a false reason attached to it.
         _syncBG(typeof bgSkirtMesh !== 'undefined' ? bgSkirtMesh : null);
         _syncBG(typeof mpiMidMesh !== 'undefined' ? mpiMidMesh : null);
         if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) _syncBG(m);
