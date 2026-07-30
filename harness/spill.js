@@ -131,7 +131,12 @@ const DEGS = [0, 25, 45];
              crop: (function () { try {
                  return mediaLayers[0].mesh.material.uniforms.u_apertureCrop.value;
              } catch (e) { return null; } })(),
-             nearestZOff: bgEmbedOffsetNow() + Math.max(0, innerVolumeDepth) };
+             pop: (typeof bgAperture !== 'undefined' && bgAperture) ? (bgAperture.popExtra || 0) : 0,
+             // A174: with the taper the near extent AT THE FRAME CENTRE is
+             // exactly popExtra (the request equals the centre's own bound, so
+             // the clamp is tight there); at the border it is 0 by construction.
+             nearestZOff: bgEmbedOffsetNow() + Math.max(0, innerVolumeDepth) +
+                          ((typeof bgAperture !== 'undefined' && bgAperture) ? (bgAperture.popExtra || 0) : 0) };
   }, { degs });
 
   const arms = [];
@@ -161,17 +166,26 @@ const DEGS = [0, 25, 45];
     });
     arms.push(['FS crop OFF', await measure(DEGS)]);
     await page.evaluate(() => { window.bgSyncApertureUniforms = window.__realSync; });
+    // A174 ISOLATION. The shader gained a branch as well as a pop-out. If the
+    // leak survives with the pop-out off, it is the branch (or the instrument);
+    // if it vanishes, it is the pop-out.
+    if (typeof (await page.evaluate(() => typeof bgPopOut)) === 'string') {
+      await page.evaluate(() => { bgPopOut = false; _bgFishtankKey = ''; bgEnsureFishtank(); });
+      arms.push(['FS pop=0', await measure(DEGS)]);
+      await page.evaluate(() => { bgPopOut = true; _bgFishtankKey = ''; bgEnsureFishtank(); });
+    }
   }
 
   const pad = (s, n) => String(s).padStart(n);
   const a0 = arms[0][1];
   console.log('\n' + ASSET + '  mode=' + MODE + '   inner=' + a0.inner + ' outer=' + a0.outer);
-  console.log('\n  arm            deg   embed    nearest zOff   matte  crop   content OUTSIDE   % of outside   inside fill%');
+  console.log('\n  arm            deg   embed   popExtra  near zOff  matte  crop   content OUTSIDE   % out   inside fill%');
   for (const [name, a] of arms) for (const r of a.rows)
     console.log('  ' + pad(name, 12) + pad(r.deg, 6) + pad(a.embed.toFixed(4), 9) +
-                pad(a.nearestZOff.toFixed(4), 15) + pad(a.matte ? 'on' : 'GONE', 7) +
+                pad((a.pop || 0).toFixed(5), 10) + pad(a.nearestZOff.toFixed(4), 11) +
+                pad(a.matte ? 'on' : 'GONE', 7) +
                 pad(a.crop === null ? '-' : a.crop, 6) + pad(r.outside, 18) +
-                pad(r.outsidePct, 15) + pad(r.insidePct, 15));
+                pad(r.outsidePct, 9) + pad(r.insidePct, 15));
   console.log('\n  "matte GONE + crop 1" is the a171 arm: the frame is removed and the aperture');
   console.log('  crop is the only thing bounding the apron. If matte reads "on" in the');
   console.log('  fullscreen rows, the containment number belongs to the matte and a171 is inert.');

@@ -24,7 +24,7 @@ const MODE = process.argv[3] || 'v2';
 const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
               star: ['starwatcher_color.png', 'starwatcher_depth.png'],
               warrior: ['silverwarrior_color.png', 'silverwarrior_depth.png'] };
-const DEGS = [0, 25, 45];
+const DEGS = (process.env.DEGS ? process.env.DEGS.split(',').map(Number) : [0, 25, 45]);
 
 (async () => {
   fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(H, 'defaultImgColor.png'));
@@ -46,19 +46,24 @@ const DEGS = [0, 25, 45];
   console.log('served build = ' + served + (served === onDisk ? ' (matches this tree)'
               : '  *** TREE SAYS ' + onDisk + ' ***'));
 
-  await page.evaluate(async (mode) => {
+  await page.evaluate(async (o) => {
+    const mode = o.mode;
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
     bgQuickBake = (mode === 'quick');
     bgMPIFullPlanes = (mode === 'v2'); bgMPIMode = (mode === 'v2');
     bgBuildStamp = null; buildBackgroundLayer();
-    isSweeping = true;
+    // FADE=1 leaves the a143/a144 view fade ENGAGED. Every other harness sets
+    // isSweeping so the fade cannot mask geometry; here the question is
+    // precisely whether the fade already covers the region where the a174 taper
+    // degenerates, so the fade has to be allowed to do its job.
+    isSweeping = (o.fade !== 1);
     document.body.addEventListener('click', () => {
       document.documentElement.requestFullscreen().catch(() => {});
     });
-  }, MODE);
+  }, { mode: MODE, fade: process.env.FADE === '1' ? 1 : 0 });
 
-  const dir = path.join(H, 'shots_fs_' + (onDisk || 'x').replace(/[^A-Za-z0-9.-]/g, '') + '_' + ASSET);
+  const dir = path.join(H, 'shots_fs' + (process.env.FADE === '1' ? 'FADE' : '') + '_' + (onDisk || 'x').replace(/[^A-Za-z0-9.-]/g, '') + '_' + ASSET);
   fs.mkdirSync(dir, { recursive: true });
 
   const shoot = async (arm) => {
@@ -66,10 +71,17 @@ const DEGS = [0, 25, 45];
       const dist = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2;
       const res = { imgs: {} };
       for (const deg of o.degs) {
-        camera.position.set(dist * Math.tan(deg * Math.PI / 180), 0, dist);
-        for (let n = 0; n < 3; n++) render();
+        // WITH THE FADE ENGAGED, camera.position IS NOT OURS TO SET. The render
+        // loop rewrites camera.position.x from the tracker inputs every frame
+        // when isSweeping is false, so a direct set is silently discarded and
+        // every pose shoots the rest frame — which is exactly what the first
+        // version of this arm did. manualCamDX is the supported input.
+        if (o.fade === 1) { window.setViewOffset(dist * Math.tan(deg * Math.PI / 180), 0); }
+        else { camera.position.set(dist * Math.tan(deg * Math.PI / 180), 0, dist); }
+        for (let n = 0; n < 4; n++) render();
         res.imgs[deg] = renderer.domElement.toDataURL('image/png');
       }
+      if (o.fade === 1) window.setViewOffset(0, 0);
       camera.position.set(0, 0, dist); render();
       res.fs = !!document.fullscreenElement;
       res.matte = (typeof bgOuterFrameMesh !== 'undefined' && !!bgOuterFrameMesh);
@@ -77,7 +89,7 @@ const DEGS = [0, 25, 45];
       res.embed = bgEmbedOffsetNow();
       res.nearestZOff = bgEmbedOffsetNow() + Math.max(0, innerVolumeDepth);
       return res;
-    }, { degs: DEGS });
+    }, { degs: DEGS, fade: process.env.FADE === '1' ? 1 : 0 });
     const tag = arm + '_matte-' + (out.matte ? 'on' : 'GONE') + '_crop' + out.crop;
     for (const deg of DEGS)
       fs.writeFileSync(path.join(dir, tag + '_' + deg + 'deg.png'),
