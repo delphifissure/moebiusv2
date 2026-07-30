@@ -209,3 +209,55 @@ const ASSETS = (process.argv[2] === 'all' || !process.argv[2])
   }
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
+
+// ---------------------------------------------------------------------------
+// A175: WHAT THE SLACK BUYS.
+//
+// a174 measured the maximal taper degenerating at the cone rim. The reason is
+// structural: saturating the window bound makes the border derivative zero at
+// ANY angle, because
+//     dz*/dM |_{M=0} = H/E      and      dX/dP.x = 1 - E*(dz/dP.x)/H = 0
+// whether E is the worst-case cone offset or the current eye's. So a taper that
+// is fold-free MUST sit strictly inside the bound: z = lambda * z*, lambda < 1.
+// The slack is not undiscovered, it is NECESSARY.
+//
+// That changes the question from "what is the pop-out depth" to "how much slack",
+// and there the project already has a number that is not invented: the scene's
+// OWN worst surviving stretch, the a165 gate's maxRatio, measured per image at
+// bake time and already bounded by regress.js. The rule "the pop-out may not
+// compress the border worse than this scene already compresses something it
+// ships" gives
+//     border compression at the rim = 1/(1-lambda)  <=  R
+//     =>  lambda <= 1 - 1/R
+//
+// This prints the trade so the choice is made with the numbers in view.
+//   node harness/popdepth.js slack
+if (process.argv[2] === 'slack') {
+  const theta = 45 * Math.PI / 180, tanT = Math.tan(theta);
+  const R = { troll: 4.8, star: 6.186, warrior: 14.077, photo: 6.4 }; // a165 maxRatio, from regress
+  const pad = (s, n) => String(s).padStart(n);
+  console.log('\nA175  border compression 1/(1 - lambda*tan(phi)/tan(45)) and what lambda costs');
+  console.log('\n  lambda   @0deg   @25deg   @35deg   @40deg   @45deg   protrusion vs maximal');
+  for (const lam of [1.0, 0.95, 0.9, 0.85, 0.792, 0.75, 0.5, 0.25]) {
+    const c = (deg) => {
+      const d = 1 - lam * Math.tan(deg * Math.PI / 180) / tanT;
+      return d <= 1e-9 ? 'inf' : (1 / d).toFixed(2);
+    };
+    console.log('  ' + pad(lam.toFixed(3), 6) + pad(c(0), 8) + pad(c(25), 9) + pad(c(35), 9) +
+                pad(c(40), 9) + pad(c(45), 9) + pad((100 * lam).toFixed(0) + '%', 24));
+  }
+  console.log('\n  lambda = 1 - 1/R, R = the scene\'s own a165 worst surviving fold ratio:');
+  for (const k of Object.keys(R)) {
+    const lam = 1 - 1 / R[k];
+    console.log('    ' + pad(k, 8) + '  R=' + pad(R[k].toFixed(3), 7) +
+                '  -> lambda=' + lam.toFixed(4) +
+                '  rim compression=' + (1 / (1 - lam)).toFixed(2) +
+                '  (= R, by construction)  protrusion ' + (100 * lam).toFixed(0) + '% of maximal');
+  }
+  console.log('\n  The rim compression EQUALS R by construction, so the pop-out adds no stretch');
+  console.log('  worse than the worst this scene already draws. R is measured per image by the');
+  console.log('  a165 gate and is already bounded in regress.js, so nothing new is chosen —');
+  console.log('  but note R comes from the QUICK bake; v2 reports stretch:null, so plumbing it');
+  console.log('  to the shipped default is unfinished work, not a solved problem.');
+  process.exit(0);
+}
