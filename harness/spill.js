@@ -132,6 +132,9 @@ const DEGS = [0, 25, 45];
                  return mediaLayers[0].mesh.material.uniforms.u_apertureCrop.value;
              } catch (e) { return null; } })(),
              pop: (typeof bgAperture !== 'undefined' && bgAperture) ? (bgAperture.popExtra || 0) : 0,
+             R: (typeof bgStretchRatioNow === 'function') ? bgStretchRatioNow() : null,
+             lam: (typeof bgAperture !== 'undefined' && bgAperture) ? (bgAperture.popLambda || 0) : 0,
+             v2gate: (typeof window._v2Stretch === 'object' && window._v2Stretch) ? window._v2Stretch : null,
              // A174: with the taper the near extent AT THE FRAME CENTRE is
              // exactly popExtra (the request equals the centre's own bound, so
              // the clamp is tight there); at the border it is 0 by construction.
@@ -178,6 +181,8 @@ const DEGS = [0, 25, 45];
 
   const pad = (s, n) => String(s).padStart(n);
   const a0 = arms[0][1];
+  console.log('\n  a176 v2 smear gate: ' + (a0.v2gate ? JSON.stringify(a0.v2gate) : 'NOT PRESENT') +
+              '\n  R = ' + a0.R + '   lambda = ' + (a0.lam || 0).toFixed(4));
   console.log('\n' + ASSET + '  mode=' + MODE + '   inner=' + a0.inner + ' outer=' + a0.outer);
   console.log('\n  arm            deg   embed   popExtra  near zOff  matte  crop   content OUTSIDE   % out   inside fill%');
   for (const [name, a] of arms) for (const r of a.rows)
