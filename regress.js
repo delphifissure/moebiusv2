@@ -41,8 +41,18 @@ const HARNESS = path.join(__dirname, 'harness');
 // gate is pinned on all three but the ratios are what actually catch it. With
 // these bands the a117 build fails on all four assets.
 const ASSETS = [
-  // [tag, color, depth, sdMin%, sdMax%, groundMin%, groundMax%]
-  ['star',    'starwatcher_color.png',   'starwatcher_depth.png',   11.0, 16.0, 74.0, 84.0,  0, 24.0, 10.0, 3.4],
+  // [tag, color, depth, sdMin%, sdMax%, groundMin%, groundMax%,
+  //  stLo, stHi, stMax, stMean,            <- a165 gate, QUICK bake
+  //  v2Max, v2Mean]                        <- a178 gate, v2 measured COLD
+  //
+  // The v2 ceilings are ~1.5x the cold measurement, the same headroom the quick
+  // columns carry. Cold values at a177: star 5.240/2.802, warrior 19.908/4.143,
+  // photo 9.0/2.2, troll 6.789/2.138. They are ceilings on the WORST and MEAN
+  // ratio only — foldPct is deliberately unbounded, because with the a160
+  // criterion a survivor is a cell within one source quantum, and on an 8-bit
+  // source one quantum already exceeds the fold limit, so a band on foldPct
+  // would encode the file's bit depth rather than the geometry.
+  ['star',    'starwatcher_color.png',   'starwatcher_depth.png',   11.0, 16.0, 74.0, 84.0,  0, 24.0, 10.0, 3.4,  8.0, 4.0],
   // A106 RE-PIN (warrior SD 6.5..11.5 -> 8.0..14.0). The old band encoded the
   // a80 scan's linear-in-depth warp. That warp displaced the FG with a SCALAR
   // k, i.e. as if the head moved a fraction of its real excursion — measured
@@ -64,7 +74,7 @@ const ASSETS = [
   // legacy warp removed were reveals that genuinely open — texels that were
   // never inpainted. Re-pinned to the corrected behaviour, not widened to
   // accommodate it.
-  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  8.0, 14.0, 79.0, 88.0,  0, 12.0, 22.0, 3.3],
+  ['warrior', 'silverwarrior_color.png', 'silverwarrior_depth.png',  8.0, 14.0, 79.0, 88.0,  0, 12.0, 22.0, 3.3, 30.0, 6.0],
   // photo's higher SD% is the known dense-texture pocket cost of leaving
   // pocket promotion opt-in (a63b decision, made on star+warrior evidence:
   // promotion amplified painterly boundary leaks). Revisit if SD budget
@@ -75,7 +85,7 @@ const ASSETS = [
   // mask (29.1 measured) — the ORIGINAL a63b range is restored. If this
   // drifts high again, claims are spilling past their own physics
   // (REVIEW Addenda 78, 80, 81).
-  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0,  0, 16.0, 10.0, 3.0],
+  ['photo',   'roomImg1.png',            'roomDepth1.png',          24.0, 33.0, 58.0, 70.0,  0, 16.0, 10.0, 3.0, 14.0, 3.4],
   // TROLL = the app's SHIPPED DEFAULT (defaultImg*.png) and the one asset the
   // a62+ sweeps never covered (harness probes overwrite its filename).
   // a73 cure + a78 prominence bound: farther-value-wins fills reveals at
@@ -98,7 +108,7 @@ const ASSETS = [
   //     photo  2047  1.07x too small 28.7 -> 27.5
   //     warrior 3000 1.56x too small  8.7 ->  9.3
   // Re-pinned to the corrected behaviour, not widened to accommodate it.
-  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',      9.0, 18.0, 90.0, 98.0,  0, 22.0,  8.0, 2.9],
+  ['troll',   'defaultImgColor.png',     'defaultImgDepth.png',      9.0, 18.0, 90.0, 98.0,  0, 22.0,  8.0, 2.9, 10.0, 3.2],
 ];
 
 let pass = 0, fail = 0;
@@ -155,7 +165,7 @@ const check = (label, val, lo, hi) => {
   };
 
   // ---- mask numbers per asset (quick-bake SD region + ground class) ----
-  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi, stLo, stHi, stMax, stMean] of ASSETS) {
+  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi, stLo, stHi, stMax, stMean, v2Max, v2Mean] of ASSETS) {
     fs.copyFileSync(path.join(__dirname, color), path.join(HARNESS, 'defaultImgColor.png'));
     fs.copyFileSync(path.join(__dirname, depth), path.join(HARNESS, 'defaultImgDepth.png'));
     await load();
@@ -166,6 +176,28 @@ const check = (label, val, lo, hi) => {
       let nD = 0, nG = 0; const N = mk.pw * mk.ph;
       for (let i = 0; i < N; i++) { if (mk.disocc[i]) nD++; if (mk.ground && mk.ground[i]) nG++; }
       return { sd: 100 * nD / N, g: 100 * nG / N, st: window._qbStretch || null };
+    });
+    // A178 THE SAME GATE ON THE SHIPPED DEFAULT. Everything above is measured on
+    // the QUICK bake, so until now the suite had no reading at all on v2 — which
+    // is what let v2 sit at 56x worst stretch (a176) while the quick path was
+    // held to 4.8x.
+    //
+    // A179 MEASURED COLD, ON A FRESH PAGE. The first version baked v2 in the
+    // same page straight after quick, and that reads a DIFFERENT geometry:
+    // harness/v2order.js, one page, v2 -> quick -> v2, on star —
+    //     v2 cold        keep 256165  worst 5.240
+    //     v2 after quick keep 251042  worst 7.564
+    //     v2 again       keep 250197  worst 7.564
+    // so the quick bake changes the v2 bake, AND v2 is not idempotent against
+    // itself. Both are open defects (see the addendum); until they are fixed a
+    // guard measured after a quick bake would be pinned to a contaminated state
+    // and would not fail when the COLD path regressed. Reload first.
+    await load();
+    const rv2 = await page.evaluate(() => {
+      window._srCapture = true; window._rayReproject = true;
+      bgQuickBake = false; bgMPIFullPlanes = true; bgMPIMode = true;
+      bgBuildStamp = null; buildBackgroundLayer();
+      return window._v2Stretch || null;
     });
     if (!r) { console.log('FAIL  ' + tag + ' build (no capture)'); fail++; continue; }
     check(tag + ' SD%', r.sd, sdLo, sdHi);
@@ -194,6 +226,22 @@ const check = (label, val, lo, hi) => {
         check(tag + ' worst fold ratio', r.st.maxRatio, 1.0, stMax);
         check(tag + ' mean fold ratio', r.st.meanRatio, 1.0, stMean);
     } else { console.log('FAIL  ' + tag + ' smear gate (no _qbStretch capture)'); fail++; }
+    // A178: v2 front planes. The backdrop is excluded by the gate itself — it
+    // keeps its cliff cells deliberately, so binding the visible geometry to the
+    // most-hidden geometry's stretch would be meaningless.
+    //
+    // foldPct is NOT bounded here. With the a160 criterion a cell survives when
+    // its depth span is within one source quantum, and on an 8-bit source one
+    // quantum already exceeds the fold limit, so foldPct sits near 50-70% by
+    // construction and a band on it would encode the source's bit depth rather
+    // than the geometry. The RATIOS carry the signal — that is the a165 lesson,
+    // and it is the same here.
+    if (rv2) {
+        check(tag + ' v2 worst fold ratio', rv2.maxRatio, 1.0, v2Max);
+        check(tag + ' v2 mean fold ratio', rv2.meanRatio, 1.0, v2Mean);
+        console.log('      (v2 ' + rv2.keep + ' front quads, ' + rv2.foldPct + '% folding, ' +
+                    rv2.tornPct + '% torn, backdrop ' + rv2.backdropQuads + ' quads excluded)');
+    } else { console.log('FAIL  ' + tag + ' v2 smear gate (no _v2Stretch capture)'); fail++; }
   }
 
   // ---- 3-path build sanity on the reference (throws/holes get caught by build failure or blank canvas) ----
