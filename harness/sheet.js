@@ -20,7 +20,11 @@ const MODE = process.argv[3] || 'v2';
 const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
               star: ['starwatcher_color.png', 'starwatcher_depth.png'],
               warrior: ['silverwarrior_color.png', 'silverwarrior_depth.png'] };
-const DEGS = [0, 15, 25, 35];
+// A184: poses are now (x,y) WORLD offsets, not X-only degrees, because the
+// vertical axis had never been shot. POSES="x:y,x:y,..." overrides.
+const POSES = (process.env.POSES
+  ? process.env.POSES.split(',').map(t => t.split(':').map(Number))
+  : [[0, 0], [0.024, 0.030], [0.024, 0.090], [0.024, -0.090]]);
 const CW = 720, CH = 450;
 
 (async () => {
@@ -52,8 +56,8 @@ const CW = 720, CH = 450;
     isSweeping = true;
     const dist = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2;
     const shots = [];
-    for (const deg of o.degs) {
-      camera.position.set(dist * Math.tan(deg * Math.PI / 180), 0, dist);
+    for (const pz of o.poses) {
+      camera.position.set(pz[0], pz[1], dist);
       for (let n = 0; n < 3; n++) render();
       const c = document.createElement('canvas'); c.width = o.cw; c.height = o.ch;
       c.getContext('2d').drawImage(renderer.domElement, 0, 0, o.cw, o.ch);
@@ -74,13 +78,17 @@ const CW = 720, CH = 450;
       g.drawImage(shots[i], x, y);
       g.strokeStyle = '#444'; g.strokeRect(x + 0.5, y + 0.5, o.cw - 1, o.ch - 1);
       g.fillStyle = '#eee'; g.font = '17px sans-serif';
-      g.fillText(o.degs[i] + '°' + (o.degs[i] === 35 ? '   (fade start — last full-opacity pose)' : ''),
+      const pz = o.poses[i];
+      const aX = (Math.atan2(pz[0], dist) * 180 / Math.PI).toFixed(1);
+      const aY = (Math.atan2(pz[1], dist) * 180 / Math.PI).toFixed(1);
+      g.fillText('cam(' + pz[0].toFixed(3) + ', ' + pz[1].toFixed(3) + ')   angX ' + aX +
+                 '°  angY ' + aY + '°' + (Math.abs(pz[1]) > 0.08 ? '   <- the reported pose' : ''),
                  x + 2, y + o.ch + 21);
     }
     return cv.toDataURL('image/png');
-  }, { degs: DEGS, mode: MODE, cw: CW, ch: CH, asset: ASSET, build: served });
+  }, { poses: POSES, mode: MODE, cw: CW, ch: CH, asset: ASSET, build: served });
 
-  const out = path.join(H, 'sheet_' + (onDisk || 'x').replace(/[^A-Za-z0-9.-]/g, '') + '_' + ASSET + '_' + MODE + '.png');
+  const out = path.join(H, 'sheetV_' + (onDisk || 'x').replace(/[^A-Za-z0-9.-]/g, '') + '_' + ASSET + '_' + MODE + '.png');
   fs.writeFileSync(out, Buffer.from(dataUrl.split(',')[1], 'base64'));
   console.log('  -> ' + out);
   await browser.close(); srv.kill(); process.exit(0);
