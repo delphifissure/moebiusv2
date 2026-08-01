@@ -29,7 +29,11 @@ const DEG = Number(process.argv[3] || 35);
 const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
               star: ['starwatcher_color.png', 'starwatcher_depth.png'],
               warrior: ['silverwarrior_color.png', 'silverwarrior_depth.png'] };
-const BINS = [10, 20];   // shipped, and doubled
+// A183: the arm is now the DECIMATION, not the bins. [maxBlock, bins] pairs —
+// maxBlock 16 is shipped, 1 disables merging so every cell is emitted alone.
+const ARMS = (process.env.ARM === 'bins')
+  ? [[16, 10], [16, 20]]          // a182's refuted bin test, kept runnable
+  : [[16, 10], [1, 10]];
 
 (async () => {
   fs.copyFileSync(path.join(WT, SRC[ASSET][0]), path.join(H, 'defaultImgColor.png'));
@@ -50,11 +54,11 @@ const BINS = [10, 20];   // shipped, and doubled
   const served = await page.evaluate(() => (typeof MOEBIUS_BUILD === 'string') ? MOEBIUS_BUILD : null);
   console.log('served build = ' + served + (served === onDisk ? ' (matches this tree)' : '  *** TREE SAYS ' + onDisk + ' ***'));
 
-  const run = (bins, deg) => page.evaluate(async (o) => {
+  const run = (maxBlock, bins, deg) => page.evaluate(async (o) => {
     window._rayReproject = true;
     bgViewFadeStartDeg = 35; bgViewFadeEndDeg = 45;
     bgQuickBake = false; bgMPIFullPlanes = true; bgMPIMode = true;
-    bgMPIV2Bins = o.bins;
+    bgMPIV2Bins = o.bins; bgMPIV2MaxBlock = o.maxBlock;
     bgBuildStamp = null; buildBackgroundLayer();
     isSweeping = true;
     const dist = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2;
@@ -113,7 +117,8 @@ const BINS = [10, 20];   // shipped, and doubled
       if (s > best) { best = s; bestLag = lag; }
     }
     acf.sort((p2, q2) => q2[1] - p2[1]);
-    return { bins: o.bins, x0, x1, y0, y1, hgt,
+    return { bins: o.bins, maxBlock: o.maxBlock, x0, x1, y0, y1, hgt,
+             quads: (window._v2Stretch || {}).keep,
              // n is ALWAYS ~1% of the frame by construction — it is the
              // threshold's definition, not a finding. The informative numbers
              // are the threshold itself and the region's mean comb.
@@ -122,16 +127,16 @@ const BINS = [10, 20];   // shipped, and doubled
              stripesInRegion: bestLag ? +(hgt / bestLag).toFixed(1) : 0,
              planes: (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) ? mpiFullMeshes.length : -1,
              v2max: (window._v2Stretch || {}).maxRatio };
-  }, { bins, deg });
+  }, { bins, maxBlock, deg });
 
-  console.log('\n' + ASSET + ' at ' + DEG + ' deg — is the stripe period set by the bin count?');
-  console.log('\n  bins  planes  region (x0..x1, y0..y1)     combThr  period    corr  v2 worst');
+  console.log('\n' + ASSET + ' at ' + DEG + ' deg — does the periodic banding follow the block grid?');
+  console.log('\n  blk bins  quads  region (x0..x1, y0..y1)     combThr  period    corr  v2 worst');
   const out = [];
-  for (const b of BINS) {
-    const r = await run(b, DEG);
+  for (const [mb, b] of ARMS) {
+    const r = await run(mb, b, DEG);
     out.push(r);
     if (r.none) { console.log('  ' + String(b).padStart(4) + '   no comb region found'); continue; }
-    console.log('  ' + String(b).padStart(4) + String(r.planes).padStart(8) +
+    console.log('  ' + String(mb).padStart(3) + String(b).padStart(5) + String(r.quads).padStart(7) +
       ('  ' + r.x0 + '..' + r.x1 + ', ' + r.y0 + '..' + r.y1).padEnd(28) +
       String(r.combThr).padStart(8) + String(r.period).padStart(8) +
       String(r.peak).padStart(8) + String(r.v2max).padStart(10));
@@ -139,13 +144,17 @@ const BINS = [10, 20];   // shipped, and doubled
   }
   if (out.length === 2 && !out[0].none && !out[1].none) {
     const ratio = out[0].period / Math.max(1e-9, out[1].period);
-    console.log('\n  period ' + out[0].period + ' -> ' + out[1].period + '  (ratio ' + ratio.toFixed(2) + ')');
-    console.log('  PREDICTION if the bins cause the stripes: doubling bins halves the period, ratio ~2.0');
-    console.log('  VERDICT: ' + (ratio > 1.6 && ratio < 2.5
-      ? 'CONSISTENT — the stripes track the bin count'
-      : (ratio > 0.8 && ratio < 1.25
-         ? 'REFUTED — the period did not move, the bins are not the cause'
-         : 'INCONCLUSIVE — the period moved, but not by the predicted factor')));
+    const dCorr = out[1].peak - out[0].peak;
+    console.log('\n  quads ' + out[0].quads + ' -> ' + out[1].quads +
+                '   period ' + out[0].period + ' -> ' + out[1].period +
+                '   corr ' + out[0].peak + ' -> ' + out[1].peak + '  (' + (dCorr >= 0 ? '+' : '') + dCorr.toFixed(3) + ')');
+    console.log('  PREDICTION if the BLOCK GRID causes the banding: turning merging off');
+    console.log('  (blk 1, every cell emitted alone) must largely remove the periodic structure.');
+    console.log('  VERDICT: ' + (dCorr < -0.15
+      ? 'CONSISTENT — the periodicity collapses without merging'
+      : (Math.abs(dCorr) <= 0.15
+         ? 'REFUTED — the banding survives with merging off, the block grid is not the cause'
+         : 'UNEXPECTED — merging off made the banding STRONGER')));
   }
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
