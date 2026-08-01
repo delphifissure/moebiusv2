@@ -86,9 +86,20 @@ const YS = [0, 0.03, 0.06, 0.090, 0.12, -0.090];
 
     camera.position.set(0, 0, o.z); const base = stats(grab());
     const rows = [];
+    // A185: the look-down black band — is it the FISHTANK's ceiling?
+    // Looking from below you should see the tank's top wall, and the tank is
+    // black, exactly like the side-wall wedge at horizontal angles. Against
+    // that: a tank is roughly symmetric, and dark% is 2.5 looking up vs 23.0
+    // looking down. So the arm hides the tank and nothing else.
     for (const yy of o.ys) {
       camera.position.set(o.x, yy, o.z);
       const s = stats(grab());
+      let darkNoTank = null;
+      if (typeof bgFishtankMesh !== 'undefined' && bgFishtankMesh) {
+        const v = bgFishtankMesh.visible; bgFishtankMesh.visible = false;
+        darkNoTank = stats(grab()).darkPct;
+        bgFishtankMesh.visible = v;
+      }
       // tiles that HAD detail at rest and lost most of it here
       let lost = 0, had = 0, sumDrop = 0;
       for (let i = 0; i < base.sd.length; i++) {
@@ -104,7 +115,8 @@ const YS = [0, 0.03, 0.06, 0.090, 0.12, -0.090];
         lostTiles: lost, hadTiles: had,
         lostPct: +(100 * lost / Math.max(1, had)).toFixed(2),
         meanDrop: +(100 * sumDrop / Math.max(1, had)).toFixed(2),
-        absentPct: +s.absentPct.toFixed(3), darkPct: +s.darkPct.toFixed(2) });
+        absentPct: +s.absentPct.toFixed(3), darkPct: +s.darkPct.toFixed(2),
+        darkNoTank: darkNoTank === null ? null : +darkNoTank.toFixed(2) });
     }
     camera.position.set(0, 0, o.z); render();
     return { rows, baseTiles: base.sd.filter(v => v >= 4).length };
@@ -113,11 +125,15 @@ const YS = [0, 0.03, 0.06, 0.090, 0.12, -0.090];
   const pad = (s, n) => String(s).padStart(n);
   console.log('\n' + ASSET + '  mode=' + MODE + '  vertical sweep at the user\'s x=' + USER_X + ', eye z=' + USER_Z);
   console.log('  ' + r.baseTiles + ' tiles carry detail at rest (luma std >= 4)\n');
-  console.log('    y      angY   tiles losing >50% detail    mean detail drop%   ABSENT%   dark%');
+  console.log('    y      angY   tiles losing >50% detail    mean drop%   ABSENT%   dark%   dark w/o tank');
   for (const w of r.rows)
     console.log('  ' + pad(w.y.toFixed(3), 6) + pad(w.angY + '°', 8) +
                 pad(w.lostTiles + ' / ' + w.hadTiles + '  (' + w.lostPct + '%)', 26) +
-                pad(w.meanDrop, 20) + pad(w.absentPct, 10) + pad(w.darkPct, 8));
+                pad(w.meanDrop, 13) + pad(w.absentPct, 10) + pad(w.darkPct, 8) +
+                pad(w.darkNoTank === null ? '-' : w.darkNoTank, 16));
+  console.log('\n  "dark w/o tank" hides ONLY bgFishtankMesh. If the look-down band is the');
+  console.log('  tank ceiling, that column collapses to the look-up value; if it stays high,');
+  console.log('  the band is missing content and the tank was a red herring.');
   console.log('\n  ABSENT/dark are the hole counts. The DETAIL columns are the a152 metric:');
   console.log('  a tile that keeps its pixels but loses its texture is invisible to hole-counting.');
   await browser.close(); srv.kill(); process.exit(0);
