@@ -28,9 +28,25 @@ const WT = '/workspace/mm', H = path.join(WT, 'harness');
 // bracket the cone rim: bgViewFadeEndDeg is 45, and the invariant only
 // promises anything INSIDE it, so 43/45/47 is where the promise should end.
 const T = (deg) => 0.2 * Math.tan(deg * Math.PI / 180);
-const POSES = [{ tag: 'rest', x: 0, y: 0 }, { tag: '35deg', x: T(35), y: 0 },
-               { tag: '43deg', x: T(43), y: 0 }, { tag: '45deg', x: T(45), y: 0 },
-               { tag: '47deg', x: T(47), y: 0 }, { tag: '55deg', x: T(55), y: 0 }];
+// A186 THE VERTICAL AXIS WAS NEVER IN THIS PROOF. Every pose below the first
+// group has y: 0 — a164 declared "zero violations at every pose INSIDE the cone"
+// on the strength of six HORIZONTAL poses. The invariant itself is derived from
+// screen(x,d) = f*(x/D - ex*g(d)) with ex the LATERAL eye offset, so whether it
+// covers vertical motion was assumed, never measured.
+//
+// The user reports the BG WASH DRAWING IN FRONT of the astronaut and the dune
+// party as the eye rises — which is precisely an ordering violation, on the axis
+// this proof never visited.
+const POSES = [{ tag: 'rest', x: 0, y: 0 }, { tag: 'H 35deg', x: T(35), y: 0 },
+               { tag: 'H 43deg', x: T(43), y: 0 }, { tag: 'H 45deg', x: T(45), y: 0 },
+               { tag: 'H 47deg', x: T(47), y: 0 }, { tag: 'H 55deg', x: T(55), y: 0 },
+               // A186: the same angles on the VERTICAL axis, both signs
+               { tag: 'V +20deg', x: 0, y: T(20) }, { tag: 'V +27deg', x: 0, y: T(27) },
+               { tag: 'V +35deg', x: 0, y: T(35) }, { tag: 'V +45deg', x: 0, y: T(45) },
+               { tag: 'V -20deg', x: 0, y: -T(20) }, { tag: 'V -27deg', x: 0, y: -T(27) },
+               { tag: 'V -35deg', x: 0, y: -T(35) }, { tag: 'V -45deg', x: 0, y: -T(45) },
+               // and the user's own reported pose, scaled to this eye distance
+               { tag: 'USER', x: 0.024 * (0.2 / 0.177), y: 0.090 * (0.2 / 0.177) }];
 
 (async () => {
   fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png'));
@@ -84,12 +100,28 @@ const POSES = [{ tag: 'rest', x: 0, y: 0 }, { tag: '35deg', x: T(35), y: 0 },
     for (const p of o.poses) {
       camera.position.set(p.x, p.y, 0.2);
       for (let n = 0; n < 3; n++) render();
+      // A186b THE FRAMES ARE NOT CONTENT, AND COUNTING THEM SATURATED THIS TEST.
+      // a153's fishtank walls are opaque geometry NEARER than the content behind
+      // them, so from any off-axis pose the tank registers as "something in front
+      // of the foreground" — which is true and completely uninteresting. It shows
+      // up as horizontal-only because the tank only intrudes on that axis here,
+      // and it made the live build (32.6% at H35) indistinguishable from the
+      // deliberately-broken control (36.5%). A test whose control matches its
+      // subject is measuring nothing. Frames are excluded from BOTH passes; the
+      // question is whether CONTENT draws in front of content.
+      const frames = [];
+      for (const fm of [(typeof bgFishtankMesh !== 'undefined') ? bgFishtankMesh : null,
+                        (typeof bgOuterFrameMesh !== 'undefined') ? bgOuterFrameMesh : null]) {
+        if (fm) { frames.push([fm, fm.visible]); fm.visible = false; }
+      }
+      for (let n = 0; n < 2; n++) render();
       const all = depth();
       const hidden = [];
       scene.traverse(m => { if (m.isMesh && m !== L.mesh) { hidden.push([m, m.visible]); m.visible = false; } });
       for (let n = 0; n < 3; n++) render();
       const fg = depth();
       for (const [m, v] of hidden) m.visible = v;
+      for (const [fm, v] of frames) fm.visible = v;
       // the depth pass writes 0 where nothing is drawn (cleared); alpha marks it
       let fgPx = 0, viol = 0, worst = 0;
       for (let i = 0; i < fg.px.length; i += 4) {
