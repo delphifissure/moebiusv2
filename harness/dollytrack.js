@@ -70,9 +70,25 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
   console.log('served build = ' + served + (served === onDisk ? ' (matches this tree)' : '  *** TREE SAYS ' + onDisk + ' ***'));
 
   const r = await page.evaluate(async (o) => {
+    // A197 THE MODE IS AN ARM NOW. a196 was verified on QUICK only, with a
+    // static synthetic head. The shipped default on load is REALTIME (a112
+    // reverts to it for every new image) and the shipped BAKE is v2, so the
+    // regime the user actually reports on was never measured. A fix verified in
+    // one mode is a fix verified in one mode.
     window._rayReproject = true;
-    bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
-    bgBuildStamp = null; buildBackgroundLayer();
+    if (o.mode === 'realtime') {
+        // no bake at all — the state the app is in when an image finishes loading
+        bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false;
+    } else if (o.mode === 'v1') {
+        bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false;
+        bgBuildStamp = null; buildBackgroundLayer();
+    } else if (o.mode === 'v2') {
+        bgQuickBake = false; bgMPIFullPlanes = true; bgMPIMode = true;
+        bgBuildStamp = null; buildBackgroundLayer();
+    } else {
+        bgQuickBake = true; bgMPIFullPlanes = false; bgMPIMode = false;
+        bgBuildStamp = null; buildBackgroundLayer();
+    }
 
     const W = renderer.domElement.width, Hh = renderer.domElement.height;
     const grab = (ph) => {
@@ -401,7 +417,7 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
     subjectLockActive = true; bgEmbedVolume = true;
     return { q: +q.toFixed(4), P: portalPlaneWorldZ, embed: +bgEmbedOffsetNow().toFixed(4),
              W, H: Hh, on, off, nopin, pick: window.__pick };
-  }, { subj: process.env.SUBJ || 'far' });
+  }, { subj: process.env.SUBJ || 'far', mode: process.env.MODE || 'quick' });
 
   const pad = (s, n) => String(s).padStart(n);
   if (r.failed) {
@@ -434,7 +450,7 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
     }
     await browser.close(); srv.kill(); process.exit(3);
   }
-  console.log('\n' + ASSET + '  canvas ' + r.W + 'x' + r.H + '  embed=' + r.embed + '  subject q=' + r.q);
+  console.log('\n' + ASSET + '  mode=' + (process.env.MODE || 'quick') + '  canvas ' + r.W + 'x' + r.H + '  embed=' + r.embed + '  subject q=' + r.q);
   if (r.pick) console.log('  subject chosen from the picture: dNorm ' + r.pick.dNorm + ' (depth byte ' + r.pick.dv +
     ', portal ' + r.pick.portalNorm + ', distance ' + r.pick.dist + ')  at (' + r.pick.at + ')' +
     '  contrast ' + r.pick.varr + ' of best ' + r.pick.maxVar + ' over ' + r.pick.nCand + ' candidates');
