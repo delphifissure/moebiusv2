@@ -30,7 +30,7 @@ const OUT = process.env.OUT || '/tmp/claude-0/-home-user-moebius/989b3965-28fd-5
   const shoot = async (rowcol, tag) => {
     const r = await page.evaluate(async (o) => {
       window._rayReproject = true;
-      window._plateRowColor = o.rowcol;
+      window._bandFillLegacyWash = !o.rowcol;   // arm A = legacy wash, arm B = A213 depth-gated fill
       const g = mediaLayers[0].mesh.geometry;
       if (g.userData._fullIndex) g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
       bgQuickBake = true; buildBackgroundLayer();
@@ -75,7 +75,7 @@ const OUT = process.env.OUT || '/tmp/claude-0/-home-user-moebius/989b3965-28fd-5
     return r;
   };
   const A = await shoot(false, 'wash');
-  const B = await shoot(true,  'rowcol');
+  const B = await shoot(true,  'bandfill');
   let ch = 0; for (let i = 0; i < A.restLuma.length; i++) if (Math.abs(A.restLuma[i] - B.restLuma[i]) > 8) ch++;
   const pct = (a, b) => ((b - a) / Math.max(1e-6, a) * 100).toFixed(1);
   console.log('VERDICT: user.ghost streak ' + A.m['user.ghost'].streak + ' -> ' + B.m['user.ghost'].streak + ' (' + pct(A.m['user.ghost'].streak, B.m['user.ghost'].streak) + '%)' +
