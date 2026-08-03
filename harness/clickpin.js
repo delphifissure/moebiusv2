@@ -66,7 +66,8 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
   const r = await page.evaluate(async (o) => {
     if (typeof dollySubjectScale === 'undefined') window.dollySubjectScale = 1;
     if (typeof dollyRefEyeZ === 'undefined') window.dollyRefEyeZ = null;
-    window._rayReproject = true;
+    // A208: REPRO=off measures the legacy path — the corner-fix target
+    window._rayReproject = (o.repro !== 'off');
     if (o.mode === 'realtime') { bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false; }
     else if (o.mode === 'v1')  { bgQuickBake = false; bgMPIFullPlanes = false; bgMPIMode = false; bgBuildStamp = null; buildBackgroundLayer(); }
     else if (o.mode === 'v2')  { bgQuickBake = false; bgMPIFullPlanes = true;  bgMPIMode = true;  bgBuildStamp = null; buildBackgroundLayer(); }
@@ -207,7 +208,7 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
         }
         if (k===0 && (bdx!==0||bdy!==0)) amb = true;
         worst = Math.max(worst, Math.abs(bdx), Math.abs(bdy));
-        minc = Math.min(minc, bc); trail.push(bdx+','+bdy);
+        minc = Math.min(minc, bc); trail.push(bdx+','+bdy+'@'+bc.toFixed(2));
       }
       const gain = dollyLatGain, embSeen = bgEmbedOffsetNow();
       dollyZoomActive = false; dollyRefEyeZ = null;
@@ -242,10 +243,10 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
     return { click: { at: click.cx+','+click.cy, d: +click.d.toFixed(4) },
              P: portalPlaneWorldZ, inner: innerVolumeDepth, outer: outerVolumeDepth,
              A, B, C, witOut, W, H: Hh };
-  }, { mode: process.env.MODE || 'quick' });
+  }, { mode: process.env.MODE || 'quick', repro: process.env.REPRO || 'on' });
 
   if (r.failed) { console.log('*** ' + r.failed); await browser.close(); srv.kill(); process.exit(3); }
-  console.log('\n' + ASSET + '  mode=' + (process.env.MODE||'quick') + '  canvas ' + r.W + 'x' + r.H);
+  console.log('\n' + ASSET + '  mode=' + (process.env.MODE||'quick') + '  repro=' + (process.env.REPRO||'on') + '  canvas ' + r.W + 'x' + r.H);
   console.log('emulated canvas click at (' + r.click.at + '), source depth ' + r.click.d);
   console.log('  -> currentNormPortalPlane = ' + r.click.d + ',  subject = portal plane (' + r.P + '),  outerVolumeDepth = ' + r.outer);
   console.log('  the clicked texel therefore has displacement = 0, so zOff = embed exactly.\n');

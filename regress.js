@@ -120,6 +120,7 @@ const check = (label, val, lo, hi) => {
 
 (async () => {
   const mode = process.argv[2] || 'full';
+  const DOLLY_ONLY = (mode === 'dolly');   // A208: run just the dolly invariant
   // A110 SERVED-IDENTITY GUARD. Port 8099 is not owned by this run. A
   // scratch_server left behind by an earlier probe — in a DIFFERENT worktree —
   // keeps the port, our spawn dies of EADDRINUSE, and every measurement then
@@ -165,7 +166,7 @@ const check = (label, val, lo, hi) => {
   };
 
   // ---- mask numbers per asset (quick-bake SD region + ground class) ----
-  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi, stLo, stHi, stMax, stMean, v2Max, v2Mean] of ASSETS) {
+  for (const [tag, color, depth, sdLo, sdHi, gLo, gHi, stLo, stHi, stMax, stMean, v2Max, v2Mean] of (DOLLY_ONLY ? [] : ASSETS)) {
     fs.copyFileSync(path.join(__dirname, color), path.join(HARNESS, 'defaultImgColor.png'));
     fs.copyFileSync(path.join(__dirname, depth), path.join(HARNESS, 'defaultImgDepth.png'));
     await load();
@@ -245,7 +246,7 @@ const check = (label, val, lo, hi) => {
   }
 
   // ---- 3-path build sanity on the reference (throws/holes get caught by build failure or blank canvas) ----
-  if (mode === 'full') {
+  if (mode === 'full' && !DOLLY_ONLY) {
     fs.copyFileSync(path.join(__dirname, ASSETS[0][1]), path.join(HARNESS, 'defaultImgColor.png'));
     fs.copyFileSync(path.join(__dirname, ASSETS[0][2]), path.join(HARNESS, 'defaultImgDepth.png'));
     for (const [ptag, setup] of [
@@ -278,35 +279,74 @@ const check = (label, val, lo, hi) => {
   // Subject plane on the near dune, off-axis x=0.12, dolly pinned mid vs far,
   // lock on: the dune crest silhouette must hold (measured 1.0px median at
   // commit; free drifts ~7px — the second check proves the metric has teeth).
-  if (mode === 'full') {
+  if (mode === 'full' || DOLLY_ONLY) {
     fs.copyFileSync(path.join(__dirname, ASSETS[0][1]), path.join(HARNESS, 'defaultImgColor.png'));
     fs.copyFileSync(path.join(__dirname, ASSETS[0][2]), path.join(HARNESS, 'defaultImgDepth.png'));
     await load();
     const dz = await page.evaluate(async () => {
       window._rayReproject = true;
       bgQuickBake = true; buildBackgroundLayer();
-      // subject = near dune via the app's own peek->Z mapping
+      // A208d: SET q FROM THE FEATURE THE METRIC TRACKS. The drift metric
+      // (crest) is a LUMA edge tracker. A208b/c found the strongest DEPTH edge
+      // and sampled bey+0.02h — the far side of the ridge silhouette (0.157,
+      // the valley) — so the check pinned background and then measured the
+      // subject's drift: 162px of legitimate world stretch reported as pin
+      // failure. The 0.90h body sample (0.741, near dune) is a third surface;
+      // pinning it left a 4px residual for the same reason. Source-space probe
+      // (a208 log): strongest luma edges in the subject columns sit at depth
+      // 0.502..0.529 — the NEAR side of the ridge silhouette. So: locate the
+      // strongest luma edge in the sampled column with the same law crest()
+      // uses, then take the nearer (max) side of the depth map across it.
       const dImg = mediaLayers[0].textures.depth.image2d || mediaLayers[0].textures.depth.image;
+      const cImg = mediaLayers[0].textures.color.image2d || mediaLayers[0].textures.color.image;
       const w = dImg.naturalWidth || dImg.width, h = dImg.naturalHeight || dImg.height;
       const cv0 = document.createElement('canvas'); cv0.width = w; cv0.height = h;
       const cx0 = cv0.getContext('2d'); cx0.drawImage(dImg, 0, 0, w, h);
-      const v = cx0.getImageData(Math.round(0.30*w), Math.round(0.90*h), 1, 1).data[0] / 255;
-      const rel = v - currentNormPortalPlane;
-      subjectFocalPlaneWorldZ = rel < 0
-        ? portalPlaneWorldZ - (Math.abs(rel) / Math.max(currentNormPortalPlane, 0.0001)) * outerVolumeDepth
-        : portalPlaneWorldZ + (rel / Math.max(1 - currentNormPortalPlane, 0.0001)) * innerVolumeDepth;
+      const col = cx0.getImageData(Math.round(0.30*w), 0, 1, h).data;
+      const cvC = document.createElement('canvas'); cvC.width = w; cvC.height = h;
+      const cxC = cvC.getContext('2d'); cxC.drawImage(cImg, 0, 0, w, h);
+      const colC = cxC.getImageData(Math.round(0.30*w), 0, 1, h).data;
+      const lum = y => 0.299*colC[y*4] + 0.587*colC[y*4+1] + 0.114*colC[y*4+2];
+      // same law as crest(): strongest luma step in the lower half; the ±
+      // window is the crest() ±2px at H2=450 scaled to source rows.
+      const gw = Math.max(2, Math.round(h * 2 / 450));
+      let be = 0, bey = Math.round(0.90*h);
+      for (let y = Math.round(0.50*h) + gw; y < Math.round(0.98*h) - gw; y++) {
+        const g = Math.abs(lum(y+gw) - lum(y-gw));
+        if (g > be) { be = g; bey = y; }
+      }
+      const so = Math.max(gw + 2, Math.round(0.01*h));  // sample just clear of the gradient window
+      const vUp = col[Math.max(0, bey - so)*4] / 255;
+      const vDn = col[Math.min(h-1, bey + so)*4] / 255;
+      const v = Math.max(vUp, vDn);   // nearer side = the subject side of its silhouette
+      const vBody = col[Math.round(0.90*h)*4] / 255;   // reference: the near-dune body sample
+      // A208: the app's own volume mapping (a200), not a private linear copy —
+      // this was copy #4 of the law a200 unified; linear-vs-smoothstep mis-sets
+      // the plane by up to 9.6% of the half-volume.
+      if (typeof volumeWorldZForNormDepth === 'function') {
+        subjectFocalPlaneWorldZ = volumeWorldZForNormDepth(v);
+      } else {
+        const rel = v - currentNormPortalPlane;
+        subjectFocalPlaneWorldZ = rel < 0
+          ? portalPlaneWorldZ - (Math.abs(rel) / Math.max(currentNormPortalPlane, 0.0001)) * outerVolumeDepth
+          : portalPlaneWorldZ + (rel / Math.max(1 - currentNormPortalPlane, 0.0001)) * innerVolumeDepth;
+      }
       initializeSubjectLockConstant();
-      const crest = () => {   // strongest vertical luma edge per column, lower half
-        const W2 = 720, H2 = 450;   // native suite viewport: drift thresholds are calibrated in these px
+      const W2 = 720, H2 = 450;   // native suite viewport: drift thresholds are calibrated in these px
+      const grabL = () => {
         const cv = document.createElement('canvas'); cv.width = W2; cv.height = H2;
         const cx = cv.getContext('2d'); cx.drawImage(renderer.domElement, 0, 0, W2, H2);
         const d = cx.getImageData(0, 0, W2, H2).data;
-        const L = (x, y) => { const i = (y*W2+x)*4; return 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; };
+        const L = new Float32Array(W2 * H2);
+        for (let i = 0; i < W2 * H2; i++) L[i] = 0.299*d[i*4] + 0.587*d[i*4+1] + 0.114*d[i*4+2];
+        return L;
+      };
+      const crest = (L) => {   // strongest vertical luma edge per column, lower half
         const ys = {};
         for (let x = Math.round(0.08*W2); x < Math.round(0.55*W2); x += 3) {
           let bg = 0, by = -1;
           for (let y = Math.round(0.50*H2); y < Math.round(0.98*H2) - 2; y++) {
-            const g = Math.abs(L(x, y+2) - L(x, y-2));
+            const g = Math.abs(L[(y+2)*W2+x] - L[(y-2)*W2+x]);
             if (g > bg) { bg = g; by = y; }
           }
           if (bg >= 12) ys[x] = by;
@@ -319,21 +359,99 @@ const check = (label, val, lo, hi) => {
         isSweeping = true;
         await new Promise(r2 => { let n = 0; const tick = () => { pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; n++; n < 8 ? requestAnimationFrame(tick) : r2(); }; requestAnimationFrame(tick); });
         pin(); camera.position.x = 0.12 * dollyLatGain; camera.position.y = 0.02 * dollyLatGain; render();
-        return crest();
+        return grabL();
       };
-      const med = (a, b) => {
-        const dz2 = []; for (const x in a) if (x in b) dz2.push(Math.abs(a[x] - b[x]));
+      // A208e: THE LOCK-ARM METRIC MUST PRESERVE FEATURE IDENTITY. The
+      // strongest-edge crest tracker is fine for the free arm, but under the
+      // lock the corner adjustment (k>1 at the far phase) shrinks the content
+      // rect and pulls its bottom border — a ~120-strength horizontal edge —
+      // into the 0.50..0.98h search band at y≈435, where it out-gradients
+      // every scene edge in EVERY column. Strongest-edge diffs then measure
+      // the ridge at mid against the BORDER at far: 155..168px of pure
+      // feature switch, reported as pin failure — and the old far-cols
+      // "stretch" PASS was the same border artifact (the far columns' scene
+      // edges barely move; probed with per-column top-3 edge tables in
+      // harness/dollysuite.js, a208e log). Both lock measurements are now NCC
+      // template matches, which carry identity by appearance and a corr floor
+      // so a blind match fails instead of passing silently. Only |dy| is
+      // asserted: the tracked features are near-horizontal edges, so dx is
+      // unconstrained by the aperture problem; the x-pin is defended at 2px
+      // (both repro paths, full phase sweep, real click gesture) by
+      // harness/clickpin.js.
+      const PS = 9;
+      const nccMatch = (Lm, Lf, cx, cy) => {
+        const tmpl = []; let pm = 0, n = 0;
+        for (let y = cy-PS; y <= cy+PS; y++) for (let x = cx-PS; x <= cx+PS; x++) tmpl.push(Lm[y*W2+x]);
+        for (let y = -PS; y <= PS; y += 2) for (let x = -PS; x <= PS; x += 2) { pm += tmpl[(y+PS)*(2*PS+1)+(x+PS)]; n++; }
+        pm /= n; let pss = 0;
+        for (let y = -PS; y <= PS; y += 2) for (let x = -PS; x <= PS; x += 2) { const dd = tmpl[(y+PS)*(2*PS+1)+(x+PS)]-pm; pss += dd*dd; }
+        let bc = -2, bx = 0, by = 0;
+        for (let oy = Math.max(PS, cy-200); oy <= Math.min(H2-1-PS, cy+200); oy++)
+          for (let ox = Math.max(PS, cx-60); ox <= Math.min(W2-1-PS, cx+60); ox++) {
+            let s = 0, kk = 0;
+            for (let y = -PS; y <= PS; y += 2) for (let x = -PS; x <= PS; x += 2) { s += Lf[(oy+y)*W2+ox+x]; kk++; }
+            const m = s/kk; let num = 0, den = 0;
+            for (let y = -PS; y <= PS; y += 2) for (let x = -PS; x <= PS; x += 2) {
+              const a = Lf[(oy+y)*W2+ox+x]-m, b = tmpl[(y+PS)*(2*PS+1)+(x+PS)]-pm; num += a*b; den += a*a; }
+            const c = num/Math.sqrt(Math.max(1e-9,den)*Math.max(1e-9,pss));
+            if (c > bc) { bc = c; bx = ox-cx; by = oy-cy; }
+          }
+        return { dx: bx, dy: by, corr: bc };
+      };
+      const med = (a, b, x0, x1) => {
+        const dz2 = []; for (const x in a) { const xi = +x;
+          if (xi < x0 * W2 || xi > x1 * W2) continue;
+          if (x in b) dz2.push(Math.abs(a[x] - b[x])); }
         dz2.sort((p, q2) => p - q2);
         return dz2.length ? dz2[(dz2.length / 2) | 0] : -1;
       };
-      const lm = await shoot(0, true), lf = await shoot(Math.PI/2, true);
+      const Lm = await shoot(0, true);
+      const dbgMid = { e: +camera.position.z.toFixed(4), ex: +camera.position.x.toFixed(4),
+                       gain: +dollyLatGain.toFixed(4),
+                       refEye: (typeof bgRefEyeZNow === 'function') ? +bgRefEyeZNow().toFixed(4) : null };
+      const Lf = await shoot(Math.PI/2, true);
+      const dbgFar = { e: +camera.position.z.toFixed(4), ex: +camera.position.x.toFixed(4),
+                       gain: +dollyLatGain.toFixed(4),
+                       refEye: (typeof bgRefEyeZNow === 'function') ? +bgRefEyeZNow().toFixed(4) : null };
       dollyZoomActive = false; render();
-      const fm = await shoot(0, false), ff = await shoot(Math.PI/2, false);
+      const fm = crest(await shoot(0, false)), ff = crest(await shoot(Math.PI/2, false));
       dollyZoomActive = false; render();
-      return { lock: med(lm, lf), free: med(fm, ff) };
+      // subject: the mid-phase crest at the sampled column — the silhouette of
+      // the very plane q was set from. stretch: the near-dune body low in the
+      // frame (source depth 0.741 at 0.90h — decisively off the 0.525 plane),
+      // 0.93h keeps the patch inside content at both phases (border reaches
+      // 0.967h at the far phase).
+      const x30 = Math.round(0.30*W2);
+      let cg = 0, crestY = -1;
+      for (let y = Math.round(0.50*H2); y < Math.round(0.98*H2) - 2; y++) {
+        const g = Math.abs(Lm[(y+2)*W2+x30] - Lm[(y-2)*W2+x30]);
+        if (g > cg) { cg = g; crestY = y; }
+      }
+      const subj = nccMatch(Lm, Lf, x30, crestY);
+      const stretch = nccMatch(Lm, Lf, x30, Math.round(0.93*H2));
+      return { lock: subj.corr >= 0.6 ? Math.abs(subj.dy) : -1,
+               stretch: stretch.corr >= 0.6 ? Math.abs(stretch.dy) : -1,
+               free: med(fm, ff, 0.24, 0.36),
+               dbg: { v: +v.toFixed(4), vUp: +vUp.toFixed(4), vDn: +vDn.toFixed(4),
+                      vBody: +vBody.toFixed(4), bey, crestY,
+                      q: +subjectFocalPlaneWorldZ.toFixed(4),
+                      P: portalPlaneWorldZ, pn: +currentNormPortalPlane.toFixed(3),
+                      emb: (typeof bgEmbedOffsetNow === 'function') ? +bgEmbedOffsetNow().toFixed(4) : null,
+                      mid: dbgMid, far: dbgFar,
+                      subj: { dx: subj.dx, dy: subj.dy, corr: +subj.corr.toFixed(2) },
+                      str: { dx: stretch.dx, dy: stretch.dy, corr: +stretch.corr.toFixed(2) } } };
     });
-    // measured at commit (720px frame): lock 0-1px, free ~3.5px
-    check('dolly q!=P lock crest px', dz.lock, 0, 2);
+    // A208 re-baseline, stated: the old 0..2 bound over ALL columns encoded the
+    // frozen world (it asserted the absence of the dolly zoom). Now: the
+    // subject-plane template must hold (0..3 — clickpin-verified 2px residual
+    // plus a pixel of metric quantization; -1 means the match fell below the
+    // 0.6 corr floor and is a failure), the off-plane dune template must MOVE
+    // (4..200; measured 11 at commit — under the a104 frozen-image disease it
+    // reads ~0, which is the regression this bound defends against), and the
+    // free arm keeps its crest-median teeth.
+    if (dz.dbg) console.log('  [dolly dbg] ' + JSON.stringify(dz.dbg));
+    check('dolly q!=P lock SUBJECT-plane pin |dy| px', dz.lock, 0, 3);
+    check('dolly lock WORLD STRETCH |dy| px (near dune)', dz.stretch, 4, 200);
     check('dolly q!=P free crest px (metric teeth)', dz.free, 2, 60);
   }
 

@@ -219,15 +219,34 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
                refSeen: refSeen === null ? null : +Number(refSeen).toFixed(4) };
     };
 
+    // A204 SOLVE FOR THE PLANE THE SCALE ACTUALLY PINS. The derivation says the
+    // pin should use zq = subjectRenderZ - P. The measurement says the scale gets
+    // only ~73% of the way. Rather than re-derive, sweep the pinned plane and let
+    // the picture name the value that works, then compare it to what the theory
+    // asked for. Same method that settled the a199 mapping question.
+    let sweep = null;
+    if (o.sweepz) {
+      const qTheory = subjectFocalPlaneWorldZ;
+      sweep = [];
+      for (let i = -4; i <= 4; i++) {
+        const qq = qTheory + i * 0.01;
+        subjectFocalPlaneWorldZ = qq;
+        const m = measure(subj, true);
+        sweep.push({ q: +qq.toFixed(4), worst: m.worst, minc: m.minc, amb: m.amb,
+                     scale: m.scaleSeen });
+      }
+      subjectFocalPlaneWorldZ = qTheory;
+    }
+
     const out = { subject: { at: subj.cx+','+subj.cy, d: +subj.d.toFixed(3),
                              pinOn: measure(subj, true), pinOff: measure(subj, false) },
                   witnesses: wit.map(w => ({ at: w.cx+','+w.cy, d: +w.d.toFixed(3),
                                              pinOn: measure(w, true) })) };
     subjectLockActive = true;
-    return { nCand: cands.length, nStrong: strong.length, restHash, restEx: +restEx.toFixed(4), restEy: +restEy.toFixed(4),
+    return { sweep, nCand: cands.length, nStrong: strong.length, restHash, restEx: +restEx.toFixed(4), restEy: +restEy.toFixed(4),
              q: +subjectFocalPlaneWorldZ.toFixed(4), emb: +bgEmbedOffsetNow().toFixed(4),
              portalNorm: +currentNormPortalPlane.toFixed(3), W, H: Hh, out };
-  }, { mode: process.env.MODE || 'quick' });
+  }, { mode: process.env.MODE || 'quick', sweepz: process.env.SWEEPZ === '1' });
 
   if (r.failed) { console.log('*** ' + r.failed); await browser.close(); srv.kill(); process.exit(3); }
   console.log('\n' + ASSET + '  mode=' + (process.env.MODE||'quick') + '  canvas ' + r.W + 'x' + r.H);
@@ -244,5 +263,18 @@ const SRC = { troll: ['defaultImgColor.png', 'defaultImgDepth.png'],
   console.log('\nCLAIM 3  other depths - these MUST move, that is the zoom');
   for (const w of r.out.witnesses) row('depth ' + w.d + ' at (' + w.at + ')', w.pinOn);
   if (!r.out.witnesses.length) console.log('  (no witness patch far enough from the subject in depth)');
+  if (r.sweep) {
+    console.log('\nSWEEP  which pinned plane actually holds this patch');
+    console.log('        q     travel   minCorr    scale');
+    let best = null;
+    for (const w of r.sweep) {
+      const bad = w.amb || w.minc < 0.6;
+      console.log('  ' + String(w.q).padStart(9) + String(w.worst).padStart(9) +
+                  String(w.minc).padStart(10) + String(w.scale).padStart(9) + (bad ? '  [void]' : ''));
+      if (!bad && (!best || w.worst < best.worst)) best = w;
+    }
+    if (best) console.log('\n  best q = ' + best.q + ' (' + best.worst + 'px);  theory asked for q = ' +
+      r.q + ', i.e. off by ' + (best.q - r.q).toFixed(4) + '  (embed is ' + r.emb + ')');
+  }
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
