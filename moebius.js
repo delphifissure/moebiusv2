@@ -13350,12 +13350,11 @@ function bgBuildBackgroundLayerCore() {
                             'Extends the plate ' + (100 * mpx / pw).toFixed(0) + '% of image width past ' +
                             'each edge; uv runs past [0,1] under clamp-to-edge so it paints the edge ' +
                             'continuation and is invisible where the edge texel is empty.');
-                        console.log('[QUICK-BAKE] a150 skirt continuation depth: ' + _farLog +
-                            '. Inner ring inset ' + (skirtDT === plateDT ? 0 : inTX) + 'x' +
-                            (skirtDT === plateDT ? 0 : inTY) + ' texels so the skirt overlaps the ' +
-                            'plate by the same shift envelope it is pushed back through — the ' +
-                            'overlap is strictly behind and the depth test discards it wherever ' +
-                            'the plate still covers.');
+                        // A213a: the a150 continuation-depth log referenced _farLog and
+                        // skirtDT — machinery a169 DELETED — so this line threw on every
+                        // quick bake and the catch printed "a149 skirt failed" even though
+                        // the skirt had already been added two lines up. A false failure
+                        // report from a working instrument; removed with its dead inputs.
                     }
                 } catch (e) { console.warn('[QUICK-BAKE] a149 skirt failed: ' + e.message); }
             }
