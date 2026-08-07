@@ -39,6 +39,8 @@ const POSE = { x: 0.100, y: -0.023, z: 0.200 };
     const r = await page.evaluate(async (o) => {
       window._rayReproject = true;
       if (o.authority) window._oneGapAuthority = true;
+      if (typeof o.tearDilate === 'number') window._tearDilate = o.tearDilate;
+      if (o.borderCut) window._tearBorderCut = true;
       if (o.bake) { bgQuickBake = true; buildBackgroundLayer(); }
       isSweeping = true;
       camera.position.set(o.pose.x, o.pose.y, o.pose.z);
@@ -56,6 +58,10 @@ const POSE = { x: 0.100, y: -0.023, z: 0.200 };
       });
       for (const un of ['u_useDepthGrad','u_useSobel','u_useLuma','u_useChroma','u_useCrease','u_useCurvature','u_useUVStretch','u_useGrazingAngle','u_useEdgeMask'])
         setAllLayerUniforms(un, false);
+      if (o.cutOff) {   // H: kill BOTH branches of the A212 fragment classifier
+        setAllLayerUniforms('u_bandCutUvRate', 0.0);      // stretched := false
+        setAllLayerUniforms('u_bandCutMismatch', 10.0);   // torn := false
+      }
       const prevRT = renderer.getRenderTarget();
       const prevCC = new THREE.Color(); renderer.getClearColor(prevCC);
       const prevCA = renderer.getClearAlpha();
@@ -73,16 +79,32 @@ const POSE = { x: 0.100, y: -0.023, z: 0.200 };
       let anyOpaque = 0;
       for (let i = 0; i < W * Hh; i++) { const a = buf[i*4+3]; if (a >= thr) anyOpaque++; mask[i] = a < thr ? 1 : 0; }
       if (!anyOpaque) return { dead: true };
-      return { mask: Array.from(mask), W, Hh, stampSrc: (mediaLayers[0]._srcSharpApplied ? 'sharp' : 'raw') };
+      const cvM = document.createElement('canvas'); cvM.width = W; cvM.height = Hh;
+      const cxM = cvM.getContext('2d'); const imM = cxM.createImageData(W, Hh);
+      for (let i = 0; i < W * Hh; i++) { const v = mask[i] ? 255 : 0;
+        imM.data[i*4] = v; imM.data[i*4+1] = v; imM.data[i*4+2] = v; imM.data[i*4+3] = 255; }
+      cxM.putImageData(imM, 0, 0);
+      const gp = mediaLayers[0].mesh?.geometry?.parameters || {};
+      return { mask: Array.from(mask), W, Hh, png: cvM.toDataURL('image/png'),
+               stampSrc: (mediaLayers[0]._srcSharpApplied ? 'sharp' : 'raw'),
+               meshSeg: [(gp.widthSegments||0), (gp.heightSegments||0)] };
     }, Object.assign({ pose: POSE }, opts));
     if (r.dead) { console.log(tag + ': DEAD CAPTURE'); return r; }
-    let n = 0, border = 0;
+    // metrics: area, boundary, and the dither signature — SPECKLE = gap px with
+    // >=3 opaque 4-neighbours (spurs) + opaque px with all 4 neighbours gap
+    // (pinholes). A clean geometric edge has ~0 of either; a dithered fade band
+    // is made of them.
+    let n = 0, border = 0, spur = 0, pin = 0;
     const { mask, W, Hh } = r;
     for (let y = 1; y < Hh - 1; y++) for (let x = 1; x < W - 1; x++) {
-      const i = y*W + x; if (!mask[i]) continue; n++;
-      if (!mask[i-1] || !mask[i+1] || !mask[i-W] || !mask[i+W]) border++;
+      const i = y*W + x;
+      const nb = mask[i-1] + mask[i+1] + mask[i-W] + mask[i+W];
+      if (mask[i]) { n++; if (nb < 4) border++; if (nb <= 1) spur++; }
+      else if (nb === 4) pin++;
     }
-    console.log(tag + ': srcPath=' + r.stampSrc + '  gap px=' + n + '  boundary px=' + border + '  boundary/area=' + (border/Math.max(1,n)).toFixed(3));
+    console.log(tag + ': srcPath=' + r.stampSrc + '  mesh=' + r.meshSeg.join('x')
+      + '  gap px=' + n + '  boundary px=' + border + '  b/a=' + (border/Math.max(1,n)).toFixed(3)
+      + '  spurs=' + spur + '  pinholes=' + pin);
     return r;
   };
 
@@ -93,26 +115,24 @@ const POSE = { x: 0.100, y: -0.023, z: 0.200 };
     console.log(tag + ': XOR=' + x + ' px = ' + (100*x/Math.max(1,un)).toFixed(1) + '% of union');
   };
   const savePng = (m, name) => {
-    let PNG; try { PNG = require('pngjs').PNG; } catch (e) { return; }
-    const png = new PNG({ width: m.W, height: m.Hh });
-    for (let i = 0; i < m.W * m.Hh; i++) { const v = m.mask[i] ? 255 : 0;
-      png.data[i*4] = v; png.data[i*4+1] = v; png.data[i*4+2] = v; png.data[i*4+3] = 255; }
-    fs.writeFileSync(path.join(OUT, name), PNG.sync.write(png));
+    if (!m.png) { console.log('NO PNG for ' + name); return; }
+    fs.writeFileSync(path.join(OUT, name), Buffer.from(m.png.split(',')[1], 'base64'));
   };
 
   const p1 = await newPage();
   const A = await capture(p1, { bake: false }, 'A realtime raw     ');
   await p1.close();
-  const p2 = await newPage();
-  const B = await capture(p2, { bake: true, authority: true }, 'B baked authority  ');
-  await p2.close();
   const p3 = await newPage();
   const C = await capture(p3, { bake: true }, 'C baked default    ');
   await p3.close();
+  const p7 = await newPage();
+  const S = await capture(p7, { bake: true, borderCut: true }, 'S baked, border authority');
+  await p7.close();
 
-  xor(A, B, 'A vs B (authority, fresh contract)');
-  xor(A, C, 'A vs C (default,   fresh contract)');
-  savePng(A, 'gaps_A_fresh.png'); savePng(B, 'gaps_B_fresh.png'); savePng(C, 'gaps_C_fresh.png');
+  xor(A, C, 'A vs C (default)      ');
+  xor(A, S, 'A vs S (border authority)');
+  xor(C, S, 'C vs S (authority delta)');
+  savePng(A, 'gaps_A_fresh.png'); savePng(C, 'gaps_C_fresh.png'); savePng(S, 'gaps_S_border.png');
   console.log('masks -> ' + OUT);
   await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
