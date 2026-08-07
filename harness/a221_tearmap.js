@@ -66,11 +66,46 @@ const OUT = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c7099
     for (let i = 0; i < vw * vh; i++) { const o = i * 4, v = dm[i] ? 255 : 0;
       im.data[o] = v; im.data[o+1] = v; im.data[o+2] = v; im.data[o+3] = 255; }
     cx.putImageData(im, 0, 0);
-    return { vw, vh, nDrop, nCells, iso, png: cv.toDataURL('image/png') };
+    // A221c: are the freed-edge cells TRANSITIONAL (mid-ramp) or plateau?
+    // For each kept cell 8-adjacent to a dropped cell, its own depth span
+    // (over its 4 corner texels) vs the source quantum. If the borders are
+    // mostly span>quantum, the tear is cutting mid-ramp and the freed edge
+    // sits at interpolated cliff depths — the jitter mechanism.
+    const L = mediaLayers[0];
+    const dImg = L.textures.depth.image2d || L.textures.depth.image;
+    const pw2 = vw, ph2 = vh; // texel grid == vertex grid (idMap) on this asset
+    const cvD = document.createElement('canvas'); cvD.width = pw2; cvD.height = ph2;
+    const cxD = cvD.getContext('2d', { willReadFrequently: true });
+    cxD.drawImage(dImg, 0, 0, pw2, ph2);
+    const dpx = cxD.getImageData(0, 0, pw2, ph2).data;
+    const dQ2 = new Float32Array(pw2 * ph2);
+    for (let i = 0; i < pw2 * ph2; i++) dQ2[i] = dpx[i * 4] / 255;
+    const qN2 = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    let nBorder = 0, nTrans = 0; const spans = [];
+    for (let y = 1; y < vh - 2; y++) for (let x = 1; x < vw - 2; x++) {
+      const i = y * vw + x; if (dm[i]) continue;
+      let adj = false;
+      for (let dy = -1; dy <= 1 && !adj; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (dm[i + dy * vw + dx]) { adj = true; break; }
+      }
+      if (!adj) continue; nBorder++;
+      const d00 = dQ2[i], d10 = dQ2[i + 1], d01 = dQ2[i + vw], d11 = dQ2[i + vw + 1];
+      const sp = Math.max(d00, d10, d01, d11) - Math.min(d00, d10, d01, d11);
+      if (sp > qN2) { nTrans++; spans.push(sp); }
+    }
+    spans.sort((a, b) => a - b);
+    return { vw, vh, nDrop, nCells, iso, png: cv.toDataURL('image/png'),
+      nBorder, nTrans, qN: qN2,
+      spanMed: spans.length ? spans[spans.length >> 1] : 0,
+      spanP90: spans.length ? spans[Math.floor(spans.length * 0.9)] : 0 };
   });
   console.log('grid ' + res.vw + 'x' + res.vh + '  dropped tris=' + res.nDrop +
     '  dropped cells=' + res.nCells + '  isolated cells=' + res.iso +
     ' (' + (100 * res.iso / Math.max(1, res.nCells)).toFixed(2) + '%)');
+  console.log('border cells (kept, 8-adj to drop): ' + res.nBorder +
+    '  transitional (span>quantum ' + res.qN.toFixed(4) + '): ' + res.nTrans +
+    ' (' + (100 * res.nTrans / Math.max(1, res.nBorder)).toFixed(1) + '%)' +
+    '  span med=' + res.spanMed.toFixed(3) + ' p90=' + res.spanP90.toFixed(3));
   fs.writeFileSync(path.join(OUT, 'tear_dropped.png'), Buffer.from(res.png.split(',')[1], 'base64'));
   console.log('map -> ' + OUT + '/tear_dropped.png');
   await browser.close(); srv.kill(); process.exit(0);
