@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>4D Splat Portal — PoC</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a0a0c; overflow: hidden; }
+  #cv { width: 100vw; height: 100vh; display: block; cursor: grab; }
+  #hud { position: fixed; left: 8px; bottom: 8px; color: #9fd; font: 11px monospace;
+         background: rgba(0,0,0,.55); padding: 6px 8px; white-space: pre; pointer-events: none; }
+  #panel { position: fixed; right: 8px; top: 8px; color: #cde; font: 12px monospace;
+           background: rgba(10,14,18,.8); padding: 8px 10px; border: 1px solid #234; }
+  #panel label { display: block; margin: 4px 0; }
+  #panel input[type=range] { width: 140px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud">loading…</div>
+<div id="panel">
+  <label>lens FOV <input id="lensFov" type="range" min="40" max="120" step="1" value="90"><span id="lensFovV">90</span>°</label>
+  <label>view dist <input id="viewDist" type="range" min="0.5" max="3" step="0.05" value="1.2"><span id="viewDistV">1.2</span></label>
+  <label>scalar <input id="scalar" type="range" min="0.2" max="3" step="0.1" value="1"><span id="scalarV">1.0</span></label>
+  <label><input id="playing" type="checkbox" checked> play 4D</label>
+  <label><input id="autoSweep" type="checkbox"> auto sweep eye</label>
+  <div style="margin-top:6px;color:#89a">mouse = head · load:<br><input id="file" type="file" accept=".splat,.ply"></div>
+</div>
+<script src="/harness/vendor/three.min.js"></script>
+<script src="/fourd/portal.js"></script>
+<script src="/fourd/splat_renderer.js"></script>
+<script>
+'use strict';
+// 4D SPLAT PORTAL — proof of concept (the "splat first" half; the rig viewer
+// is fourd.html). A gaussian-splat subject behind the moebius portal: the eye
+// moves by the SAME head->eye law as the 2.5D portal (portal.js, lifted from
+// moebius.js), the frustum is the same fixed-rect off-axis projection, and
+// 4D = per-frame splat playback (what per-frame 3DGS training of a 4DAnyone
+// rig produces). Harness API: ?eye=x,y&frame=k&nosweep + window._fourd.
+
+const canvas = document.getElementById('cv');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0c);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 100);
+
+const params = new URLSearchParams(location.search);
+const PORTAL_W = 1.2, PORTAL_H = 1.2 * (window.innerHeight / Math.max(1, window.innerWidth));
+const portal = FourDPortal.createState({
+    portalWidth: PORTAL_W, portalHeight: PORTAL_H, portalZ: 0,
+    viewDistance: parseFloat(params.get('dist') || '1.2'),
+    lensFovDeg: parseFloat(params.get('fov') || '90'),
+});
+
+// visible portal frame: the fixed rect the projection pins
+{
+    const frameGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(PORTAL_W, PORTAL_H));
+    const frame = new THREE.LineSegments(frameGeo, new THREE.LineBasicMaterial({ color: 0x3a4d5c }));
+    frame.position.z = 0.001;
+    scene.add(frame);
+}
+
+let cloud = null, fps = 12, lastFrameT = 0, playing = true;
+const hud = document.getElementById('hud');
+
+async function loadManifest(url) {
+    const base = url.slice(0, url.lastIndexOf('/') + 1);
+    const man = await (await fetch(url)).json();
+    const buffers = [];
+    for (const f of man.frames) buffers.push(await (await fetch(base + f)).arrayBuffer());
+    const frames = buffers.map(b => FourDSplats.parseSplat(b));
+    fps = man.fps || 12;
+    installFrames(frames, man.subject);
+}
+
+function installFrames(frames, subject) {
+    // subject fills 90% of portal height, centroid pinned AT the portal plane
+    FourDSplats.normalizeFrames(frames, portal.portalZ, portal.portalHeight * 0.9, subject);
+    const cap = Math.max(...frames.map(f => f.n));
+    if (cloud) scene.remove(cloud.mesh);
+    cloud = new FourDSplats.SplatCloud(THREE, cap);
+    cloud.setFrames(frames);
+    scene.add(cloud.mesh);
+    dirty = true;
+}
+
+document.getElementById('file').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const buf = await f.arrayBuffer();
+    installFrames([f.name.toLowerCase().endsWith('.ply')
+        ? FourDSplats.parsePly(buf) : FourDSplats.parseSplat(buf)]);
+});
+
+// head input: pointer position over the window == normalized head deviation
+let devX = 0, devY = 0, dirty = true, sweepT = 0;
+window.addEventListener('mousemove', (e) => {
+    devX = (e.clientX / window.innerWidth - 0.5);
+    devY = -(e.clientY / window.innerHeight - 0.5);
+    dirty = true;
+});
+if (params.get('eye')) {
+    const [ex, ey] = params.get('eye').split(',').map(Number);
+    devX = ex; devY = ey;
+}
+if (params.get('frame') !== null && params.get('frame') !== undefined) playing = false;
+
+const ui = (id) => document.getElementById(id);
+ui('lensFov').addEventListener('input', () => { portal.lensFovDeg = +ui('lensFov').value; ui('lensFovV').textContent = ui('lensFov').value; dirty = true; });
+ui('viewDist').addEventListener('input', () => { portal.viewDistance = +ui('viewDist').value; ui('viewDistV').textContent = ui('viewDist').value; dirty = true; });
+ui('scalar').addEventListener('input', () => { portal.scalar = +ui('scalar').value; ui('scalarV').textContent = (+ui('scalar').value).toFixed(1); dirty = true; });
+ui('playing').addEventListener('change', () => { playing = ui('playing').checked; });
+ui('autoSweep').addEventListener('change', () => { dirty = true; });
+ui('lensFov').value = portal.lensFovDeg; ui('lensFovV').textContent = portal.lensFovDeg;
+ui('viewDist').value = portal.viewDistance; ui('viewDistV').textContent = portal.viewDistance;
+
+function resize() {
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    dirty = true;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let frameCount = 0, lastFpsT = performance.now(), shownFps = 0;
+function tick(t) {
+    requestAnimationFrame(tick);
+    if (!cloud) return;
+    if (ui('autoSweep').checked && !params.get('nosweep')) {
+        sweepT += 0.012;
+        devX = 0.45 * Math.sin(sweepT);
+        devY = 0.18 * Math.sin(sweepT * 0.63);
+        dirty = true;
+    }
+    if (playing && cloud.frames.length > 1 && t - lastFrameT > 1000 / fps) {
+        cloud.setFrame(cloud.frameIndex + 1);
+        lastFrameT = t; dirty = true;
+    }
+    if (!dirty) return;
+    dirty = false;
+    FourDPortal.setHeadDeviation(portal, devX, devY);
+    const eye = FourDPortal.applyToCamera(portal, camera);
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    cloud.sortAndUpload(camera);
+    cloud.updateViewportUniforms(camera, renderer.domElement.width, renderer.domElement.height);
+    renderer.render(scene, camera);
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsT > 500) { shownFps = Math.round(frameCount * 1000 / (now - lastFpsT)); frameCount = 0; lastFpsT = now; }
+    hud.textContent =
+        'eye(' + eye.x.toFixed(3) + ', ' + eye.y.toFixed(3) + ', ' + eye.z.toFixed(2) + ')' +
+        '  dev(' + devX.toFixed(2) + ', ' + devY.toFixed(2) + ')' +
+        '  lens=' + portal.lensFovDeg + '° gain=' + FourDPortal.lensGain(portal).toFixed(3) +
+        '\nsplats=' + (cloud.frame() ? cloud.frame().n : 0) +
+        '  frame=' + cloud.frameIndex + '/' + cloud.frames.length +
+        '  ' + shownFps + 'fps  portal ' + PORTAL_W.toFixed(2) + 'x' + PORTAL_H.toFixed(2);
+    window._fourdReady = true;
+}
+window._fourd = {
+    portal, camera, renderer,
+    get cloud() { return cloud; },
+    setDeviation(x, y) { devX = x; devY = y; dirty = true; },
+    setFrame(i) { playing = false; if (cloud) { cloud.setFrame(i); dirty = true; } },
+    forceRender() { dirty = true; }
+};
+
+loadManifest(params.get('asset') || '/fourd/assets/manifest.json')
+    .catch(e => { hud.textContent = 'asset load failed: ' + e.message + ' — drop a .splat/.ply file'; });
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

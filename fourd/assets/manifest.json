@@ -1,0 +1,39 @@
+{
+  "kind": "splat-sequence",
+  "fps": 12,
+  "frames": [
+    "frame_00.splat",
+    "frame_01.splat",
+    "frame_02.splat",
+    "frame_03.splat",
+    "frame_04.splat",
+    "frame_05.splat",
+    "frame_06.splat",
+    "frame_07.splat",
+    "frame_08.splat",
+    "frame_09.splat",
+    "frame_10.splat",
+    "frame_11.splat",
+    "frame_12.splat",
+    "frame_13.splat",
+    "frame_14.splat",
+    "frame_15.splat",
+    "frame_16.splat",
+    "frame_17.splat",
+    "frame_18.splat",
+    "frame_19.splat",
+    "frame_20.splat",
+    "frame_21.splat",
+    "frame_22.splat",
+    "frame_23.splat"
+  ],
+  "subject": {
+    "center": [
+      0,
+      0.95,
+      0
+    ],
+    "height": 1.9
+  },
+  "note": "synthetic walking figure + parallax markers; generator: make_synthetic_splat.js"
+}

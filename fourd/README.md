@@ -1,4 +1,38 @@
-# 4DAnyone portal PoC — off-axis rig viewer
+# 4DAnyone portal PoC — splat portal + off-axis rig viewer
+
+Two halves, both driven by the SAME off-axis spatial normalization
+(`portal.js`, the moebius head->eye->frustum law extracted verbatim):
+
+## Half 1 — 4D splat portal (`splat.html`)
+
+What 4DAnyone ultimately feeds (its repo generates multi-view videos; the
+animated gaussian splat is trained downstream — per-frame 3DGS via their
+nerfstudio guide; open-source 4DGS is on their TODO). This viewer renders
+that end product behind the portal today:
+
+- `splat_renderer.js` — minimal 3DGS renderer: `.splat` (antimatter15) and
+  binary 3DGS `.ply` (DC color band), CPU covariance, EWA projection in the
+  vertex shader, counting-sort back-to-front, premultiplied over-blending.
+- 4D = per-frame splat sequences (`assets/manifest.json`), exactly the shape
+  per-frame 3DGS training of a 4DAnyone rig produces.
+- `make_synthetic_splat.js` — no GPU exists here to train real splats, so the
+  test asset is generated: a 24-frame walking figure + depth markers.
+- `splat_shots.js` — invariants, both PASS:
+  - I1 depth-ordered window parallax through the fixed rect: front marker
+    +20.5px vs back marker −18.3px over a ±0.4 head sweep (opposite signs),
+    subject centroid AT the portal plane moves 1.1px (pinned).
+  - I2 4D playback: quarter-cycle frames differ by 5,143/120,000 samples.
+- Subject framing comes from the asset's own `subject` metadata (like
+  4DAnyone's `framing`), never the union bbox.
+- Honest limits: DC color only (no view-dependent SH yet); the EWA Jacobian
+  keeps the focal terms of the asymmetric frustum (center exact, ellipse
+  first-order) — the standard WebGL splat approximation; whole-sequence
+  preload (121-frame real captures will want streaming).
+
+Run: `node fourd/server.js` then `http://localhost:8098/fourd/splat.html`
+(mouse = head, or `?eye=x,y&frame=k`; drop any `.splat`/`.ply` on the page).
+
+## Half 2 — off-axis rig viewer (`fourd.html`)
 
 Proof of concept: consume a [4DAnyone](https://github.com/ant-research/4DAnyone)
 output rig (multi-view frame-synced videos of a person + `cameras.json`) and
