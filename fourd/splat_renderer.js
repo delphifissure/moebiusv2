@@ -60,7 +60,8 @@
             else if (t[0] === 'property' && props !== null) props.push(t[2]);
         }
         const stride = props.length; // all float32 in 3DGS exports
-        const f = new Float32Array(buffer, headerLen);
+        // headerLen is rarely 4-aligned; typed views need alignment, so slice
+        const f = new Float32Array(buffer.slice(headerLen));
         const idx = {}; props.forEach((p, i) => { idx[p] = i; });
         const need = ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'opacity', 'f_dc_0', 'f_dc_1', 'f_dc_2'];
         for (const k of need) if (!(k in idx)) throw new Error('ply: missing ' + k);
@@ -153,6 +154,72 @@
             vColor = iColor;
             vCorner = corner * 3.0;
         }`;
+    // Dynamic (SpacetimeGaussians) vertex shader: the covariance cannot be
+    // CPU-precomputed because rotation is time-varying, so R(t) S is built
+    // per vertex from the quaternion polynomial; everything after Sigma is
+    // the same EWA block as the static path. ES 1.0-safe.
+    const DYN_VERT = `
+        precision highp float;
+        attribute vec2 corner;
+        attribute vec3 iCenter;
+        attribute vec3 iScale;
+        attribute vec4 iQuat;    // (x,y,z,w) at t = trbf center
+        attribute vec4 iOmega;   // same component order
+        attribute vec3 iMotA;    // dt coefficients
+        attribute vec3 iMotB;    // dt^2
+        attribute vec3 iMotC;    // dt^3
+        attribute vec2 iTrbf;    // (center, exp(scale))
+        attribute vec4 iColor;
+        uniform vec2 uViewport;
+        uniform vec2 uFocal;
+        uniform float uTime;
+        varying vec4 vColor;
+        varying vec2 vCorner;
+        void main() {
+            float dt = uTime - iTrbf.x;
+            float tw = exp(-(dt * dt) / max(iTrbf.y * iTrbf.y, 1e-12));
+            vec3 p = iCenter + iMotA * dt + iMotB * (dt * dt) + iMotC * (dt * dt * dt);
+            vec4 cam = modelViewMatrix * vec4(p, 1.0);
+            vec4 clip = projectionMatrix * cam;
+            if (cam.z > -0.05 || tw < 0.0039) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+            vec4 q = iQuat + dt * iOmega;
+            q /= max(length(q), 1e-9);
+            float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+            float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+            float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+            mat3 R = mat3(
+                vec3(1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy)),
+                vec3(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx)),
+                vec3(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy)));
+            mat3 M = mat3(R[0] * iScale.x, R[1] * iScale.y, R[2] * iScale.z);
+            mat3 Mt = mat3(vec3(M[0].x, M[1].x, M[2].x),
+                           vec3(M[0].y, M[1].y, M[2].y),
+                           vec3(M[0].z, M[1].z, M[2].z));
+            mat3 S = M * Mt;
+            mat3 W = mat3(modelViewMatrix[0].xyz, modelViewMatrix[1].xyz, modelViewMatrix[2].xyz);
+            mat3 Wt = mat3(vec3(W[0].x, W[1].x, W[2].x),
+                           vec3(W[0].y, W[1].y, W[2].y),
+                           vec3(W[0].z, W[1].z, W[2].z));
+            mat3 V = W * S * Wt;
+            float iz = 1.0 / -cam.z;
+            float tx = cam.x * iz, ty = cam.y * iz;
+            vec3 J0 = vec3(uFocal.x * iz, 0.0, uFocal.x * tx * iz);
+            vec3 J1 = vec3(0.0, uFocal.y * iz, uFocal.y * ty * iz);
+            float c00 = dot(J0, V * J0) + 0.3;
+            float c11 = dot(J1, V * J1) + 0.3;
+            float c01 = dot(J0, V * J1);
+            float mid = 0.5 * (c00 + c11);
+            float rad = sqrt(max(0.0001, mid * mid - (c00 * c11 - c01 * c01)));
+            float l1 = mid + rad, l2 = max(0.02, mid - rad);
+            vec2 e1 = normalize(vec2(c01, l1 - c00));
+            if (abs(c01) < 1e-6) e1 = (c00 >= c11) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+            vec2 e2 = vec2(-e1.y, e1.x);
+            vec2 px = corner.x * e1 * 3.0 * sqrt(l1) + corner.y * e2 * 3.0 * sqrt(l2);
+            gl_Position = clip;
+            gl_Position.xy += px * 2.0 / uViewport * clip.w;
+            vColor = vec4(iColor.rgb, iColor.a * tw);
+            vCorner = corner * 3.0;
+        }`;
     const FRAG = `
         precision highp float;
         varying vec4 vColor;
@@ -166,9 +233,11 @@
         }`;
 
     class SplatCloud {
-        constructor(THREE, capacity) {
+        constructor(THREE, capacity, dynamic) {
             this.THREE = THREE;
             this.capacity = capacity;
+            this.dynamic = !!dynamic;   // SpacetimeGaussians single-file 4D
+            this.time = 0;              // dynamic only: normalized clip time
             this.frames = [];       // array of allocFrame results (>=1)
             this.frameIndex = 0;
             this.order = new Uint32Array(capacity);
@@ -178,18 +247,32 @@
             geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 0,0,0, 0,0,0, 0,0,0]), 3)); // unused, three needs it
             geo.setAttribute('corner', new THREE.BufferAttribute(new Float32Array([-1,-1, 1,-1, 1,1, -1,1]), 2));
             geo.setIndex([0, 1, 2, 0, 2, 3]);
-            this.aCenter = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-            this.aCovA = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-            this.aCovB = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-            this.aColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
-            for (const a of [this.aCenter, this.aCovA, this.aCovB, this.aColor]) a.setUsage(THREE.DynamicDrawUsage);
-            geo.setAttribute('iCenter', this.aCenter);
-            geo.setAttribute('iCovA', this.aCovA);
-            geo.setAttribute('iCovB', this.aCovB);
-            geo.setAttribute('iColor', this.aColor);
+            const mk = (w) => {
+                const a = new THREE.InstancedBufferAttribute(new Float32Array(capacity * w), w);
+                a.setUsage(THREE.DynamicDrawUsage); return a;
+            };
+            const uniforms = { uViewport: { value: new THREE.Vector2(1, 1) }, uFocal: { value: new THREE.Vector2(1, 1) } };
+            if (this.dynamic) {
+                this.aCenter = mk(3); this.aScale = mk(3); this.aQuat = mk(4); this.aOmega = mk(4);
+                this.aMotA = mk(3); this.aMotB = mk(3); this.aMotC = mk(3);
+                this.aTrbf = mk(2); this.aColor = mk(4);
+                geo.setAttribute('iCenter', this.aCenter); geo.setAttribute('iScale', this.aScale);
+                geo.setAttribute('iQuat', this.aQuat); geo.setAttribute('iOmega', this.aOmega);
+                geo.setAttribute('iMotA', this.aMotA); geo.setAttribute('iMotB', this.aMotB);
+                geo.setAttribute('iMotC', this.aMotC); geo.setAttribute('iTrbf', this.aTrbf);
+                geo.setAttribute('iColor', this.aColor);
+                uniforms.uTime = { value: 0 };
+                this._dynPos = new Float32Array(capacity * 3);
+            } else {
+                this.aCenter = mk(3); this.aCovA = mk(3); this.aCovB = mk(3); this.aColor = mk(4);
+                geo.setAttribute('iCenter', this.aCenter);
+                geo.setAttribute('iCovA', this.aCovA);
+                geo.setAttribute('iCovB', this.aCovB);
+                geo.setAttribute('iColor', this.aColor);
+            }
             this.material = new THREE.ShaderMaterial({
-                vertexShader: VERT, fragmentShader: FRAG,
-                uniforms: { uViewport: { value: new THREE.Vector2(1, 1) }, uFocal: { value: new THREE.Vector2(1, 1) } },
+                vertexShader: this.dynamic ? DYN_VERT : VERT, fragmentShader: FRAG,
+                uniforms,
                 transparent: true, depthTest: true, depthWrite: false,
                 blending: THREE.CustomBlending,
                 blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
@@ -198,6 +281,11 @@
             this.mesh = new THREE.Mesh(geo, this.material);
             this.mesh.frustumCulled = false;
             this._geo = geo;
+        }
+
+        setTime(t) {   // dynamic only
+            this.time = t;
+            if (this.material.uniforms.uTime) this.material.uniforms.uTime.value = t;
         }
 
         setFrames(frames) {
@@ -212,16 +300,20 @@
         }
 
         // Sort the CURRENT frame back-to-front for the given camera and gather
-        // into the instanced attributes. Call on eye move or frame change.
+        // into the instanced attributes. Call on eye move, frame change, or
+        // (dynamic) time change — dynamic positions are evaluated at
+        // this.time with the same polynomial the shader uses.
         sortAndUpload(camera) {
             const fr = this.frame(); if (!fr) return;
             const n = Math.min(fr.n, this.capacity);
             const m = camera.matrixWorldInverse.elements; // view matrix
             const zx = m[2], zy = m[6], zz = m[10], zw = m[14];
             const depth = this._depth;
+            let srcPos = fr.center;
+            if (this.dynamic) { evalDynamicPositions(fr, this.time, this._dynPos); srcPos = this._dynPos; }
             let mn = Infinity, mx = -Infinity;
             for (let i = 0; i < n; i++) {
-                const d = zx * fr.center[i * 3] + zy * fr.center[i * 3 + 1] + zz * fr.center[i * 3 + 2] + zw;
+                const d = zx * srcPos[i * 3] + zy * srcPos[i * 3 + 1] + zz * srcPos[i * 3 + 2] + zw;
                 depth[i] = d;
                 if (d < mn) mn = d; if (d > mx) mx = d;
             }
@@ -234,19 +326,43 @@
             // back-to-front: view z is NEGATIVE in front of the camera, so the
             // most negative (farthest) has the SMALLEST key — order[] is
             // already far -> near. Gather.
-            const c = this.aCenter.array, ca = this.aCovA.array, cb = this.aCovB.array, col = this.aColor.array;
-            for (let k = 0; k < n; k++) {
-                const i = order[k];
-                c[k * 3] = fr.center[i * 3]; c[k * 3 + 1] = fr.center[i * 3 + 1]; c[k * 3 + 2] = fr.center[i * 3 + 2];
-                ca[k * 3] = fr.covA[i * 3]; ca[k * 3 + 1] = fr.covA[i * 3 + 1]; ca[k * 3 + 2] = fr.covA[i * 3 + 2];
-                cb[k * 3] = fr.covB[i * 3]; cb[k * 3 + 1] = fr.covB[i * 3 + 1]; cb[k * 3 + 2] = fr.covB[i * 3 + 2];
-                col[k * 4] = fr.color[i * 4]; col[k * 4 + 1] = fr.color[i * 4 + 1];
-                col[k * 4 + 2] = fr.color[i * 4 + 2]; col[k * 4 + 3] = fr.color[i * 4 + 3];
+            if (this.dynamic) {
+                const c = this.aCenter.array, s = this.aScale.array, q = this.aQuat.array,
+                      w = this.aOmega.array, ma = this.aMotA.array, mb = this.aMotB.array,
+                      mc = this.aMotC.array, tb = this.aTrbf.array, col = this.aColor.array;
+                for (let k = 0; k < n; k++) {
+                    const i = order[k];
+                    for (let a = 0; a < 3; a++) {
+                        c[k * 3 + a] = fr.center[i * 3 + a];
+                        s[k * 3 + a] = fr.scale[i * 3 + a];
+                        ma[k * 3 + a] = fr.motion[i * 9 + a];
+                        mb[k * 3 + a] = fr.motion[i * 9 + 3 + a];
+                        mc[k * 3 + a] = fr.motion[i * 9 + 6 + a];
+                    }
+                    for (let a = 0; a < 4; a++) {
+                        q[k * 4 + a] = fr.quat[i * 4 + a];
+                        w[k * 4 + a] = fr.omega[i * 4 + a];
+                        col[k * 4 + a] = fr.color[i * 4 + a];
+                    }
+                    tb[k * 2] = fr.trbf[i * 2]; tb[k * 2 + 1] = fr.trbf[i * 2 + 1];
+                }
+                for (const a of [this.aCenter, this.aScale, this.aQuat, this.aOmega,
+                                 this.aMotA, this.aMotB, this.aMotC, this.aTrbf, this.aColor]) a.needsUpdate = true;
+            } else {
+                const c = this.aCenter.array, ca = this.aCovA.array, cb = this.aCovB.array, col = this.aColor.array;
+                for (let k = 0; k < n; k++) {
+                    const i = order[k];
+                    c[k * 3] = fr.center[i * 3]; c[k * 3 + 1] = fr.center[i * 3 + 1]; c[k * 3 + 2] = fr.center[i * 3 + 2];
+                    ca[k * 3] = fr.covA[i * 3]; ca[k * 3 + 1] = fr.covA[i * 3 + 1]; ca[k * 3 + 2] = fr.covA[i * 3 + 2];
+                    cb[k * 3] = fr.covB[i * 3]; cb[k * 3 + 1] = fr.covB[i * 3 + 1]; cb[k * 3 + 2] = fr.covB[i * 3 + 2];
+                    col[k * 4] = fr.color[i * 4]; col[k * 4 + 1] = fr.color[i * 4 + 1];
+                    col[k * 4 + 2] = fr.color[i * 4 + 2]; col[k * 4 + 3] = fr.color[i * 4 + 3];
+                }
+                this.aCenter.needsUpdate = true; this.aCovA.needsUpdate = true;
+                this.aCovB.needsUpdate = true; this.aColor.needsUpdate = true;
             }
             this._geo.instanceCount = n;
             if (this._geo._maxInstanceCount !== undefined) this._geo._maxInstanceCount = n; // r128 quirk
-            this.aCenter.needsUpdate = true; this.aCovA.needsUpdate = true;
-            this.aCovB.needsUpdate = true; this.aColor.needsUpdate = true;
         }
 
         // Focal terms from the (possibly asymmetric) projection matrix.
@@ -288,10 +404,92 @@
                 fr.center[i * 3 + 1] = (fr.center[i * 3 + 1] - cy) * s;
                 fr.center[i * 3 + 2] = (fr.center[i * 3 + 2] - cz) * s + portalZ;
             }
-            const s2 = s * s;
-            for (let i = 0; i < fr.covA.length; i++) { fr.covA[i] *= s2; fr.covB[i] *= s2; }
+            if (fr.dynamic) {
+                // motion coefficients are DISPLACEMENTS — they scale, they do
+                // not translate; linear scales likewise; trbf is pure time.
+                for (let i = 0; i < fr.motion.length; i++) fr.motion[i] *= s;
+                for (let i = 0; i < fr.scale.length; i++) fr.scale[i] *= s;
+            } else {
+                const s2 = s * s;
+                for (let i = 0; i < fr.covA.length; i++) { fr.covA[i] *= s2; fr.covB[i] *= s2; }
+            }
         }
         return { scale: s };
+    }
+
+    // ---- SpacetimeGaussians (single-file 4D) ---------------------------
+    // Li et al., oppo-us-research/SpacetimeGaussians. One persistent gaussian
+    // set; per splat: cubic position polynomial, linear rotation, and a
+    // temporal opacity window. Evaluation law VERIFIED against their
+    // renderer/__init__.py and scene/oursfull.py:
+    //   dt   = t - trbf_center                     (t normalized over clip)
+    //   pos  = p0 + m[0:3] dt + m[3:6] dt^2 + m[6:9] dt^3
+    //   q    = normalize(q0 + dt * omega)
+    //   op   = sigmoid(opacity_logit) * exp(-(dt / exp(trbf_scale))^2)
+    //   scales log-stored, f_dc DC band (the full model's f_t feature/MLP
+    //   color path is NOT rendered — DC approximation, same as our .ply).
+    function parseSpacetimePly(buffer) {
+        const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 8192)));
+        const end = head.indexOf('end_header');
+        if (end < 0) throw new Error('stg ply: no end_header');
+        const headerLen = end + 'end_header'.length + 1;
+        const lines = head.slice(0, end).split('\n');
+        let n = 0; const props = [];
+        for (const line of lines) {
+            const t = line.trim().split(/\s+/);
+            if (t[0] === 'element' && t[1] === 'vertex') n = parseInt(t[2]);
+            else if (t[0] === 'property') props.push(t[2]);
+        }
+        const stride = props.length;
+        // headerLen is rarely 4-aligned; typed views need alignment, so slice
+        const f = new Float32Array(buffer.slice(headerLen));
+        const idx = {}; props.forEach((p, i) => { idx[p] = i; });
+        const need = ['x', 'y', 'z', 'trbf_center', 'trbf_scale', 'opacity',
+                      'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3',
+                      'f_dc_0', 'f_dc_1', 'f_dc_2'];
+        for (const k of need) if (!(k in idx)) throw new Error('stg ply: missing ' + k);
+        for (let m = 0; m < 9; m++) if (!(('motion_' + m) in idx)) throw new Error('stg ply: missing motion_' + m);
+        for (let m = 0; m < 4; m++) if (!(('omega_' + m) in idx)) throw new Error('stg ply: missing omega_' + m);
+        const out = {
+            n, dynamic: true,
+            center: new Float32Array(n * 3),
+            scale: new Float32Array(n * 3),        // LINEAR (exp applied)
+            quat: new Float32Array(n * 4),         // (x, y, z, w)
+            omega: new Float32Array(n * 4),        // (x, y, z, w) — same reorder as quat
+            motion: new Float32Array(n * 9),       // m1.xyz, m2.xyz, m3.xyz
+            trbf: new Float32Array(n * 2),         // center, exp(scale)
+            color: new Float32Array(n * 4),
+        };
+        for (let i = 0; i < n; i++) {
+            const o = i * stride;
+            out.center[i * 3] = f[o + idx.x]; out.center[i * 3 + 1] = f[o + idx.y]; out.center[i * 3 + 2] = f[o + idx.z];
+            for (let k = 0; k < 3; k++) out.scale[i * 3 + k] = Math.exp(f[o + idx['scale_' + k]]);
+            // 3DGS rot_0 = w; attribute order (x,y,z,w). omega reordered
+            // IDENTICALLY — q + dt*omega is linear, pairing must match.
+            out.quat[i * 4] = f[o + idx.rot_1]; out.quat[i * 4 + 1] = f[o + idx.rot_2];
+            out.quat[i * 4 + 2] = f[o + idx.rot_3]; out.quat[i * 4 + 3] = f[o + idx.rot_0];
+            out.omega[i * 4] = f[o + idx.omega_1]; out.omega[i * 4 + 1] = f[o + idx.omega_2];
+            out.omega[i * 4 + 2] = f[o + idx.omega_3]; out.omega[i * 4 + 3] = f[o + idx.omega_0];
+            for (let m = 0; m < 9; m++) out.motion[i * 9 + m] = f[o + idx['motion_' + m]];
+            out.trbf[i * 2] = f[o + idx.trbf_center];
+            out.trbf[i * 2 + 1] = Math.exp(f[o + idx.trbf_scale]);
+            out.color[i * 4] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_0]);
+            out.color[i * 4 + 1] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_1]);
+            out.color[i * 4 + 2] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_2]);
+            out.color[i * 4 + 3] = 1 / (1 + Math.exp(-f[o + idx.opacity]));
+        }
+        return out;
+    }
+
+    // Evaluate a dynamic frame's positions at time t (CPU, for sorting).
+    function evalDynamicPositions(fr, t, dst) {
+        for (let i = 0; i < fr.n; i++) {
+            const dt = t - fr.trbf[i * 2], dt2 = dt * dt, dt3 = dt2 * dt;
+            const m = i * 9;
+            dst[i * 3]     = fr.center[i * 3]     + fr.motion[m] * dt     + fr.motion[m + 3] * dt2 + fr.motion[m + 6] * dt3;
+            dst[i * 3 + 1] = fr.center[i * 3 + 1] + fr.motion[m + 1] * dt + fr.motion[m + 4] * dt2 + fr.motion[m + 7] * dt3;
+            dst[i * 3 + 2] = fr.center[i * 3 + 2] + fr.motion[m + 2] * dt + fr.motion[m + 5] * dt2 + fr.motion[m + 8] * dt3;
+        }
     }
 
     // ---- SPZ (Niantic) ------------------------------------------------
@@ -383,13 +581,18 @@
             throw new Error('.ksplat is not supported yet — convert to .ply or .splat (GaussianSplats3D can export both)');
         if (isGzip || magic === 0x5053474e || lower.endsWith('.spz')) return parseSpz(buffer);
         const asText = String.fromCharCode(...head.slice(0, 4));
-        if (asText === 'ply\n' || asText.startsWith('ply')) return parsePly(buffer);
-        if (lower.endsWith('.ply')) return parsePly(buffer);
+        if (asText === 'ply\n' || asText.startsWith('ply') || lower.endsWith('.ply')) {
+            // SpacetimeGaussians single-file 4D ply carries trbf_center;
+            // plain 3DGS ply does not
+            const hdr = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 8192)));
+            return hdr.includes('trbf_center') ? parseSpacetimePly(buffer) : parsePly(buffer);
+        }
         if (lower.endsWith('.splat') || buffer.byteLength % 32 === 0) return parseSplat(buffer);
         throw new Error('unrecognized splat container: ' + name);
     }
 
-    const api = { parseSplat, parsePly, parseSpz, parseAny, SplatCloud, normalizeFrames, allocFrame };
+    const api = { parseSplat, parsePly, parseSpz, parseSpacetimePly, parseAny,
+                  evalDynamicPositions, SplatCloud, normalizeFrames, allocFrame };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else global.FourDSplats = api;
 })(typeof window !== 'undefined' ? window : globalThis);

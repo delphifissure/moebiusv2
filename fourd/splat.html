@@ -78,7 +78,7 @@ function installFrames(frames, subject) {
     FourDSplats.normalizeFrames(frames, portal.portalZ, portal.portalHeight * 0.9, subject);
     const cap = Math.max(...frames.map(f => f.n));
     if (cloud) scene.remove(cloud.mesh);
-    cloud = new FourDSplats.SplatCloud(THREE, cap);
+    cloud = new FourDSplats.SplatCloud(THREE, cap, !!frames[0].dynamic); // A225: spacetime = dynamic cloud
     cloud.setFrames(frames);
     scene.add(cloud.mesh);
     dirty = true;
@@ -87,8 +87,7 @@ function installFrames(frames, subject) {
 document.getElementById('file').addEventListener('change', async (e) => {
     const f = e.target.files[0]; if (!f) return;
     const buf = await f.arrayBuffer();
-    installFrames([f.name.toLowerCase().endsWith('.ply')
-        ? FourDSplats.parsePly(buf) : FourDSplats.parseSplat(buf)]);
+    installFrames([await FourDSplats.parseAny(buf, f.name.toLowerCase())]);
 });
 
 // head input: pointer position over the window == normalized head deviation
@@ -130,7 +129,11 @@ function tick(t) {
         devY = 0.18 * Math.sin(sweepT * 0.63);
         dirty = true;
     }
-    if (playing && cloud.frames.length > 1 && t - lastFrameT > 1000 / fps) {
+    if (playing && cloud.dynamic) {
+        // A225: spacetime clip, t over [0,1) at 5s/loop (pacing default)
+        cloud.setTime((t / 1000 / 5) % 1);
+        dirty = true;
+    } else if (playing && cloud.frames.length > 1 && t - lastFrameT > 1000 / fps) {
         cloud.setFrame(cloud.frameIndex + 1);
         lastFrameT = t; dirty = true;
     }

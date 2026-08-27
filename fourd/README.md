@@ -125,6 +125,21 @@ real sequences from a 4DAnyone rig lives in `fourd/gpu/` (runbook +
 `train_sequence.py` warm-started per-frame splatfacto orchestrator +
 `ply_to_sequence.py` converter, python->JS round-trip tested).
 
+### A225 — SpacetimeGaussians: single-file 4D (slice c)
+
+A trained SpacetimeGaussians `point_cloud.ply` (detected by its
+`trbf_center` field) imports as a DYNAMIC splat layer: one persistent
+gaussian set whose cubic position polynomial, linear rotation (omega), and
+temporal opacity window are evaluated per vertex in the shader against a
+continuous clip time — no per-frame files. Evaluation law verified against
+their renderer; CPU resort re-runs at 1/24-clip granularity or on eye move.
+Training conversion from a 4DAnyone rig: `fourd/gpu/fourd_to_stg.py`
+(LLFF pose writer validated offline). Synthetic test clip:
+`make_synthetic_spacetime.js` exercises motion orders 1-3, omega, and the
+temporal window; tests T5 (motion moves the marker on screen) and T6
+(a narrow-window blob exists ONLY near its trbf center: 0 px at t=0.08,
+381 px at t=0.75) PASS alongside T1-T4.
+
 Known v1 limits: subject framing uses the file's union bbox (fit to portal
 height, pinned at the portal plane) — no per-layer placement controls yet;
 DC color only; one global transform per file (sequences stay in

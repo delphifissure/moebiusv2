@@ -65,3 +65,29 @@ Then either:
   optimization; warm seeding reduces it, does not eliminate it.
 - 4DAnyone's own note: their paper's 4DGS (FreeTimeGS) is not public; this
   per-frame route is the reproducible one they also point to (splatfacto).
+
+## Slice (c): SpacetimeGaussians (single-file 4D)
+
+The durable format: ONE file, per-splat cubic motion + linear rotation +
+temporal opacity window; the portal evaluates it in the vertex shader
+(no per-frame files, no MLP). Train with
+[SpacetimeGaussians](https://github.com/oppo-us-research/SpacetimeGaussians):
+
+```bash
+python fourd/gpu/fourd_to_stg.py --result_dir data/fdanyone/<clip> --out_dir ~/stg/<clip>
+# then, in their repo (their env):
+python script/pre_n3d.py --videopath ~/stg/<clip>
+python train.py ... (their Neural3D config)
+```
+
+The trained `point_cloud.ply` (with trbf_center/motion_*/omega_* fields)
+drops straight into moebius's color slot or `splat.html` — the importer
+detects `trbf_center` and goes dynamic. Playback pacing: `duration`
+seconds per loop (default 5, `window._splatSeqDuration`).
+
+Untested-by-necessity notes: the LLFF pose conversion in `fourd_to_stg.py`
+follows the documented [down, right, backwards] convention and the
+near/far bounds are a labeled heuristic — validate both against their
+pre_n3d.py on the first real run. The viewer side IS tested (synthetic
+spacetime clip exercising motion orders 1-3, omega, and the temporal
+window: fourd/make_synthetic_spacetime.js + tests T5/T6).

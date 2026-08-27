@@ -190,6 +190,53 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
     console.log('T4 sequence: frames=' + t4.nFrames + ' frame0 vs frame1 diff=' + t4.diff + '/' + t4.total +
         ' — ' + (t4ok ? 'PASS' : 'FAIL'));
 
+    // T5/T6: SpacetimeGaussians single-file 4D (A225). Fresh layer set so
+    // color classification can't collide with the static test asset.
+    fs.copyFileSync(path.join(__dirname, 'assets', 'spacetime_test.ply'), path.join(H, 'test_spacetime.ply'));
+    const t56 = await page.evaluate(async () => {
+        for (const sl of splatLayers) scene.remove(sl.mesh);
+        splatLayers.length = 0;
+        const buf = await (await fetch('test_spacetime.ply')).arrayBuffer();
+        const entry = await window._addSplatLayerFromBuffer(buf, 'test_spacetime.ply');
+        const grab = async () => {
+            updateCameraAndProjection(); render();
+            await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+            const cv = document.createElement('canvas');
+            const el = renderer.domElement; cv.width = el.width; cv.height = el.height;
+            const cx = cv.getContext('2d'); cx.drawImage(el, 0, 0);
+            return cx.getImageData(0, 0, cv.width, cv.height).data;
+        };
+        const magentaX = (d, W) => {
+            let sx = 0, n = 0;
+            for (let i = 0; i < d.length; i += 8) {
+                const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+                if (r > 0.5 && b > 0.5 && g < 0.35) { sx += ((i / 4) % W); n++; }
+            }
+            return n ? sx / n : NaN;
+        };
+        const orangeCount = (d) => {
+            let n = 0;
+            for (let i = 0; i < d.length; i += 8) {
+                const r = d[i] / 255, g = d[i + 1] / 255, b = d[i + 2] / 255;
+                if (r > 0.75 && g > 0.32 && g < 0.62 && b < 0.22) n++;
+            }
+            return n;
+        };
+        const W = renderer.domElement.width;
+        entry.setTime(0.08); const A = await grab();
+        entry.setTime(0.5); const B = await grab();
+        entry.setTime(0.75); const C = await grab();
+        return { dynamic: entry.cloud.dynamic,
+                 magA: magentaX(A, W), magB: magentaX(B, W),
+                 orA: orangeCount(A), orC: orangeCount(C) };
+    });
+    const t5ok = t56.dynamic && isFinite(t56.magA) && isFinite(t56.magB) && Math.abs(t56.magB - t56.magA) > 10;
+    const t6ok = t56.orC > t56.orA * 3 + 50;
+    console.log('T5 spacetime motion: magenta x ' + t56.magA.toFixed(1) + ' -> ' + t56.magB.toFixed(1) +
+        ' px (t 0.08 -> 0.5) — ' + (t5ok ? 'PASS' : 'FAIL'));
+    console.log('T6 temporal window: orange px t=0.08: ' + t56.orA + '  t=0.75: ' + t56.orC +
+        ' — ' + (t6ok ? 'PASS' : 'FAIL'));
+
     // in-page grab, not page.screenshot — the SwiftShader deferred-render
     // bill stalls the CDP screenshot after heavy offscreen work (a158)
     const png = await page.evaluate(async () => {
@@ -203,5 +250,5 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
     fs.writeFileSync(path.join(SHOTS, 'moebius_with_splat.png'), Buffer.from(png.split(',')[1], 'base64'));
     console.log('shot -> ' + SHOTS + '/moebius_with_splat.png');
     await browser.close(); srv.kill();
-    process.exit((t1ok && t2ok && t3ok && t4ok) ? 0 : 1);
+    process.exit((t1ok && t2ok && t3ok && t4ok && t5ok && t6ok) ? 0 : 1);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
