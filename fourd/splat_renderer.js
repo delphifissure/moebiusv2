@@ -294,7 +294,102 @@
         return { scale: s };
     }
 
-    const api = { parseSplat, parsePly, SplatCloud, normalizeFrames, allocFrame };
+    // ---- SPZ (Niantic) ------------------------------------------------
+    // Versions 1-3: 16-byte header + attribute sections, whole body gzipped.
+    // Section order VERIFIED against nianticlabs/spz load-spz.cc
+    // serializePackedGaussians: positions, alphas, colors, scales,
+    // rotations, sh. Decodes: pos 24-bit LE signed fixed / 2^fractionalBits;
+    // scale exp(byte/16 - 10); alpha byte/255 (sigmoid already applied);
+    // color rgb = 0.5 + SH_C0 * ((byte/255 - 0.5) / 0.15).
+    // Version 4 restructured the container to per-stream ZSTD — no native
+    // browser decoder, so it is REJECTED with a clear message rather than
+    // half-parsed. v3's smallest-three rotation decode follows the spec text
+    // (2-bit largest index in the top bits, 3 x 10-bit signed components,
+    // range ±1/√2); it has not yet been validated against a reference v3
+    // file — v2 (what Scaniverse emits) is the verified path.
+    async function parseSpz(buffer) {
+        let bytes = new Uint8Array(buffer);
+        if (bytes[0] === 0x1f && bytes[1] === 0x8b) { // gzip container (v1-3)
+            const ds = new DecompressionStream('gzip');
+            const out = await new Response(new Blob([buffer]).stream().pipeThrough(ds)).arrayBuffer();
+            bytes = new Uint8Array(out);
+        }
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        if (dv.getUint32(0, true) !== 0x5053474e) throw new Error('spz: bad magic');
+        const version = dv.getUint32(4, true);
+        if (version >= 4) throw new Error('spz v' + version + ' uses per-stream ZSTD — convert to .ply or spz v2 for now');
+        const n = dv.getUint32(8, true);
+        const shDegree = bytes[12], fracBits = bytes[13];
+        const shDim = [0, 3, 8, 15][shDegree] || 0;
+        let o = 16;
+        const posB = o; o += n * 9;
+        const alphaB = o; o += n;
+        const colorB = o; o += n * 3;
+        const scaleB = o; o += n * 3;
+        const rotB = o; o += n * (version >= 3 ? 4 : 3);
+        // + sh section (n * shDim * 3), read for length check only — DC-only renderer
+        if (o + n * shDim * 3 > bytes.length) throw new Error('spz: truncated');
+        const out = allocFrame(n);
+        const posScale = 1 / (1 << fracBits);
+        const INV_SQRT2 = Math.SQRT1_2;
+        for (let i = 0; i < n; i++) {
+            for (let a = 0; a < 3; a++) {
+                const b0 = posB + (i * 3 + a) * 3;
+                let f = bytes[b0] | (bytes[b0 + 1] << 8) | (bytes[b0 + 2] << 16);
+                if (f & 0x800000) f |= 0xff000000; // sign extend
+                out.center[i * 3 + a] = (f | 0) * posScale;
+            }
+            out.color[i * 4 + 3] = bytes[alphaB + i] / 255;
+            for (let a = 0; a < 3; a++)
+                out.color[i * 4 + a] = clamp01(0.5 + SH_C0 * ((bytes[colorB + i * 3 + a] / 255 - 0.5) / 0.15));
+            const sx = Math.exp(bytes[scaleB + i * 3] / 16 - 10);
+            const sy = Math.exp(bytes[scaleB + i * 3 + 1] / 16 - 10);
+            const sz = Math.exp(bytes[scaleB + i * 3 + 2] / 16 - 10);
+            let qw, qx, qy, qz;
+            if (version >= 3) {
+                const w32 = dv.getUint32(rotB + i * 4, true);
+                const idx = (w32 >>> 30) & 3;
+                const c = [0, 0, 0];
+                for (let k = 0; k < 3; k++) {
+                    let v = (w32 >>> (20 - k * 10)) & 0x3ff;
+                    if (v & 0x200) v -= 1024; // 10-bit signed
+                    c[k] = (v / 511) * INV_SQRT2;
+                }
+                const rest = Math.sqrt(Math.max(0, 1 - c[0] * c[0] - c[1] * c[1] - c[2] * c[2]));
+                const q = [0, 0, 0, 0]; // x y z w
+                let ci = 0;
+                for (let k = 0; k < 4; k++) { if (k === idx) q[k] = rest; else q[k] = c[ci++]; }
+                qx = q[0]; qy = q[1]; qz = q[2]; qw = q[3];
+            } else {
+                qx = bytes[rotB + i * 3] / 127.5 - 1;
+                qy = bytes[rotB + i * 3 + 1] / 127.5 - 1;
+                qz = bytes[rotB + i * 3 + 2] / 127.5 - 1;
+                qw = Math.sqrt(Math.max(0, 1 - qx * qx - qy * qy - qz * qz));
+            }
+            covFromScaleQuat(sx, sy, sz, qw, qx, qy, qz, out.covA, out.covB, i);
+        }
+        return out;
+    }
+
+    // ---- dispatcher ----------------------------------------------------
+    // Sniffs by content first (magic/header), extension second. Async
+    // because spz decompresses through DecompressionStream.
+    async function parseAny(buffer, name) {
+        const lower = (name || '').toLowerCase();
+        const head = new Uint8Array(buffer, 0, Math.min(16, buffer.byteLength));
+        const isGzip = head[0] === 0x1f && head[1] === 0x8b;
+        const magic = head.length >= 4 ? (head[0] | (head[1] << 8) | (head[2] << 16) | (head[3] << 24)) >>> 0 : 0;
+        if (lower.endsWith('.ksplat'))
+            throw new Error('.ksplat is not supported yet — convert to .ply or .splat (GaussianSplats3D can export both)');
+        if (isGzip || magic === 0x5053474e || lower.endsWith('.spz')) return parseSpz(buffer);
+        const asText = String.fromCharCode(...head.slice(0, 4));
+        if (asText === 'ply\n' || asText.startsWith('ply')) return parsePly(buffer);
+        if (lower.endsWith('.ply')) return parsePly(buffer);
+        if (lower.endsWith('.splat') || buffer.byteLength % 32 === 0) return parseSplat(buffer);
+        throw new Error('unrecognized splat container: ' + name);
+    }
+
+    const api = { parseSplat, parsePly, parseSpz, parseAny, SplatCloud, normalizeFrames, allocFrame };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else global.FourDSplats = api;
 })(typeof window !== 'undefined' ? window : globalThis);

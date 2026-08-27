@@ -98,3 +98,23 @@ extension (PNG frames) because this container's chromium ships no H.264.
   (per-view depth → our reprojection law) is the next slice, not this one.
 - Eye input is pointer/wheel; wiring the moebius head tracker is a hookup, not
   a design change (`window._fourdSetEye`).
+
+## A223 — splats as a moebius input type (mixed with layers)
+
+`moebius.html` now imports gaussian splats through the layer modal's color
+slot (`.splat`, 3DGS `.ply`, `.spz` v1–3; `.ksplat` is detected and refused
+with a convert hint — no zstd in the browser for spz v4 either). A splat
+layer is real geometry: it renders in the same scene, same camera, same
+off-axis law as every 2.5D layer (drawn after them, depth-tested against
+their written depth), and is INVISIBLE to every analysis pass — normalized
+depth, footprint, gap captures, pipeline debug views — so the 2.5D pipeline
+is bit-identical with a splat present. Proven end-to-end by
+`fourd/moebius_splat_test.js`: T1 the baked gap set reproduces the shipped
+reference exactly (99907 px / 3769 boundary) with a splat loaded; T2 the
+splat is visible in the composite; T3 spz v2 round-trip. Test API:
+`window._addSplatLayerFromBuffer(buffer, name)`.
+
+Known v1 limits: subject framing uses the file's union bbox (fit to portal
+height, pinned at the portal plane) — no per-layer placement controls yet;
+DC color only; one global transform per file (sequences stay in
+`splat.html` until slice b).
