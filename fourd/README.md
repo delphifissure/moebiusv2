@@ -114,6 +114,17 @@ reference exactly (99907 px / 3769 boundary) with a splat loaded; T2 the
 splat is visible in the composite; T3 spz v2 round-trip. Test API:
 `window._addSplatLayerFromBuffer(buffer, name)`.
 
+### A224 — 4D sequences in moebius (slice b)
+
+Select MULTIPLE `.splat`/`.ply` frame files in the color slot (or point a
+preset at a sequence `manifest.json`) and the layer becomes an animated 4D
+splat: one normalization transform for the whole sequence, per-frame
+playback on its own clock (manifest `fps` or `window._splatSeqFps`, default
+12), resort on every frame advance. The GPU-side pipeline that produces
+real sequences from a 4DAnyone rig lives in `fourd/gpu/` (runbook +
+`train_sequence.py` warm-started per-frame splatfacto orchestrator +
+`ply_to_sequence.py` converter, python->JS round-trip tested).
+
 Known v1 limits: subject framing uses the file's union bbox (fit to portal
 height, pinned at the portal plane) — no per-layer placement controls yet;
 DC color only; one global transform per file (sequences stay in

@@ -160,6 +160,36 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
     const t2ok = t2.diff > t2.total * 0.01;
     console.log('T2 composite: ' + t2.diff + ' of ' + t2.total + ' samples differ splat on/off — ' + (t2ok ? 'PASS' : 'FAIL'));
 
+    // T4: 4D sequence layer (A224) — multi-buffer import, manual frame
+    // stepping changes the composite, playback clock live
+    for (const f of ['frame_00', 'frame_06']) {
+        fs.copyFileSync(path.join(__dirname, 'assets', f + '.splat'), path.join(H, 'test_' + f + '.splat'));
+    }
+    const t4 = await page.evaluate(async () => {
+        const parts = [];
+        for (const f of ['test_frame_00.splat', 'test_frame_06.splat'])
+            parts.push({ buffer: await (await fetch(f)).arrayBuffer(), name: f });
+        const entry = await window._addSplatLayerFromBuffer(parts, 'seq-test');
+        const grab = async () => {
+            updateCameraAndProjection(); render();
+            await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+            const cv = document.createElement('canvas');
+            const el = renderer.domElement; cv.width = el.width; cv.height = el.height;
+            const cx = cv.getContext('2d'); cx.drawImage(el, 0, 0);
+            return cx.getImageData(0, 0, cv.width, cv.height).data;
+        };
+        entry.setFrame(0); const A = await grab();
+        entry.setFrame(1); const B = await grab();
+        let diff = 0;
+        for (let i = 0; i < A.length; i += 16) if (Math.abs(A[i] - B[i]) > 20) diff++;
+        // cleanup so the final shot shows the single-splat scene
+        scene.remove(entry.mesh); splatLayers.pop();
+        return { nFrames: entry.cloud.frames.length, playingDefault: entry.playing === false ? 'stopped-by-setFrame' : 'playing', diff, total: (A.length / 16) | 0 };
+    });
+    const t4ok = t4.nFrames === 2 && t4.diff > t4.total * 0.001;
+    console.log('T4 sequence: frames=' + t4.nFrames + ' frame0 vs frame1 diff=' + t4.diff + '/' + t4.total +
+        ' — ' + (t4ok ? 'PASS' : 'FAIL'));
+
     // in-page grab, not page.screenshot — the SwiftShader deferred-render
     // bill stalls the CDP screenshot after heavy offscreen work (a158)
     const png = await page.evaluate(async () => {
@@ -173,5 +203,5 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
     fs.writeFileSync(path.join(SHOTS, 'moebius_with_splat.png'), Buffer.from(png.split(',')[1], 'base64'));
     console.log('shot -> ' + SHOTS + '/moebius_with_splat.png');
     await browser.close(); srv.kill();
-    process.exit((t1ok && t2ok && t3ok) ? 0 : 1);
+    process.exit((t1ok && t2ok && t3ok && t4ok) ? 0 : 1);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
