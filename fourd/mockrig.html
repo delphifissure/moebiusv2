@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>mock rig renderer</title>
+<style>html,body{margin:0;background:#222}</style></head>
+<body>
+<script src="/harness/vendor/three.min.js"></script>
+<script>
+// Synthetic 4DAnyone-style capture subject: an articulated figure whose four
+// sides are unmistakable (front: red chest + face, back: blue pack, left arm
+// green, right arm yellow), walking in place. Rendered from a yaw-spaced rig
+// looking at the pivot, exactly like a 4DAnyone dense-view set.
+/* global THREE */
+const W = 352, H = 640;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9aa0a8);
+const amb = new THREE.AmbientLight(0xffffff, 0.75); scene.add(amb);
+const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(2, 4, 3); scene.add(sun);
+
+const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
+const fig = new THREE.Group();
+const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.20, 0.62, 20), mat(0x7a6f63));
+torso.position.y = 1.05; fig.add(torso);
+const chest = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.3, 0.05), mat(0xc03030));
+chest.position.set(0, 1.12, 0.16); fig.add(chest);                    // FRONT marker
+const pack = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.34, 0.14), mat(0x2848c0));
+pack.position.set(0, 1.08, -0.22); fig.add(pack);                     // BACK marker
+const head = new THREE.Mesh(new THREE.SphereGeometry(0.13, 20, 16), mat(0xd8b090));
+head.position.y = 1.53; fig.add(head);
+const eyeL = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), mat(0x101010));
+eyeL.position.set(-0.05, 1.56, 0.115); fig.add(eyeL);
+const eyeR = eyeL.clone(); eyeR.position.x = 0.05; fig.add(eyeR);
+const mkLimb = (color) => {
+    const g = new THREE.Group();
+    const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 0.34, 12), mat(color));
+    upper.position.y = -0.17; g.add(upper);
+    const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.038, 0.034, 0.32, 12), mat(color));
+    lower.position.y = -0.50; g.add(lower);
+    return g;
+};
+const armL = mkLimb(0x30a040); armL.position.set(-0.24, 1.32, 0); fig.add(armL);  // LEFT green
+const armR = mkLimb(0xd0b020); armR.position.set(0.24, 1.32, 0); fig.add(armR);   // RIGHT yellow
+const legL = mkLimb(0x50505a); legL.position.set(-0.10, 0.74, 0); fig.add(legL);
+const legR = mkLimb(0x50505a); legR.position.set(0.10, 0.74, 0); fig.add(legR);
+scene.add(fig);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1.4, 40),
+    new THREE.MeshLambertMaterial({ color: 0x6d7660 }));
+ground.rotation.x = -Math.PI / 2; scene.add(ground);
+const post = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.1, 10), mat(0x444448));
+post.position.set(-0.65, 0.55, -0.45); scene.add(post);   // an off-pivot depth cue
+
+const cam = new THREE.PerspectiveCamera(40, W / H, 0.05, 30);
+
+// pose the figure for frame f of F (walk-in-place loop)
+function pose(f, F) {
+    const t = (f / F) * Math.PI * 2;
+    armL.rotation.x = Math.sin(t) * 0.7;
+    armR.rotation.x = -Math.sin(t) * 0.7;
+    legL.rotation.x = -Math.sin(t) * 0.6;
+    legR.rotation.x = Math.sin(t) * 0.6;
+    fig.position.y = Math.abs(Math.sin(t * 2)) * 0.02;
+    head.rotation.y = Math.sin(t * 0.5) * 0.25;
+}
+
+// place the OPENCV-style rig camera: yaw about the pivot (0 = front, +yaw =
+// camera moves to the subject's LEFT of frame / viewer's right, matching a
+// viewer eye at +x), pitch above the horizon, look at the pivot.
+const PIVOT = new THREE.Vector3(0, 0.95, 0);
+const RADIUS = 2.6;
+function placeCam(yawDeg, pitchDeg) {
+    const y = yawDeg * Math.PI / 180, p = pitchDeg * Math.PI / 180;
+    cam.position.set(
+        PIVOT.x + RADIUS * Math.cos(p) * Math.sin(y),
+        PIVOT.y + RADIUS * Math.sin(p),
+        PIVOT.z + RADIUS * Math.cos(p) * Math.cos(y));
+    cam.lookAt(PIVOT);
+    cam.updateMatrixWorld(true);
+}
+
+window._shot = (yawDeg, pitchDeg, f, F) => {
+    pose(f, F);
+    placeCam(yawDeg, pitchDeg);
+    renderer.render(scene, cam);
+    return renderer.domElement.toDataURL('image/png');
+};
+window._rigInfo = (yawDeg, pitchDeg) => {
+    placeCam(yawDeg, pitchDeg);
+    const fovY = cam.fov * Math.PI / 180;
+    const fy = H / (2 * Math.tan(fovY / 2));
+    const fx = fy;
+    // camera_to_world with OPENCV camera frame (x right, y down, z forward):
+    // THREE's camera looks down -z with y up, so flip y and z columns.
+    const m = cam.matrixWorld.clone();
+    const e = m.elements; // column-major
+    const c2w = [
+        [e[0], -e[4], -e[8], e[12]],
+        [e[1], -e[5], -e[9], e[13]],
+        [e[2], -e[6], -e[10], e[14]],
+        [0, 0, 0, 1]];
+    return { K: [[fx, 0, W / 2], [0, fy, H / 2], [0, 0, 1]], c2w, W, H };
+};
+window._rigReady = true;
+</script>
+</body>
+</html>
