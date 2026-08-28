@@ -481,6 +481,38 @@
         return out;
     }
 
+    // 180° about X (y,z negated): 3DGS content is conventionally y-DOWN
+    // (COLMAP/OpenCV heritage) and the portal is y-up, so this is the
+    // DEFAULT import orientation — the same flip every canonical splat
+    // viewer bakes into its view matrix. Some producers author y-up
+    // (e.g. PlayCanvas spz exports); those disable it per layer/URL.
+    // Measured basis: nianticlabs spz_to_ply output matches our raw decode
+    // element-exactly (no hidden conversion in any container), so
+    // orientation is pure producer convention, not a format property.
+    function flipFrameRDF(fr) {
+        for (let i = 0; i < fr.n; i++) {
+            fr.center[i * 3 + 1] = -fr.center[i * 3 + 1];
+            fr.center[i * 3 + 2] = -fr.center[i * 3 + 2];
+        }
+        if (fr.dynamic) {
+            for (let i = 0; i < fr.n; i++) {
+                for (const off of [1, 2, 4, 5, 7, 8]) fr.motion[i * 9 + off] = -fr.motion[i * 9 + off];
+                // q' = r180x ⊗ q : (x,y,z,w) -> (w, -z, y, -x); omega same map
+                for (const arr of [fr.quat, fr.omega]) {
+                    const x = arr[i * 4], y = arr[i * 4 + 1], z = arr[i * 4 + 2], w = arr[i * 4 + 3];
+                    arr[i * 4] = w; arr[i * 4 + 1] = -z; arr[i * 4 + 2] = y; arr[i * 4 + 3] = -x;
+                }
+            }
+        } else {
+            // C' = F C F^T, F = diag(1,-1,-1): xy and xz negate, yz keeps
+            for (let i = 0; i < fr.n; i++) {
+                fr.covA[i * 3 + 1] = -fr.covA[i * 3 + 1];
+                fr.covA[i * 3 + 2] = -fr.covA[i * 3 + 2];
+            }
+        }
+        return fr;
+    }
+
     // Evaluate a dynamic frame's positions at time t (CPU, for sorting).
     function evalDynamicPositions(fr, t, dst) {
         for (let i = 0; i < fr.n; i++) {
@@ -490,6 +522,59 @@
             dst[i * 3 + 1] = fr.center[i * 3 + 1] + fr.motion[m + 1] * dt + fr.motion[m + 4] * dt2 + fr.motion[m + 7] * dt3;
             dst[i * 3 + 2] = fr.center[i * 3 + 2] + fr.motion[m + 2] * dt + fr.motion[m + 5] * dt2 + fr.motion[m + 8] * dt3;
         }
+    }
+
+    // ---- splaTV .splatv (antimatter15 dynamic container) ---------------
+    // Layout VERIFIED against antimatter15/splaTV hybrid.js:
+    //   u32 magic 0x674b, u32 jsonLen, JSON chunk table, then 64 bytes/splat:
+    //   [0..2] f32 xyz; [3][4] half2 (rot_0,rot_1)(rot_2,rot_3) — 3DGS
+    //   (w,x,y,z); [5][6] half2 LINEAR scales (exp already applied);
+    //   [7] rgba8 color+opacity (final bytes, no SH transform);
+    //   [8..12] half2 motion_0..8; [13][14] half2 omega_0..3;
+    //   [15] half2 (trbf_center, exp(trbf_scale)).
+    // Same SpacetimeGaussians evaluation law as parseSpacetimePly.
+    function halfToFloat(h) {
+        const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+        if (e === 0) return s * m * Math.pow(2, -24);
+        if (e === 31) return m ? NaN : s * Infinity;
+        return s * (1 + m / 1024) * Math.pow(2, e - 15);
+    }
+    function parseSplatv(buffer) {
+        const dv = new DataView(buffer);
+        if (dv.getUint32(0, true) !== 0x674b) throw new Error('splatv: bad magic');
+        const jsonLen = dv.getUint32(4, true);
+        const dataOff = 8 + jsonLen;
+        const n = Math.floor((buffer.byteLength - dataOff) / 64);
+        if (n < 1) throw new Error('splatv: no splats');
+        const u32 = new Uint32Array(buffer.slice(dataOff, dataOff + n * 64));
+        const f32 = new Float32Array(u32.buffer);
+        const u8 = new Uint8Array(u32.buffer);
+        const out = {
+            n, dynamic: true,
+            center: new Float32Array(n * 3), scale: new Float32Array(n * 3),
+            quat: new Float32Array(n * 4), omega: new Float32Array(n * 4),
+            motion: new Float32Array(n * 9), trbf: new Float32Array(n * 2),
+            color: new Float32Array(n * 4),
+        };
+        const lo = (v) => halfToFloat(v & 0xffff), hi = (v) => halfToFloat(v >>> 16);
+        for (let i = 0; i < n; i++) {
+            const b = i * 16;
+            out.center[i * 3] = f32[b]; out.center[i * 3 + 1] = f32[b + 1]; out.center[i * 3 + 2] = f32[b + 2];
+            const r0 = lo(u32[b + 3]), r1 = hi(u32[b + 3]), r2 = lo(u32[b + 4]), r3 = hi(u32[b + 4]);
+            out.quat[i * 4] = r1; out.quat[i * 4 + 1] = r2; out.quat[i * 4 + 2] = r3; out.quat[i * 4 + 3] = r0;
+            out.scale[i * 3] = lo(u32[b + 5]); out.scale[i * 3 + 1] = hi(u32[b + 5]); out.scale[i * 3 + 2] = lo(u32[b + 6]);
+            out.color[i * 4] = u8[(b + 7) * 4] / 255; out.color[i * 4 + 1] = u8[(b + 7) * 4 + 1] / 255;
+            out.color[i * 4 + 2] = u8[(b + 7) * 4 + 2] / 255; out.color[i * 4 + 3] = u8[(b + 7) * 4 + 3] / 255;
+            out.motion[i * 9] = lo(u32[b + 8]); out.motion[i * 9 + 1] = hi(u32[b + 8]);
+            out.motion[i * 9 + 2] = lo(u32[b + 9]); out.motion[i * 9 + 3] = hi(u32[b + 9]);
+            out.motion[i * 9 + 4] = lo(u32[b + 10]); out.motion[i * 9 + 5] = hi(u32[b + 10]);
+            out.motion[i * 9 + 6] = lo(u32[b + 11]); out.motion[i * 9 + 7] = hi(u32[b + 11]);
+            out.motion[i * 9 + 8] = lo(u32[b + 12]);
+            const o0 = lo(u32[b + 13]), o1 = hi(u32[b + 13]), o2 = lo(u32[b + 14]), o3 = hi(u32[b + 14]);
+            out.omega[i * 4] = o1; out.omega[i * 4 + 1] = o2; out.omega[i * 4 + 2] = o3; out.omega[i * 4 + 3] = o0;
+            out.trbf[i * 2] = lo(u32[b + 15]); out.trbf[i * 2 + 1] = Math.max(1e-6, hi(u32[b + 15]));
+        }
+        return out;
     }
 
     // ---- SPZ (Niantic) ------------------------------------------------
@@ -512,21 +597,62 @@
             const out = await new Response(new Blob([buffer]).stream().pipeThrough(ds)).arrayBuffer();
             bytes = new Uint8Array(out);
         }
-        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         if (dv.getUint32(0, true) !== 0x5053474e) throw new Error('spz: bad magic');
         const version = dv.getUint32(4, true);
-        if (version >= 4) throw new Error('spz v' + version + ' uses per-stream ZSTD — convert to .ply or spz v2 for now');
-        const n = dv.getUint32(8, true);
-        const shDegree = bytes[12], fracBits = bytes[13];
-        const shDim = [0, 3, 8, 15][shDegree] || 0;
-        let o = 16;
-        const posB = o; o += n * 9;
-        const alphaB = o; o += n;
-        const colorB = o; o += n * 3;
-        const scaleB = o; o += n * 3;
-        const rotB = o; o += n * (version >= 3 ? 4 : 3);
-        // + sh section (n * shDim * 3), read for length check only — DC-only renderer
-        if (o + n * shDim * 3 > bytes.length) throw new Error('spz: truncated');
+        let n, shDegree, fracBits, posB, alphaB, colorB, scaleB, rotB;
+        if (version >= 4) {
+            // v4 container (VERIFIED against load-spz.cc): 32-byte header
+            // {magic u32, version u32, numPoints u32, shDegree u8,
+            // fractionalBits u8, flags u8, numStreams u8, tocByteOffset u32,
+            // reserved 12B}; TOC at tocByteOffset = numStreams x {u64
+            // compressedSize, u64 uncompressedSize}; streams follow the TOC,
+            // each independently ZSTD, in order positions, alphas, colors,
+            // scales, rotations, sh (only non-empty streams present).
+            // ZSTD via the vendored pure-JS fzstd (fourd/vendor/fzstd.umd.js).
+            const zstd = (typeof fzstd !== 'undefined') ? fzstd
+                : (typeof require === 'function' ? (() => { try { return require('fzstd'); } catch (e) { return null; } })() : null);
+            if (!zstd) throw new Error('spz v' + version + ' uses per-stream ZSTD — fzstd not loaded (fourd/vendor/fzstd.umd.js)');
+            n = dv.getUint32(8, true);
+            shDegree = bytes[12]; fracBits = bytes[13];
+            const numStreams = bytes[15];
+            const toc = dv.getUint32(16, true);
+            const shDim4 = [0, 3, 8, 15][shDegree] || 0;
+            const expect = [n * 9, n, n * 3, n * 3, n * 4, n * shDim4 * 3].filter(s => s > 0);
+            if (numStreams !== expect.length)
+                throw new Error('spz v4: ' + numStreams + ' streams, expected ' + expect.length);
+            let dataOff = toc + numStreams * 16;
+            const parts = [];
+            for (let s = 0; s < numStreams; s++) {
+                const cs = Number(dv.getBigUint64(toc + s * 16, true));
+                const us = Number(dv.getBigUint64(toc + s * 16 + 8, true));
+                const out2 = zstd.decompress(bytes.subarray(dataOff, dataOff + cs));
+                if (out2.length !== us) throw new Error('spz v4: stream ' + s + ' decompressed ' + out2.length + ' != ' + us);
+                parts.push(out2); dataOff += cs;
+            }
+            // stitch a flat legacy-style buffer so the decode loop below is shared
+            const flat = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+            let fo = 0; for (const p of parts) { flat.set(p, fo); fo += p.length; }
+            bytes = flat; dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            let o = 0;
+            posB = o; o += n * 9;
+            alphaB = o; o += n;
+            colorB = o; o += n * 3;
+            scaleB = o; o += n * 3;
+            rotB = o; o += n * 4;
+        } else {
+            n = dv.getUint32(8, true);
+            shDegree = bytes[12]; fracBits = bytes[13];
+            const shDim = [0, 3, 8, 15][shDegree] || 0;
+            let o = 16;
+            posB = o; o += n * 9;
+            alphaB = o; o += n;
+            colorB = o; o += n * 3;
+            scaleB = o; o += n * 3;
+            rotB = o; o += n * (version >= 3 ? 4 : 3);
+            // + sh section (n * shDim * 3), read for length check only — DC-only renderer
+            if (o + n * shDim * 3 > bytes.length) throw new Error('spz: truncated');
+        }
         const out = allocFrame(n);
         const posScale = 1 / (1 << fracBits);
         const INV_SQRT2 = Math.SQRT1_2;
@@ -545,13 +671,20 @@
             const sz = Math.exp(bytes[scaleB + i * 3 + 2] / 16 - 10);
             let qw, qx, qy, qz;
             if (version >= 3) {
+                // VERIFIED against load-spz.cc packQuaternionSmallestThree:
+                // comp = [iLargest:2][f0:10][f1:10][f2:10], each field =
+                // SIGN-MAGNITUDE (negbit<<9 | mag, mag = 511*|q|/sqrt(1/2)),
+                // fields in xyzw order skipping the largest, which is made
+                // positive. (First cut used 10-bit two's-complement — caught
+                // by the reference-CLI cross-check on biker.spz: positions
+                // exact, covariance 2.5x off.)
                 const w32 = dv.getUint32(rotB + i * 4, true);
                 const idx = (w32 >>> 30) & 3;
                 const c = [0, 0, 0];
                 for (let k = 0; k < 3; k++) {
-                    let v = (w32 >>> (20 - k * 10)) & 0x3ff;
-                    if (v & 0x200) v -= 1024; // 10-bit signed
-                    c[k] = (v / 511) * INV_SQRT2;
+                    const v = (w32 >>> (20 - k * 10)) & 0x3ff;
+                    const mag = ((v & 0x1ff) / 511) * INV_SQRT2;
+                    c[k] = (v & 0x200) ? -mag : mag;
                 }
                 const rest = Math.sqrt(Math.max(0, 1 - c[0] * c[0] - c[1] * c[1] - c[2] * c[2]));
                 const q = [0, 0, 0, 0]; // x y z w
@@ -579,6 +712,7 @@
         const magic = head.length >= 4 ? (head[0] | (head[1] << 8) | (head[2] << 16) | (head[3] << 24)) >>> 0 : 0;
         if (lower.endsWith('.ksplat'))
             throw new Error('.ksplat is not supported yet — convert to .ply or .splat (GaussianSplats3D can export both)');
+        if (magic === 0x674b || lower.endsWith('.splatv')) return parseSplatv(buffer);
         if (isGzip || magic === 0x5053474e || lower.endsWith('.spz')) return parseSpz(buffer);
         const asText = String.fromCharCode(...head.slice(0, 4));
         if (asText === 'ply\n' || asText.startsWith('ply') || lower.endsWith('.ply')) {
@@ -591,8 +725,8 @@
         throw new Error('unrecognized splat container: ' + name);
     }
 
-    const api = { parseSplat, parsePly, parseSpz, parseSpacetimePly, parseAny,
-                  evalDynamicPositions, SplatCloud, normalizeFrames, allocFrame };
+    const api = { parseSplat, parsePly, parseSpz, parseSpacetimePly, parseSplatv, parseAny,
+                  evalDynamicPositions, flipFrameRDF, SplatCloud, normalizeFrames, allocFrame };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else global.FourDSplats = api;
 })(typeof window !== 'undefined' ? window : globalThis);

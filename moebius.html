@@ -655,6 +655,7 @@
       .then(j => { window._cameraFovLut = j; })
       .catch(() => console.warn('[A148] camera-fov-lut.json not loaded; resolver will use the face-derived estimate'));
   </script>
+<script src="fourd/vendor/fzstd.umd.js"></script> <!-- A226: spz v4 zstd -->
 <script src="fourd/splat_renderer.js"></script> <!-- A223: splat layer parsing/rendering; moebius.js guards on absence -->
 <script src="moebius.js"></script> </body>
 </html>

@@ -1,0 +1,1 @@
+../fourd/vendor/fzstd.umd.js

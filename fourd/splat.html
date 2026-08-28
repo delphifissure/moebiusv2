@@ -26,6 +26,7 @@
   <div style="margin-top:6px;color:#89a">mouse = head · load:<br><input id="file" type="file" accept=".splat,.ply"></div>
 </div>
 <script src="/harness/vendor/three.min.js"></script>
+<script src="/fourd/vendor/fzstd.umd.js"></script> <!-- spz v4 zstd -->
 <script src="/fourd/portal.js"></script>
 <script src="/fourd/splat_renderer.js"></script>
 <script>
@@ -74,6 +75,8 @@ async function loadManifest(url) {
 }
 
 function installFrames(frames, subject) {
+    // default 3DGS y-down -> portal y-up flip; ?flip=0 for y-up-authored files
+    if (params.get('flip') !== '0') frames.forEach(f => FourDSplats.flipFrameRDF(f));
     // subject fills 90% of portal height, centroid pinned AT the portal plane
     FourDSplats.normalizeFrames(frames, portal.portalZ, portal.portalHeight * 0.9, subject);
     const cap = Math.max(...frames.map(f => f.n));
@@ -165,8 +168,16 @@ window._fourd = {
     forceRender() { dirty = true; }
 };
 
-loadManifest(params.get('asset') || '/fourd/assets/manifest.json')
-    .catch(e => { hud.textContent = 'asset load failed: ' + e.message + ' — drop a .splat/.ply file'; });
+(async () => {
+    const asset = params.get('asset') || '/fourd/assets/manifest.json';
+    if (/\.json(\?.*)?$/i.test(asset)) return loadManifest(asset);
+    // single splat container by URL (any supported format)
+    const t0 = performance.now();
+    const buf = await (await fetch(asset)).arrayBuffer();
+    const fr = await FourDSplats.parseAny(buf, asset.toLowerCase());
+    window._parseMs = Math.round(performance.now() - t0);
+    installFrames([fr]);
+})().catch(e => { hud.textContent = 'asset load failed: ' + e.message + ' — drop a .splat/.ply file'; window._loadError = e.message; });
 requestAnimationFrame(tick);
 </script>
 </body>

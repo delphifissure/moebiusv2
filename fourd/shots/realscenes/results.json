@@ -1,0 +1,194 @@
+[
+  {
+    "id": "T01",
+    "label": "Horned Lizard (spz)",
+    "source": "nianticlabs/spz sample",
+    "pass": true,
+    "n": 786233,
+    "parseMs": 448,
+    "coverPct": 59.6,
+    "parallaxPx": 8.5,
+    "viewDiffPct": 27.9,
+    "wallSec": 64,
+    "errs": []
+  },
+  {
+    "id": "T02",
+    "label": "Horned Lizard (.splat)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 786233,
+    "parseMs": 139,
+    "coverPct": 59.5,
+    "parallaxPx": 8.5,
+    "viewDiffPct": 27.8,
+    "wallSec": 76,
+    "errs": []
+  },
+  {
+    "id": "T03",
+    "label": "Racoon Family (spz)",
+    "source": "nianticlabs/spz sample",
+    "pass": true,
+    "n": 932560,
+    "parseMs": 525,
+    "coverPct": 64.8,
+    "parallaxPx": 8.3,
+    "viewDiffPct": 36.8,
+    "wallSec": 91,
+    "errs": []
+  },
+  {
+    "id": "T04",
+    "label": "Combined (spz v3)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 1566,
+    "parseMs": 12,
+    "coverPct": 45.7,
+    "parallaxPx": 3,
+    "viewDiffPct": 22.8,
+    "wallSec": 2,
+    "errs": []
+  },
+  {
+    "id": "T05",
+    "label": "Combined (3DGS ply)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 1566,
+    "parseMs": 20,
+    "coverPct": 45.2,
+    "parallaxPx": 5.3,
+    "viewDiffPct": 22.5,
+    "wallSec": 2,
+    "errs": []
+  },
+  {
+    "id": "T06",
+    "label": "Unicorn Stuffy (ply)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 49602,
+    "parseMs": 89,
+    "coverPct": 36.4,
+    "parallaxPx": 3.8,
+    "viewDiffPct": 22.7,
+    "wallSec": 4,
+    "errs": []
+  },
+  {
+    "id": "T07",
+    "label": "DC Border (ply)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 67618,
+    "parseMs": 115,
+    "coverPct": 38.8,
+    "parallaxPx": 3.3,
+    "viewDiffPct": 14.4,
+    "wallSec": 8,
+    "errs": []
+  },
+  {
+    "id": "T08",
+    "label": "Fire Pit (.splat)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 561997,
+    "parseMs": 128,
+    "coverPct": 100,
+    "parallaxPx": 0,
+    "viewDiffPct": 9.7,
+    "wallSec": 47,
+    "errs": []
+  },
+  {
+    "id": "T09",
+    "label": "Plants (.splat)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 375705,
+    "parseMs": 93,
+    "coverPct": 61.5,
+    "parallaxPx": 1.5,
+    "viewDiffPct": 16.4,
+    "wallSec": 37,
+    "errs": []
+  },
+  {
+    "id": "T10",
+    "label": "Skull (.splat)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 162598,
+    "parseMs": 51,
+    "coverPct": 57.2,
+    "parallaxPx": 0.7,
+    "viewDiffPct": 21.8,
+    "wallSec": 15,
+    "errs": []
+  },
+  {
+    "id": "T11",
+    "label": "Sqwakers (.splat)",
+    "source": "BabylonJS/Assets",
+    "pass": true,
+    "n": 254746,
+    "parseMs": 67,
+    "coverPct": 44.5,
+    "parallaxPx": -1.9,
+    "viewDiffPct": 31.5,
+    "wallSec": 24,
+    "errs": []
+  },
+  {
+    "id": "T12",
+    "label": "Biker (spz v4, zstd)",
+    "source": "playcanvas/engine examples",
+    "pass": true,
+    "n": 152746,
+    "parseMs": 107,
+    "coverPct": 10.6,
+    "parallaxPx": 0.8,
+    "viewDiffPct": 5.8,
+    "wallSec": 17,
+    "errs": []
+  },
+  {
+    "id": "T13",
+    "label": "cross-format: lizard spz vs splat",
+    "pass": true,
+    "note": "mean |luma diff| 0.7/255 over 117142 lit px"
+  },
+  {
+    "id": "T14",
+    "label": "cross-format: spz v3 vs ground-truth ply",
+    "pass": true,
+    "note": "mean |luma diff| 9.8/255 over 95390 lit px"
+  },
+  {
+    "id": "T15",
+    "label": "flame_steak DYNAMIC (Neural 3D Video via splaTV)",
+    "pass": true,
+    "note": "splats=333824 dyn=true cover=41.1% timeDiff=445/12288 wall=67s"
+  },
+  {
+    "id": "T16",
+    "label": "hornedlizard inside moebius + 2.5D isolation",
+    "pass": true,
+    "note": "gaps 99907/3769 (ref 99907/3769)"
+  },
+  {
+    "id": "B1",
+    "label": "BONUS spz v4 decode == v2 reference",
+    "pass": true,
+    "note": "n 152746/152746 max|dpos| 0.0e+0 cov rel 2.6e-8"
+  },
+  {
+    "id": "B2",
+    "label": "BONUS ksplat refusal",
+    "pass": true,
+    "note": ".ksplat is not supported yet — convert to .ply or .splat (GaussianSplats3D can export both)"
+  }
+]

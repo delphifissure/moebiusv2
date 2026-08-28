@@ -144,3 +144,34 @@ Known v1 limits: subject framing uses the file's union bbox (fit to portal
 height, pinned at the portal plane) — no per-layer placement controls yet;
 DC color only; one global transform per file (sequences stay in
 `splat.html` until slice b).
+
+## A226 — real-scene validation (16 tests) + spz v4 + .splatv + orientation
+
+`fourd/realscene_tests.js`: 16 tests on real, non-IP captures pulled from
+research/reference sources (nianticlabs/spz samples, BabylonJS/Assets,
+playcanvas/engine, splat-transform fixtures, antimatter15/splaTV's
+flame_steak = Neural 3D Video). All 16 PASS + 2 bonus conformance checks
+(`shots/realscenes/contact_sheet.png`). What the run hardened:
+
+- **spz v4 (zstd)** now parses (vendored pure-JS `fzstd`, 8KB), and the
+  decoder is verified against the REFERENCE implementation: biker.spz vs
+  the nianticlabs CLI's own conversion — positions exact, covariance
+  2.6e-8 relative.
+- **spz v3/v4 rotation encoding fixed**: the smallest-three fields are
+  sign-magnitude (negbit<<9|mag, mag=511·|q|/√½), not two's-complement.
+  Caught ONLY by the reference cross-check — the wrong decode still
+  rendered "plausibly" on soft scenes.
+- **`.splatv`** (splaTV dynamic container) parses; flame_steak plays in
+  the portal with time-varying pixels.
+- **Orientation**: containers carry their producer's convention (measured:
+  the reference CLI's ply matches our raw spz decode element-exactly — no
+  format-level flip exists). Default import applies the 3DGS-standard
+  y-down→y-up flip (`flipFrameRDF`); `?flip=0` / `opts.flip:false` for
+  y-up-authored files (e.g. PlayCanvas spz).
+- Test metric lesson: a compact subject pinned AT the portal plane has
+  near-zero bulk centroid shift BY DESIGN — parallax is asserted as
+  view-dependence, with sign-consistency only when the bulk shift is
+  meaningful.
+
+Test assets stay in gitignored `fourd/testdata/` (local testing only, never
+redistributed; IP-flagged assets in the same sources were excluded).
