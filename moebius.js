@@ -1,4 +1,4 @@
-console.log('%c[BUILD] FG-SUB rimdepth v3.13.61-a226 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing + a150 THE SKIRT CONTINUES AT THE PLATE GLOBAL FAR ENVELOPE (quick edge black 6.80%% -> 0.00%% at every pose 0-45deg, interior 0.00%%): the a149 skirt shared the plate depth texture, so beyond the frame it continued the EDGE TEXEL and parallaxed WITH whatever that texel held. Now it carries its own constant depth = min(plateF) — global, NOT per edge, because a per-edge minimum measured 9.27%% of the rest frame changed (it stood in front of interior sky) — overlaps the plate inward by the same k it is pushed back through, and opts out of the hole-only island gate because a skirt IS the backstop. Two instrument corrections came out of it: UniformsUtils.clone CLONES TEXTURES (the cloned material painted 0 pixels at every pose until every texture uniform was re-pointed at the plate live object), and edgeblack.js derived its measurement polygon from a frame WITH the skirt in it, so the two arms were scored over different areas — the a149 true figure is 0.13%% at 45deg, not the 1.91%% reported + a151 EVERY BAKE DROPS THE PREVIOUS BAKE SKIRT (user-reported visual degradation vs a81, and they were right): bgResetBakedState runs only on a new image, so baking quick and switching to v2 left the a149 skirt standing, and a150 had just made it a full-frame opaque backdrop — it painted the quick plate sky, with the mountain inpainted out of it, over v2. Mountain-box luma std: a81 60.3, a150 COLD 60.3 (identical — the arc did not degrade v2), a150 after a quick bake 11.6. Fixed, back to 60.3 + a152 TEXTURE INTEGRITY, THE METRIC THE ARC WAS MISSING (black%% and ABSENT%% were 0.00 in every broken row; a flat blob is painted and nowhere near the black threshold, so hole-counting cannot see an object losing its texture) + a153 THE LETTERBOX IS A BOX (user spec): opaque black glass in the viewport surface with the content rect cut out, plus four walls running back to the volume far extent ALONG THE REFERENCE RAYS — a prism was built first and measured wrong, its back rect projects smaller so it covered a border strip of the content at rest (black%% 0.0 -> 9.7); the flare uses the a104 law, so at rest the walls are edge-on and invisible + a154 tried and REVERTED: sliding the whole volume back by innerVolumeDepth to stop near content protruding through the glass distorts the scene + a155 THE COMPLETION EXTENT IS THE OCCLUDER FOOTPRINT: the flood bound was a hardcoded 192 whose own comment admitted it was a guess and which is resolution-blind; now min(w,h)/2, the provable maximum inradius of any connected region in the frame + a160 THE FOLD LIMIT IS THE TEAR CRITERION AGAIN, WITH THE NOISE FLOOR a117 WAS MISSING. a117 replaced the fold test with a cliff test on the evidence of comb energy and black%% — both of which REWARD the artifact, because a triangle stretched across a reveal is smooth (low comb) and it covers (low black). The arm that produced the taffy scored best on both and shipped. Verified by eye at the user own controls and pose: a99 clean with honest holes, a117 drags the light column and the figure into vertical streaks, every build after inherits it. a117 observation was right though — the fold limit at 851px is 0.47 of one 8-bit level, so on 8-bit depth the smallest expressible step already folds and the geometric test alone fires on quantisation noise (39.9%% of the mesh). So: tear when the cell FOLDS (a102 envelope, in texels, at its own depth) AND its depth span exceeds ONE SOURCE QUANTUM (the grid a89 measures from the data). Both derived, both tracking their inputs. Torn footprint 39.9%% -> ~3%%; the vertical smear is gone and the content is crisp again + a160b THE TORN FOOTPRINT IS THE PLUG REGION (the island mask was built from the occluder depth footprint hundreds of lines before the tear, so the plug region and the mesh holes were two different sets; unioned, they are one set by construction) + a160c CAP CARDS RETIRED (411529 one-texel splats read as the moire comb a117 measured and misattributed to the tear; with the plug owning the torn footprint there are no orphans to splat) + a161 THE DEPTH TEST IS THE GATE, THE MASK CANNOT BE. a58 gated the plate to a disocclusion band computed in SOURCE space, and that is the wrong space: the plate texel visible through a hole is NOT the texel the hole was torn from, because the two surfaces sit at different depths and reproject differently. Measured on the troll at the user controls — of the pixels left uncovered, the fraction that HAVE plate geometry behind them and are discarded by the gate is 89.3%% at 35deg and 99.8%% at 52deg. It was never the plug reach. Gate off: uncovered rest 1.60 -> 0.00, 35deg 2.68 -> 0.29, 52deg 2.73 -> 0.00. This is NOT background cloning — the plate lies BEHIND the foreground, so the depth test discards it for free wherever the foreground survives, and it can only reach the screen where the foreground is gone, which is the definition of a disocclusion. Cost, stated: 0.74%% of already-painted pixels change at rest, scattered along silhouettes, because the plate is not always behind (a135 measured 7401 same-texel inversions and cross-texel is worse). Polygon offset settles ties in the foreground favour; the rest is the cross-texel ordering invariant, still open + a162 THE CROSS-TEXEL ORDERING INVARIANT, IN CLOSED FORM. Open since a137. Under the a104 ray law screen(x,d) = f*(x/D - ex*g(d)), so a plate texel A and a source texel B land on the same pixel for some eye in the cone exactly when |xB-xA| <= |shift(dA)-shift(dB)|, and the plate occludes when shift(dA) > shift(dB). The invariant is therefore shift(plate at A) <= min over B [shift(src at B) + dist(A,B)] — a MIN-PLUS CHAMFER over the source shift field, one O(N) two-pass sweep, covering the cone CONTINUOUSLY instead of at 4 sampled poses, and a135 is its zero-distance case. Chamfer weights divided by 1.0396 so the (1,sqrt2) distance is a strict LOWER bound on Euclidean (Borgefors 1986 max error 3.96%%) — overestimating distance would loosen the bound and miss violations. Troll: 367060 texels (42.16%%) could occlude the foreground from some eye inside the 45deg cone and were pushed back, worst 0.4550 depth. Last holes closed (35deg 0.31%% -> 0.00%%, 52deg 0.29%% -> 0.00%%), rest frame unchanged (0.01%% of pixels differ, max 15 levels). Replaces the 63.5s GPU pose sweep with a few ms of CPU + a164 THE INVARIANT PROVEN IN A DEPTH BUFFER: zero violations at every pose INSIDE the 45deg cone (rest, 35, 43, 45), first non-zero at 47deg two degrees past the rim where the invariant promises nothing, growing smoothly to 0.222%% at 55deg. Without a162: 0.047%% at 35deg rising to 0.254%% at the rim, up to 43 levels of depth error. The first version of that test was DEAD and its known-positive control caught it — renderNormalizedDepthPass hides the background layer by design, so it was comparing the foreground against itself + a165 THE SMEAR GATE IS IN regress.js. For each SURVIVING triangle, the ratio of its reprojected shift span at the cone rim to its own cell extent; above 1 the cell cannot be drawn without folding. Scale-free, bake-time, no render and no reference. Validated by restoring the a117 criterion as a control: worst ratio 4.8 -> 49.6 on troll and 14.1 -> 213.9 on warrior, and the suite fails on all four assets. The percentage column is weak (a117 keeps more triangles so the denominator moves with the numerator); the RATIOS carry the signal + a166 the 31%% quick-vs-realtime detail loss CLOSED as the wrong reference (the ghost mesh does not exist; plug tiles lose 2.86%% and plug-FREE tiles lose 35.85%%, the opposite of the hypothesis — the foreground is alpha-blended and its alpha IS the FG-sub mask, so realtime composites those texels against the clear and the bake composites them against the plate; comparing the two measures the PRESENCE of the plug) + a167 THE VOLUME IS EMBEDDED BY DEFAULT (user: keep everything inside the box, nothing poking through): innerVolumeDepth put two thirds of the volume in FRONT of the screen where the glass could not occlude it; a pure z translation by -innerVolumeDepth puts its nearest extent ON the viewport surface, and rest fidelity against the SOURCE is unchanged (1.88 mean, 0.56%% off>8, identical to a162) + a168 TWO FRAMES, NOT ONE. INNER: four black walls from the aperture back to the volume far extent, flaring along the reference rays so they are edge-on and invisible at rest. OUTER: an opaque matte in the viewport surface with the content rect cut out, taking the BROWSER BACKGROUND COLOUR read from the live computed style, and REMOVED in fullscreen where the user rule is that content may spill past the letterbox + a169 THE FALSIFIED WORK IS OUT OF THE FILE, NOT BEHIND A FLAG. Deleted: the a150 skirt far envelope (edge black 6.87%% at 45deg against edge-depth 0.13%%, and it was background cloning by another name), the cloned skirt material and its inward inset, the a111 CAP CARDS in full (a160b gave the torn footprint to the plug, so there are no orphans to splat), and the a58 island GATE on the render (a161 falsified it — it is computed in source space; the mask is still uploaded because the SD export reads it as the inpaint region). Eight window flags went with them, and every harness arm that referenced one was updated so no arm can silently fail to diverge (the a134 lesson) + a149 THE SKIRT PORTED TO QUICK (948 triangles, margin from the a113 shift envelope not a world constant; edge black 6.80%% -> 1.91%% at 45deg, 1.78%% -> 0.04%% at 15deg, interior unchanged, no measurable bake cost) + a189 THE BAND CUT IS EVALUATED PER RENDERED PIXEL AND CALIBRATED PER CANVAS PIXEL. dFdx/fwidth in the a72/a81/a83 stretch cut measure per fragment quad, while u_bandCutUvRate is bgBandCutStretchFrac/rendererWidth and u_bandCutMaxGrad is depth per canvas pixel — they agree only while the bound target IS the canvas. The a130 simulated viewer binds a pass-1 buffer SV_SUPERSAMPLE=1.75x wider, so every measurement arrived 1.75x too small against an unmoved threshold: the UNDITHERED uvRate<threshold branch deleted solid regions (a black wedge at pitch 27) and the a83 DITHERED band ate into the figure (the astronaut rendered see-through and striped AT REST, mountain visible through his body). User-reported as content disappearing in simulated mode only, and they were right that it was the foreground going rather than the background arriving. Localised by splitting the mode in two — the pass-1 buffer read back at its OWN 665x375 was already ghosted, so pass 2 and the missing mip chain are both exonerated — then convicted by disabling the cut. u_pxScale converts a measurement back to canvas pixels: 1.0 on every normal frame so the shipped path is unchanged BY CONSTRUCTION, set to the supersample factor for pass 1 and restored in the finally. Shader reads pxS = (u_pxScale>0)?u_pxScale:1.0 because an absent float uniform reads 0 in GLSL and 0 would make every rate zero and uvRate<threshold unconditionally true — a missing uniform must degrade to shipped behaviour, not to erasing the layer. RAW dark%% at pitch 10/20/27: 0.69/1.84/2.79 -> 0.00/0.00/0.00, and at negative pitches it now sits exactly on the plain path (14.65/20.44/27.67), which is the a153 tank ceiling and correct. Two instrument lessons: the a187 table read 0.00 at rest because every arm was scored against ITS OWN rest frame and a constant defect is invisible to a self-referential metric (the contact sheet caught it); and the first correction had the SIGN REVERSED, scored the closest mean-gradient of any arm (5.11 vs PLAIN 5.08) and wiped the figure to a silhouette — kept in harness/svcut.js as a permanent control + a192 THE SAME UNIT ERROR ON THE SHIPPED PATH, TRIGGERED BY RESIZING A WINDOW. u_bandCutUvRate is computed while ARMING THE BAKE and onWindowResize does not re-arm it, so every resize after a bake left the stretch cut calibrated for the old canvas. Measured on the star, quick, look-up 27deg: baked at 380px then resized to 740px without re-baking, 1/thr stayed at 380 while the frame was 740 wide and the UNDITHERED uvRate<threshold branch deleted content — black 0.000%% -> 2.988%%, edge 9.217 -> 7.206. A page baked FRESH at 740 reads 0.002%%, so it is the staleness and not the resolution. Fixed by recording the calibration width (bgBandCutArmedW) and generalising the a189 u_pxScale from a simulated-viewer special case to u_pxScale = (width being rasterised into) / (width armed against) — 1 immediately after a bake, the supersample factor inside SV pass 1, the resize ratio after a window drag, and the product when both apply. Refreshed per frame in renderPortalFrame because a resize emits no bake. Two instrument notes: the first run of the test crashed inside its reference arm and printed nothing although two arms had already succeeded (rows now print as measured), and the reference is now a FRESH page baked at the large size rather than an in-page re-bake, which shares no state with the small-canvas bake and cannot crash swiftshader', 'color:#0f0;font-weight:bold');
+console.log('%c[BUILD] FG-SUB rimdepth v3.13.62-a227 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN) + a129 v1 greyed out in the UI (kept in code) + a130 SIMULATED VIEWER (renders the physical viewer that cancels the pre-distortion; locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame assert + A2 perturbation check) + a129 v1 GREYED OUT IN THE UI (kept in the codebase) + a130 SIMULATED VIEWER (the portal render is a pre-distortion; this renders the physical viewer that cancels it, so an artifact can be triaged as real or as un-cancelled pre-distortion — locked lens, supersampled pass 1, linear-light geometric falloff, k on the HUD, head-pose recorder, A1 frame-convention assert + A2 known-perturbation check) + a133 THE PRECISION BUDGET IS PRINTED AGAINST WHAT THE SOURCE CAN EXPRESS (all four suite depth maps are 8-bit; the fold-correct plate step is 2.23x finer than one quantum, which is WHY it flattens) + a133b fgTearStep printed in px of reveal (34px at the rim, 34x the reveal-benefit gate; not changed) + a134 A/B arms must diverge downstream of the flag before their numbers are read + a135 THE ORDERING CLAMP (d_hidden >= d_occluder + one source quantum, unconditional O(N); 0.85%% of the plate was strictly in front of what it backs, worst 86px of misplacement at the rim) + a136 the clamp ported to v2 (the shipped default had NO ordering protection; it turns out v2 satisfies the invariant by construction — 0 of 2.5M claimed texels) + a137 THE CLAMP DOES NOT REPLACE THE BACKSTOP SWEEP (measured in v1: clamp finds 0 same-texel violations and the sweep still flattens 12604; it is a same-texel invariant, the sweep searches reprojected poses. a135 claim corrected) + a138 SYNTHETIC FLOAT-DEPTH ASSET: at 16-bit the fold-correct step STILL LOSES (black +0.45, comb +0.008..0.016) — the quantum was a contributor, not the cause; a128 stands on its own merits + a139 v2 SKIRT IS CONE-BLIND (0.10/0.05 world hardcoded) but NOT short: 1.3x-190x larger than the a113 law asks at 45deg + a140 ON QUICK, 97-100%% OF ALL BLACK IS IN THE OUTER 8%% EDGE BAND (interior 0.00-0.09%%) — quick has neither skirt nor extension + a141 SV: plain click-drag scrubs the eye, +/-90 both axes, double-click resets + a142 SV HUD collapses to one line + a143 THE ANGLE FADE BLACKS OUT AT 26.6deg NOT 45 (the face-frame band was 10deg of a 30deg half-FOV; now 3-sigma of the tracker own jitter, onset 18deg -> 24deg) + a144 THE FADE READS THE REAL CAMERA AND THE MEASURED LOSS BOUNDARY (MediaStream exposes NO fov field — checked and logged; vfov now derived from the real stream aspect; the 10deg band is anchored to where the tracker is OBSERVED to lose the face, seeded at the nominal edge and only pulled in by evidence) + a145 THE BOUNDARY IS PROBED, NOT WAITED FOR (the detector is a pure function of an image, so synthetic frames with the face pasted at chosen offsets find the loss boundary in ~0.7s; instrument validated against a stub with a closed-form boundary, recovered to 0.003, and it aborts on its own control when the stimulus is undetectable) + a146 canonical-face bootstrap (opt-in URL) + a146b FOV ESTIMATED FROM THE OBSERVED FACE (a composited face carries NO lens information; a real one constrains f_px*IPD/d with one equation and two unknowns, so this is an estimate on an assumed viewing distance, with its range printed) + a147 canonical face defaults to MediaPipe portrait.jpg (NOT vendored: no egress here to fetch or verify it) + CAMERA_FOV_LUT_STAGE0.md — the head tracker uses only X/Y, where focal length CANCELS, so a device FOV table has no consumer on the tracking path today + a148 CAMERA INTRINSICS LUT BUILT (head-Z is planned, so the table has a consumer): schema + roster + resolver + 27 passing assertions incl. a synthetic round trip proving dZ/Z = dfx/fx and X/Y bit-identical under a wrong FOV. Values are null with reasons — no network egress to source or cite them, and constraint 1 forbids guessing + a150 THE SKIRT CONTINUES AT THE PLATE GLOBAL FAR ENVELOPE (quick edge black 6.80%% -> 0.00%% at every pose 0-45deg, interior 0.00%%): the a149 skirt shared the plate depth texture, so beyond the frame it continued the EDGE TEXEL and parallaxed WITH whatever that texel held. Now it carries its own constant depth = min(plateF) — global, NOT per edge, because a per-edge minimum measured 9.27%% of the rest frame changed (it stood in front of interior sky) — overlaps the plate inward by the same k it is pushed back through, and opts out of the hole-only island gate because a skirt IS the backstop. Two instrument corrections came out of it: UniformsUtils.clone CLONES TEXTURES (the cloned material painted 0 pixels at every pose until every texture uniform was re-pointed at the plate live object), and edgeblack.js derived its measurement polygon from a frame WITH the skirt in it, so the two arms were scored over different areas — the a149 true figure is 0.13%% at 45deg, not the 1.91%% reported + a151 EVERY BAKE DROPS THE PREVIOUS BAKE SKIRT (user-reported visual degradation vs a81, and they were right): bgResetBakedState runs only on a new image, so baking quick and switching to v2 left the a149 skirt standing, and a150 had just made it a full-frame opaque backdrop — it painted the quick plate sky, with the mountain inpainted out of it, over v2. Mountain-box luma std: a81 60.3, a150 COLD 60.3 (identical — the arc did not degrade v2), a150 after a quick bake 11.6. Fixed, back to 60.3 + a152 TEXTURE INTEGRITY, THE METRIC THE ARC WAS MISSING (black%% and ABSENT%% were 0.00 in every broken row; a flat blob is painted and nowhere near the black threshold, so hole-counting cannot see an object losing its texture) + a153 THE LETTERBOX IS A BOX (user spec): opaque black glass in the viewport surface with the content rect cut out, plus four walls running back to the volume far extent ALONG THE REFERENCE RAYS — a prism was built first and measured wrong, its back rect projects smaller so it covered a border strip of the content at rest (black%% 0.0 -> 9.7); the flare uses the a104 law, so at rest the walls are edge-on and invisible + a154 tried and REVERTED: sliding the whole volume back by innerVolumeDepth to stop near content protruding through the glass distorts the scene + a155 THE COMPLETION EXTENT IS THE OCCLUDER FOOTPRINT: the flood bound was a hardcoded 192 whose own comment admitted it was a guess and which is resolution-blind; now min(w,h)/2, the provable maximum inradius of any connected region in the frame + a160 THE FOLD LIMIT IS THE TEAR CRITERION AGAIN, WITH THE NOISE FLOOR a117 WAS MISSING. a117 replaced the fold test with a cliff test on the evidence of comb energy and black%% — both of which REWARD the artifact, because a triangle stretched across a reveal is smooth (low comb) and it covers (low black). The arm that produced the taffy scored best on both and shipped. Verified by eye at the user own controls and pose: a99 clean with honest holes, a117 drags the light column and the figure into vertical streaks, every build after inherits it. a117 observation was right though — the fold limit at 851px is 0.47 of one 8-bit level, so on 8-bit depth the smallest expressible step already folds and the geometric test alone fires on quantisation noise (39.9%% of the mesh). So: tear when the cell FOLDS (a102 envelope, in texels, at its own depth) AND its depth span exceeds ONE SOURCE QUANTUM (the grid a89 measures from the data). Both derived, both tracking their inputs. Torn footprint 39.9%% -> ~3%%; the vertical smear is gone and the content is crisp again + a160b THE TORN FOOTPRINT IS THE PLUG REGION (the island mask was built from the occluder depth footprint hundreds of lines before the tear, so the plug region and the mesh holes were two different sets; unioned, they are one set by construction) + a160c CAP CARDS RETIRED (411529 one-texel splats read as the moire comb a117 measured and misattributed to the tear; with the plug owning the torn footprint there are no orphans to splat) + a161 THE DEPTH TEST IS THE GATE, THE MASK CANNOT BE. a58 gated the plate to a disocclusion band computed in SOURCE space, and that is the wrong space: the plate texel visible through a hole is NOT the texel the hole was torn from, because the two surfaces sit at different depths and reproject differently. Measured on the troll at the user controls — of the pixels left uncovered, the fraction that HAVE plate geometry behind them and are discarded by the gate is 89.3%% at 35deg and 99.8%% at 52deg. It was never the plug reach. Gate off: uncovered rest 1.60 -> 0.00, 35deg 2.68 -> 0.29, 52deg 2.73 -> 0.00. This is NOT background cloning — the plate lies BEHIND the foreground, so the depth test discards it for free wherever the foreground survives, and it can only reach the screen where the foreground is gone, which is the definition of a disocclusion. Cost, stated: 0.74%% of already-painted pixels change at rest, scattered along silhouettes, because the plate is not always behind (a135 measured 7401 same-texel inversions and cross-texel is worse). Polygon offset settles ties in the foreground favour; the rest is the cross-texel ordering invariant, still open + a162 THE CROSS-TEXEL ORDERING INVARIANT, IN CLOSED FORM. Open since a137. Under the a104 ray law screen(x,d) = f*(x/D - ex*g(d)), so a plate texel A and a source texel B land on the same pixel for some eye in the cone exactly when |xB-xA| <= |shift(dA)-shift(dB)|, and the plate occludes when shift(dA) > shift(dB). The invariant is therefore shift(plate at A) <= min over B [shift(src at B) + dist(A,B)] — a MIN-PLUS CHAMFER over the source shift field, one O(N) two-pass sweep, covering the cone CONTINUOUSLY instead of at 4 sampled poses, and a135 is its zero-distance case. Chamfer weights divided by 1.0396 so the (1,sqrt2) distance is a strict LOWER bound on Euclidean (Borgefors 1986 max error 3.96%%) — overestimating distance would loosen the bound and miss violations. Troll: 367060 texels (42.16%%) could occlude the foreground from some eye inside the 45deg cone and were pushed back, worst 0.4550 depth. Last holes closed (35deg 0.31%% -> 0.00%%, 52deg 0.29%% -> 0.00%%), rest frame unchanged (0.01%% of pixels differ, max 15 levels). Replaces the 63.5s GPU pose sweep with a few ms of CPU + a164 THE INVARIANT PROVEN IN A DEPTH BUFFER: zero violations at every pose INSIDE the 45deg cone (rest, 35, 43, 45), first non-zero at 47deg two degrees past the rim where the invariant promises nothing, growing smoothly to 0.222%% at 55deg. Without a162: 0.047%% at 35deg rising to 0.254%% at the rim, up to 43 levels of depth error. The first version of that test was DEAD and its known-positive control caught it — renderNormalizedDepthPass hides the background layer by design, so it was comparing the foreground against itself + a165 THE SMEAR GATE IS IN regress.js. For each SURVIVING triangle, the ratio of its reprojected shift span at the cone rim to its own cell extent; above 1 the cell cannot be drawn without folding. Scale-free, bake-time, no render and no reference. Validated by restoring the a117 criterion as a control: worst ratio 4.8 -> 49.6 on troll and 14.1 -> 213.9 on warrior, and the suite fails on all four assets. The percentage column is weak (a117 keeps more triangles so the denominator moves with the numerator); the RATIOS carry the signal + a166 the 31%% quick-vs-realtime detail loss CLOSED as the wrong reference (the ghost mesh does not exist; plug tiles lose 2.86%% and plug-FREE tiles lose 35.85%%, the opposite of the hypothesis — the foreground is alpha-blended and its alpha IS the FG-sub mask, so realtime composites those texels against the clear and the bake composites them against the plate; comparing the two measures the PRESENCE of the plug) + a167 THE VOLUME IS EMBEDDED BY DEFAULT (user: keep everything inside the box, nothing poking through): innerVolumeDepth put two thirds of the volume in FRONT of the screen where the glass could not occlude it; a pure z translation by -innerVolumeDepth puts its nearest extent ON the viewport surface, and rest fidelity against the SOURCE is unchanged (1.88 mean, 0.56%% off>8, identical to a162) + a168 TWO FRAMES, NOT ONE. INNER: four black walls from the aperture back to the volume far extent, flaring along the reference rays so they are edge-on and invisible at rest. OUTER: an opaque matte in the viewport surface with the content rect cut out, taking the BROWSER BACKGROUND COLOUR read from the live computed style, and REMOVED in fullscreen where the user rule is that content may spill past the letterbox + a169 THE FALSIFIED WORK IS OUT OF THE FILE, NOT BEHIND A FLAG. Deleted: the a150 skirt far envelope (edge black 6.87%% at 45deg against edge-depth 0.13%%, and it was background cloning by another name), the cloned skirt material and its inward inset, the a111 CAP CARDS in full (a160b gave the torn footprint to the plug, so there are no orphans to splat), and the a58 island GATE on the render (a161 falsified it — it is computed in source space; the mask is still uploaded because the SD export reads it as the inpaint region). Eight window flags went with them, and every harness arm that referenced one was updated so no arm can silently fail to diverge (the a134 lesson) + a149 THE SKIRT PORTED TO QUICK (948 triangles, margin from the a113 shift envelope not a world constant; edge black 6.80%% -> 1.91%% at 45deg, 1.78%% -> 0.04%% at 15deg, interior unchanged, no measurable bake cost) + a189 THE BAND CUT IS EVALUATED PER RENDERED PIXEL AND CALIBRATED PER CANVAS PIXEL. dFdx/fwidth in the a72/a81/a83 stretch cut measure per fragment quad, while u_bandCutUvRate is bgBandCutStretchFrac/rendererWidth and u_bandCutMaxGrad is depth per canvas pixel — they agree only while the bound target IS the canvas. The a130 simulated viewer binds a pass-1 buffer SV_SUPERSAMPLE=1.75x wider, so every measurement arrived 1.75x too small against an unmoved threshold: the UNDITHERED uvRate<threshold branch deleted solid regions (a black wedge at pitch 27) and the a83 DITHERED band ate into the figure (the astronaut rendered see-through and striped AT REST, mountain visible through his body). User-reported as content disappearing in simulated mode only, and they were right that it was the foreground going rather than the background arriving. Localised by splitting the mode in two — the pass-1 buffer read back at its OWN 665x375 was already ghosted, so pass 2 and the missing mip chain are both exonerated — then convicted by disabling the cut. u_pxScale converts a measurement back to canvas pixels: 1.0 on every normal frame so the shipped path is unchanged BY CONSTRUCTION, set to the supersample factor for pass 1 and restored in the finally. Shader reads pxS = (u_pxScale>0)?u_pxScale:1.0 because an absent float uniform reads 0 in GLSL and 0 would make every rate zero and uvRate<threshold unconditionally true — a missing uniform must degrade to shipped behaviour, not to erasing the layer. RAW dark%% at pitch 10/20/27: 0.69/1.84/2.79 -> 0.00/0.00/0.00, and at negative pitches it now sits exactly on the plain path (14.65/20.44/27.67), which is the a153 tank ceiling and correct. Two instrument lessons: the a187 table read 0.00 at rest because every arm was scored against ITS OWN rest frame and a constant defect is invisible to a self-referential metric (the contact sheet caught it); and the first correction had the SIGN REVERSED, scored the closest mean-gradient of any arm (5.11 vs PLAIN 5.08) and wiped the figure to a silhouette — kept in harness/svcut.js as a permanent control + a192 THE SAME UNIT ERROR ON THE SHIPPED PATH, TRIGGERED BY RESIZING A WINDOW. u_bandCutUvRate is computed while ARMING THE BAKE and onWindowResize does not re-arm it, so every resize after a bake left the stretch cut calibrated for the old canvas. Measured on the star, quick, look-up 27deg: baked at 380px then resized to 740px without re-baking, 1/thr stayed at 380 while the frame was 740 wide and the UNDITHERED uvRate<threshold branch deleted content — black 0.000%% -> 2.988%%, edge 9.217 -> 7.206. A page baked FRESH at 740 reads 0.002%%, so it is the staleness and not the resolution. Fixed by recording the calibration width (bgBandCutArmedW) and generalising the a189 u_pxScale from a simulated-viewer special case to u_pxScale = (width being rasterised into) / (width armed against) — 1 immediately after a bake, the supersample factor inside SV pass 1, the resize ratio after a window drag, and the product when both apply. Refreshed per frame in renderPortalFrame because a resize emits no bake. Two instrument notes: the first run of the test crashed inside its reference arm and printed nothing although two arms had already succeeded (rows now print as measured), and the reference is now a FRESH page baked at the large size rather than an in-page re-bake, which shares no state with the small-canvas bake and cannot crash swiftshader', 'color:#0f0;font-weight:bold');
 // -----------------------------------------------------------------------------
 // --- GLOBAL CONFIGURATION & CONSTANTS ----------------------------------------
 // -----------------------------------------------------------------------------
@@ -3378,6 +3378,14 @@ function renderLayerList() {
                     // A224: color takes MULTIPLE files — selecting several
                     // .splat/.ply frames imports them as one 4D sequence layer
                     inputOrThumbnailHtml = `<input type="file" id="layer-${layerId}-${fileType}" class="layer-file-input" data-file-type="${fileType}" data-layer-id="${layerId}" accept="${accepts[fileType]}"${fileType === 'color' ? ' multiple' : ''}>`;
+                    // A227: per-layer orientation for splat files (usual-workflow
+                    // UI for what was window-flag-only): default flips 3DGS
+                    // y-down content up; y-up-authored files (e.g. PlayCanvas
+                    // spz) check this box.
+                    const _stagedName = (Array.isArray(layer.sources.color) ? layer.sources.color[0]?.name : (layer.sources.color?.name || (typeof layer.sources.color === 'string' ? layer.sources.color : ''))) || '';
+                    if (fileType === 'color' && /\.(splat|ply|spz|ksplat|splatv)(\?.*)?$/i.test(_stagedName)) {
+                        inputOrThumbnailHtml += `<label style="font-size:11px;display:block;margin-top:2px"><input type="checkbox" class="layer-splat-yup" data-layer-id="${layerId}" ${layer.splatYUp ? 'checked' : ''}> splat is y-up (skip flip)</label>`;
+                    }
                 }
 
                 inputsHtml += `<label for="layer-${layerId}-${fileType}">${labels[fileType]}</label>`;
@@ -3461,6 +3469,10 @@ function attachLayerModalListeners() {
 
     // MODIFIED: Listener for file input (class added)
     document.querySelectorAll('.layer-file-input').forEach(inp => inp.addEventListener('change', handleStoreFile));
+    document.querySelectorAll('.layer-splat-yup').forEach(inp => inp.addEventListener('change', (e) => {
+        const l = stagedMediaLayers.find(x => x.id === e.target.dataset.layerId);
+        if (l) l.splatYUp = e.target.checked;
+    }));
 
     // NEW: Seek video thumbnails to show a preview frame (not black)
     document.querySelectorAll('.layer-thumbnail').forEach(el => {
@@ -3622,6 +3634,7 @@ async function applyLayersFromModal() {
         type: layer.type,
         fileInfo: {...layer.fileInfo},
         colorValue: layer.colorValue,
+        splatYUp: !!layer.splatYUp,
         sources: {
             color: layer.sources.color || null,
             depth: layer.sources.depth || null,
@@ -3855,18 +3868,18 @@ async function applyLayersFromModal() {
                 const sorted = [...src].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
                 const parts = [];
                 for (const f of sorted) parts.push({ buffer: await f.arrayBuffer(), name: f.name });
-                await addSplatLayerFromBuffer(parts, sorted[0].name + ' (+' + (parts.length - 1) + ')', def.id);
+                await addSplatLayerFromBuffer(parts, sorted[0].name + ' (+' + (parts.length - 1) + ')', def.id, def.splatYUp ? { flip: false } : undefined);
             } else if (typeof src === 'string' && /manifest\.json(\?.*)?$/i.test(src)) {
                 // A224: manifest URL (the fourd sequence format)
                 const base = src.slice(0, src.lastIndexOf('/') + 1);
                 const man = await (await fetch(src)).json();
                 const parts = [];
                 for (const f of man.frames) parts.push({ buffer: await (await fetch(base + f)).arrayBuffer(), name: f });
-                await addSplatLayerFromBuffer(parts, src, def.id, { fps: man.fps, subject: man.subject });
+                await addSplatLayerFromBuffer(parts, src, def.id, { fps: man.fps, subject: man.subject, flip: def.splatYUp ? false : undefined });
             } else {
                 const buf = (src instanceof File) ? await src.arrayBuffer()
                           : await (await fetch(src)).arrayBuffer();
-                await addSplatLayerFromBuffer(buf, _splatName(src), def.id);
+                await addSplatLayerFromBuffer(buf, _splatName(src), def.id, def.splatYUp ? { flip: false } : undefined);
             }
         } catch (e) {
             console.error('A223: splat layer ' + def.id + ' failed: ' + e.message);
@@ -7354,7 +7367,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.61-a226';
+const MOEBIUS_BUILD = 'v3.13.62-a227';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -7766,7 +7779,7 @@ function exportDebugContactSheet() {
         const reachStamp = document.getElementById('fgReachSlider')?.value || '120';
         const stamp = [
             MOEBIUS_DEBUG_VERSION + ' | ' + new Date().toISOString() + ' | render ' + srcW + 'x' + srcH,
-            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | ' + _dbgViewAngleStamp() + ' | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + (window._activeDebugView && window._activeDebugView !== dbgSel ? '(rendered:' + window._activeDebugView + ')' : '') + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk + ' | plug=' + ((typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? (bgLayerMesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | path=' + (window._framePath || '?') + ' | accum=' + (isAccumulatingGaps ? 'ON' : 'off') + ' | inpaint=' + (useInpainting ? 'on' : 'OFF') +
+            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | ' + _dbgViewAngleStamp() + ' | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + (window._activeDebugView && window._activeDebugView !== dbgSel ? '(rendered:' + window._activeDebugView + ')' : '') + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk + ' | plug=' + ((typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? (bgLayerMesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | splat=' + (splatLayers.length ? splatLayers.length + 'L/' + splatLayers.reduce((a, s) => a + (s.cloud.frame() ? s.cloud.frame().n : 0), 0) + (splatLayers.some(s => s.cloud.dynamic) ? 'dyn' : '') : 'none') + ' | path=' + (window._framePath || '?') + ' | accum=' + (isAccumulatingGaps ? 'ON' : 'off') + ' | inpaint=' + (useInpainting ? 'on' : 'OFF') +
             // A206 THE DOLLY STATE IS IN THE STAMP. The user's screenshots showed
             // cam x identical at two very different dolly distances, which is only
             // possible if dollyLatGain is 1 - i.e. the subject pin is not engaged -
@@ -24440,3 +24453,757 @@ async function onOpenCvReady() {
 // ===================================================================
 // END: NEW onOpenCvReady
 // ===================================================================å√
+
+// ============================================================================
+// A227 EMBEDDED SPLAT SUPPORT — single-file, the usual workflow.
+// moebius.html and scratch_moebius.html load ONLY three.js + moebius.js
+// again; the splat parsers/renderer and the zstd decoder live here.
+// CANONICAL COPY. fourd/splat_renderer.js remains only as a mirror for the
+// standalone PoC pages and node-side tools — fix bugs HERE first, then sync
+// the mirror (header there says the same).
+// ----------------------------------------------------------------------------
+// fzstd 0.1.1 (MIT, https://github.com/101arrowz/fzstd) — pure-JS zstd,
+// needed for spz v4 per-stream decompression. Vendored verbatim:
+!function(f){typeof module!='undefined'&&typeof exports=='object'?module.exports=f():typeof define!='undefined'&&define.amd?define(['fzstd',f]):(typeof self!='undefined'?self:this).fzstd=f()}(function(){var _e={};"use strict";var r=ArrayBuffer,t=Uint8Array,e=Uint16Array,n=Int16Array,a=Uint32Array,s=Int32Array,i=function(r,e,n){if(t.prototype.slice)return t.prototype.slice.call(r,e,n);(null==e||e<0)&&(e=0),(null==n||n>r.length)&&(n=r.length);var a=new t(n-e);return a.set(r.subarray(e,n)),a},o=function(r,e,n,a){if(t.prototype.fill)return t.prototype.fill.call(r,e,n,a);for((null==n||n<0)&&(n=0),(null==a||a>r.length)&&(a=r.length);n<a;++n)r[n]=e;return r},u=function(r,e,n,a){if(t.prototype.copyWithin)return t.prototype.copyWithin.call(r,e,n,a);for((null==n||n<0)&&(n=0),(null==a||a>r.length)&&(a=r.length);n<a;)r[e++]=r[n++]};_e.ZstdErrorCode={InvalidData:0,WindowSizeTooLarge:1,InvalidBlockType:2,FSEAccuracyTooHigh:3,DistanceTooFarBack:4,UnexpectedEOF:5};var h=["invalid zstd data","window size too large (>2046MB)","invalid block type","FSE accuracy too high","match distance too far back","unexpected EOF"],f=function(r,t,e){var n=Error(t||h[r]);if(n.code=r,Error.captureStackTrace&&Error.captureStackTrace(n,f),!e)throw n;return n},l=function(r,t,e){for(var n=0,a=0;n<e;++n)a|=r[t++]<<(n<<3);return a},v=function(r,t){return(r[t]|r[t+1]<<8|r[t+2]<<16|r[t+3]<<24)>>>0},c=function(r,e){var n=r[0]|r[1]<<8|r[2]<<16;if(3126568==n&&253==r[3]){var a=r[4],i=a>>5&1,o=a>>2&1,u=3&a,h=a>>6;8&a&&f(0);var c=6-i,b=3==u?4:u,y=l(r,c,b),p=h?1<<h:i,w=l(r,c+=b,p)+(1==h&&256),g=w;if(!i){var d=1<<10+(r[5]>>3);g=d+(d>>3)*(7&r[5])}g>2145386496&&f(1);var m=new t((1==e?w||g:e?0:g)+12);return m[0]=1,m[4]=4,m[8]=8,{b:c+p,y:0,l:0,d:y,w:e&&1!=e?e:m.subarray(12),e:g,o:new s(m.buffer,0,3),u:w,c:o,m:Math.min(131072,g)}}if(25481893==(n>>4|r[3]<<20))return v(r,4)+8;f(0)},b=function(r){for(var t=0;1<<t<=r;++t);return t-1},y=function(a,s,i){var o=4+(s<<3),u=5+(15&a[s]);u>i&&f(3);for(var h=1<<u,l=h,v=-1,c=-1,y=-1,p=h,w=new r(512+(h<<2)),g=new n(w,0,256),d=new e(w,0,256),m=new e(w,512,h),z=512+(h<<1),E=new t(w,z,h),k=new t(w,z+h);v<255&&l>0;){var A=b(l+1),T=o>>3,x=(1<<A+1)-1,F=(a[T]|a[T+1]<<8|a[T+2]<<16)>>(7&o)&x,S=(1<<A)-1,B=x-l-1,I=F&S;if(I<B?(o+=A,F=I):(o+=A+1,F>S&&(F-=B)),g[++v]=--F,-1==F?(l+=F,E[--p]=v):l-=F,!F)do{var U=o>>3;c=(a[U]|a[U+1]<<8)>>(7&o)&3,o+=2,v+=c}while(3==c)}(v>255||l)&&f(0);for(var D=0,M=(h>>1)+(h>>3)+3,W=h-1,O=0;O<=v;++O){var j=g[O];if(j<1)d[O]=-j;else for(y=0;y<j;++y){E[D]=O;do{D=D+M&W}while(D>=p)}}for(D&&f(0),y=0;y<h;++y){var C=d[E[y]]++,H=k[y]=u-b(C);m[y]=(C<<H)-h}return[o+7>>3,{b:u,s:E,n:k,t:m}]},p=function(r,n){var a=0,s=-1,i=new t(292),u=r[n],h=i.subarray(0,256),l=i.subarray(256,268),v=new e(i.buffer,268);if(u<128){var c=y(r,n+1,6),p=c[1],w=c[0]<<3,g=r[n+=u];g||f(0);for(var d=0,m=0,z=p.b,E=z,k=(++n<<3)-8+b(g);!((k-=z)<w);){var A=k>>3;if(h[++s]=p.s[d+=(r[A]|r[A+1]<<8)>>(7&k)&(1<<z)-1],(k-=E)<w)break;h[++s]=p.s[m+=(r[A=k>>3]|r[A+1]<<8)>>(7&k)&(1<<E)-1],z=p.n[d],d=p.t[d],E=p.n[m],m=p.t[m]}++s>255&&f(0)}else{for(s=u-127;a<s;a+=2){var T=r[++n];h[a]=T>>4,h[a+1]=15&T}++n}var x=0;for(a=0;a<s;++a)(I=h[a])>11&&f(0),x+=I&&1<<I-1;var F=b(x)+1,S=1<<F,B=S-x;for(B&B-1&&f(0),h[s++]=b(B)+1,a=0;a<s;++a){var I;++l[h[a]=(I=h[a])&&F+1-I]}var U=new t(S<<1),D=U.subarray(0,S),M=U.subarray(S);for(v[F]=0,a=F;a>0;--a){var W=v[a];o(M,a,W,v[a-1]=W+l[a]*(1<<F-a))}for(v[0]!=S&&f(0),a=0;a<s;++a){var O=h[a];if(O){var j=v[O];o(D,a,j,v[O]=j+(1<<F-O))}}return[n,{n:M,b:F,s:D}]},w=y(new t([81,16,99,140,49,198,24,99,12,33,196,24,99,102,102,134,70,146,4]),0,6)[1],g=y(new t([33,20,196,24,99,140,33,132,16,66,8,33,132,16,66,8,33,68,68,68,68,68,68,68,68,36,9]),0,6)[1],d=y(new t([32,132,16,66,102,70,68,68,68,68,36,73,2]),0,5)[1],m=function(r,t){for(var e=r.length,n=new s(e),a=0;a<e;++a)n[a]=t,t+=1<<r[a];return n},z=new t(new s([0,0,0,0,16843009,50528770,134678020,202050057,269422093]).buffer,0,36),E=m(z,0),k=new t(new s([0,0,0,0,0,0,0,0,16843009,50528770,117769220,185207048,252579084,16]).buffer,0,53),A=m(k,3),T=function(r,t,e){var n=r.length,a=t.length,s=r[n-1],i=(1<<e.b)-1,o=-e.b;s||f(0);for(var u=0,h=e.b,l=(n<<3)-8+b(s)-h,v=-1;l>o&&v<a;){var c=l>>3;t[++v]=e.s[u=(u<<h|(r[c]|r[c+1]<<8|r[c+2]<<16)>>(7&l))&i],l-=h=e.n[u]}l==o&&v+1==a||f(0)},x=function(r,t,e){var n=6,a=t.length+3>>2,s=a<<1,i=a+s;T(r.subarray(n,n+=r[0]|r[1]<<8),t.subarray(0,a),e),T(r.subarray(n,n+=r[2]|r[3]<<8),t.subarray(a,s),e),T(r.subarray(n,n+=r[4]|r[5]<<8),t.subarray(s,i),e),T(r.subarray(n),t.subarray(i),e)},F=function(r,n,a){var s,u=n.b,h=r[u],l=h>>1&3;n.l=1&h;var v=h>>3|r[u+1]<<5|r[u+2]<<13,c=(u+=3)+v;if(1==l){if(u>=r.length)return;return n.b=u+1,a?(o(a,r[u],n.y,n.y+=v),a):o(new t(v),r[u])}if(!(c>r.length)){if(0==l)return n.b=c,a?(a.set(r.subarray(u,c),n.y),n.y+=v,a):i(r,u,c);if(2==l){var m=r[u],F=3&m,S=m>>2&3,B=m>>4,I=0,U=0;F<2?1&S?B|=r[++u]<<4|(2&S&&r[++u]<<12):B=m>>3:(U=S,S<2?(B|=(63&r[++u])<<4,I=r[u]>>6|r[++u]<<2):2==S?(B|=r[++u]<<4|(3&r[++u])<<12,I=r[u]>>2|r[++u]<<6):(B|=r[++u]<<4|(63&r[++u])<<12,I=r[u]>>6|r[++u]<<2|r[++u]<<10)),++u;var D=a?a.subarray(n.y,n.y+n.m):new t(n.m),M=D.length-B;if(0==F)D.set(r.subarray(u,u+=B),M);else if(1==F)o(D,r[u++],M);else{var W=n.h;if(2==F){var O=p(r,u);I+=u-(u=O[0]),n.h=W=O[1]}else W||f(0);(U?x:T)(r.subarray(u,u+=I),D.subarray(M),W)}var j=r[u++];if(j){255==j?j=32512+(r[u++]|r[u++]<<8):j>127&&(j=j-128<<8|r[u++]);var C=r[u++];3&C&&f(0);for(var H=[g,d,w],L=2;L>-1;--L){var Z=C>>2+(L<<1)&3;if(1==Z){var q=new t([0,0,r[u++]]);H[L]={s:q.subarray(2,3),n:q.subarray(0,1),t:new e(q.buffer,0,1),b:0}}else 2==Z?(u=(s=y(r,u,9-(1&L)))[0],H[L]=s[1]):3==Z&&(n.t||f(0),H[L]=n.t[L])}var G=n.t=H,J=G[0],K=G[1],N=G[2],P=r[c-1];P||f(0);var Q=(c<<3)-8+b(P)-N.b,R=Q>>3,V=0,X=(r[R]|r[R+1]<<8)>>(7&Q)&(1<<N.b)-1,Y=(r[R=(Q-=K.b)>>3]|r[R+1]<<8)>>(7&Q)&(1<<K.b)-1,$=(r[R=(Q-=J.b)>>3]|r[R+1]<<8)>>(7&Q)&(1<<J.b)-1;for(++j;--j;){var _=N.s[X],rr=N.n[X],tr=J.s[$],er=J.n[$],nr=K.s[Y],ar=K.n[Y],sr=1<<nr,ir=sr+((r[R=(Q-=nr)>>3]|r[R+1]<<8|r[R+2]<<16|r[R+3]<<24)>>>(7&Q)&sr-1);R=(Q-=k[tr])>>3;var or=A[tr]+((r[R]|r[R+1]<<8|r[R+2]<<16)>>(7&Q)&(1<<k[tr])-1);R=(Q-=z[_])>>3;var ur=E[_]+((r[R]|r[R+1]<<8|r[R+2]<<16)>>(7&Q)&(1<<z[_])-1);if(R=(Q-=rr)>>3,X=N.t[X]+((r[R]|r[R+1]<<8)>>(7&Q)&(1<<rr)-1),R=(Q-=er)>>3,$=J.t[$]+((r[R]|r[R+1]<<8)>>(7&Q)&(1<<er)-1),R=(Q-=ar)>>3,Y=K.t[Y]+((r[R]|r[R+1]<<8)>>(7&Q)&(1<<ar)-1),ir>3)n.o[2]=n.o[1],n.o[1]=n.o[0],n.o[0]=ir-=3;else{var hr=ir-(0!=ur);hr?(ir=3==hr?n.o[0]-1:n.o[hr],hr>1&&(n.o[2]=n.o[1]),n.o[1]=n.o[0],n.o[0]=ir):ir=n.o[0]}for(L=0;L<ur;++L)D[V+L]=D[M+L];M+=ur;var fr=(V+=ur)-ir;if(fr<0){var lr=-fr,vr=n.e+fr;for(lr>or&&(lr=or),L=0;L<lr;++L)D[V+L]=n.w[vr+L];V+=lr,or-=lr,fr=0}for(L=0;L<or;++L)D[V+L]=D[fr+L];V+=or}if(V!=M)for(;M<D.length;)D[V++]=D[M++];else V=D.length;a?n.y+=V:D=i(D,0,V)}else if(a){if(n.y+=B,M)for(L=0;L<B;++L)D[L]=D[M+L]}else M&&(D=i(D,M));return n.b=c,D}f(2)}},S=function(r,e){if(1==r.length)return r[0];for(var n=new t(e),a=0,s=0;a<r.length;++a){var i=r[a];n.set(i,s),s+=i.length}return n};function B(r,t){for(var e=[],n=+!t,a=0,s=0;r.length;){var i=c(r,n||t);if("object"==typeof i){for(n?(t=null,i.w.length==i.u&&(e.push(t=i.w),s+=i.u)):(e.push(t),i.e=0);!i.l;){var o=F(r,i,t);o||f(5),t?i.e=i.y:(e.push(o),s+=o.length,u(i.w,0,o.length),i.w.set(o,i.w.length-o.length))}a=i.b+4*i.c}else a=i;r=r.subarray(a)}return S(e,s)}_e.decompress=B;var I=function(){function r(r){this.ondata=r,this.c=[],this.l=0,this.z=0}return r.prototype.push=function(r,e){if("number"==typeof this.s){var n=Math.min(r.length,this.s);r=r.subarray(n),this.s-=n}var a=r.length+this.l;if(!this.s){if(e){if(!a)return void this.ondata(new t(0),!0);a<5&&f(5)}else if(a<18)return this.c.push(r),void(this.l=a);if(this.l&&(this.c.push(r),r=S(this.c,a),this.c=[],this.l=0),"number"==typeof(this.s=c(r)))return this.push(r,e)}if("number"!=typeof this.s){if(a<(this.z||3))return e&&f(5),this.c.push(r),void(this.l=a);if(this.l&&(this.c.push(r),r=S(this.c,a),this.c=[],this.l=0),!this.z&&a<(this.z=2&r[this.s.b]?4:3+(r[this.s.b]>>3|r[this.s.b+1]<<5|r[this.s.b+2]<<13)))return e&&f(5),this.c.push(r),void(this.l=a);for(this.z=0;;){var s=F(r,this.s);if(!s){e&&f(5);var i=r.subarray(this.s.b);return this.s.b=0,this.c.push(i),void(this.l+=i.length)}if(this.ondata(s,!1),u(this.s.w,0,s.length),this.s.w.set(s,this.s.w.length-s.length),this.s.l){var o=r.subarray(this.s.b);return this.s=4*this.s.c,void this.push(o,e)}}}else e&&f(5)},r}();_e.Decompress=I;return _e})
+;  // ASI guard: the fzstd UMD ends without a semicolon and the next IIFE
+   // opens with a paren — without this, the parser reads a call expression.
+// ----------------------------------------------------------------------------
+// FourDSplats — parsers (.splat, 3DGS .ply, spz v1-4, SpacetimeGaussians
+// .ply, .splatv) + instanced EWA renderer + 4D evaluation. Verbatim from
+// fourd/splat_renderer.js (see that file's header for verification notes:
+// spz decode formulas and v3/v4 sign-magnitude rotations checked against
+// the nianticlabs reference implementation; .splatv against splaTV).
+// fourd/splat_renderer.js — minimal gaussian-splat renderer for the 4D portal PoC.
+//
+// Scope (PoC-honest):
+//  - Loads .splat (antimatter15 32-byte records) and 3DGS binary .ply
+//    (DC color band only — no view-dependent SH; noted, not hidden).
+//  - Per-splat 3D covariance built CPU-side from scale+quaternion; the vertex
+//    shader does the standard EWA projection (Zwicker) to a screen-space 2D
+//    gaussian and stretches an instanced quad to its 3-sigma ellipse.
+//  - Correct compositing: CPU depth sort back-to-front, premultiplied
+//    over-blending, no depth write. Sorting is a 16-bit counting sort with a
+//    typed-array gather — O(N), fine at PoC scale (tens of thousands).
+//  - 4D: a sequence is an array of frames sharing one splat COUNT budget;
+//    setFrame() gathers the frame's arrays through the current sort order.
+//
+// Off-axis note: the EWA Jacobian below uses the focal terms of the
+// projection matrix; with the portal's asymmetric frustum the skew terms
+// land in the projected CENTER (via projectionMatrix), while J keeps the
+// focal scale — exact for the center, first-order for the ellipse shape,
+// which is the standard approximation every WebGL splat viewer makes.
+// Recorded here so nobody mistakes it for exactness.
+
+(function (global) {
+    'use strict';
+
+    const SH_C0 = 0.28209479177387814;
+
+    // ---- parsers ------------------------------------------------------
+    // .splat: 32 bytes/record: float32 pos xyz, float32 scale xyz,
+    // uint8 rgba (a = opacity), uint8 quat (w,x,y,z) as c*128+128.
+    function parseSplat(buffer) {
+        const n = Math.floor(buffer.byteLength / 32);
+        const f = new Float32Array(buffer);
+        const u = new Uint8Array(buffer);
+        const out = allocFrame(n);
+        for (let i = 0; i < n; i++) {
+            const fo = i * 8, uo = i * 32;
+            out.center[i * 3] = f[fo]; out.center[i * 3 + 1] = f[fo + 1]; out.center[i * 3 + 2] = f[fo + 2];
+            const sx = f[fo + 3], sy = f[fo + 4], sz = f[fo + 5];
+            out.color[i * 4] = u[uo + 24] / 255; out.color[i * 4 + 1] = u[uo + 25] / 255;
+            out.color[i * 4 + 2] = u[uo + 26] / 255; out.color[i * 4 + 3] = u[uo + 27] / 255;
+            const qw = (u[uo + 28] - 128) / 128, qx = (u[uo + 29] - 128) / 128,
+                  qy = (u[uo + 30] - 128) / 128, qz = (u[uo + 31] - 128) / 128;
+            covFromScaleQuat(sx, sy, sz, qw, qx, qy, qz, out.covA, out.covB, i);
+        }
+        return out;
+    }
+
+    // 3DGS .ply (binary_little_endian): x,y,z, f_dc_0..2, opacity(logit),
+    // scale_0..2 (log), rot_0..3 (wxyz, unnormalized). Extra props skipped.
+    function parsePly(buffer) {
+        const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4096)));
+        const end = head.indexOf('end_header');
+        if (end < 0) throw new Error('ply: no end_header');
+        const headerLen = end + 'end_header'.length + 1;
+        const lines = head.slice(0, end).split('\n');
+        let n = 0; const props = [];
+        for (const line of lines) {
+            const t = line.trim().split(/\s+/);
+            if (t[0] === 'element' && t[1] === 'vertex') n = parseInt(t[2]);
+            else if (t[0] === 'property' && props !== null) props.push(t[2]);
+        }
+        const stride = props.length; // all float32 in 3DGS exports
+        // headerLen is rarely 4-aligned; typed views need alignment, so slice
+        const f = new Float32Array(buffer.slice(headerLen));
+        const idx = {}; props.forEach((p, i) => { idx[p] = i; });
+        const need = ['x', 'y', 'z', 'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3', 'opacity', 'f_dc_0', 'f_dc_1', 'f_dc_2'];
+        for (const k of need) if (!(k in idx)) throw new Error('ply: missing ' + k);
+        const out = allocFrame(n);
+        for (let i = 0; i < n; i++) {
+            const o = i * stride;
+            out.center[i * 3] = f[o + idx.x]; out.center[i * 3 + 1] = f[o + idx.y]; out.center[i * 3 + 2] = f[o + idx.z];
+            const sx = Math.exp(f[o + idx.scale_0]), sy = Math.exp(f[o + idx.scale_1]), sz = Math.exp(f[o + idx.scale_2]);
+            let qw = f[o + idx.rot_0], qx = f[o + idx.rot_1], qy = f[o + idx.rot_2], qz = f[o + idx.rot_3];
+            const ql = Math.hypot(qw, qx, qy, qz) || 1; qw /= ql; qx /= ql; qy /= ql; qz /= ql;
+            out.color[i * 4] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_0]);
+            out.color[i * 4 + 1] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_1]);
+            out.color[i * 4 + 2] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_2]);
+            out.color[i * 4 + 3] = 1 / (1 + Math.exp(-f[o + idx.opacity]));
+            covFromScaleQuat(sx, sy, sz, qw, qx, qy, qz, out.covA, out.covB, i);
+        }
+        return out;
+    }
+
+    function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+    function allocFrame(n) {
+        return {
+            n,
+            center: new Float32Array(n * 3),
+            covA: new Float32Array(n * 3),   // xx, xy, xz
+            covB: new Float32Array(n * 3),   // yy, yz, zz
+            color: new Float32Array(n * 4),
+        };
+    }
+
+    // Sigma = R S S^T R^T
+    function covFromScaleQuat(sx, sy, sz, qw, qx, qy, qz, covA, covB, i) {
+        const r00 = 1 - 2 * (qy * qy + qz * qz), r01 = 2 * (qx * qy - qw * qz), r02 = 2 * (qx * qz + qw * qy);
+        const r10 = 2 * (qx * qy + qw * qz), r11 = 1 - 2 * (qx * qx + qz * qz), r12 = 2 * (qy * qz - qw * qx);
+        const r20 = 2 * (qx * qz - qw * qy), r21 = 2 * (qy * qz + qw * qx), r22 = 1 - 2 * (qx * qx + qy * qy);
+        const sx2 = sx * sx, sy2 = sy * sy, sz2 = sz * sz;
+        covA[i * 3]     = r00 * r00 * sx2 + r01 * r01 * sy2 + r02 * r02 * sz2;
+        covA[i * 3 + 1] = r00 * r10 * sx2 + r01 * r11 * sy2 + r02 * r12 * sz2;
+        covA[i * 3 + 2] = r00 * r20 * sx2 + r01 * r21 * sy2 + r02 * r22 * sz2;
+        covB[i * 3]     = r10 * r10 * sx2 + r11 * r11 * sy2 + r12 * r12 * sz2;
+        covB[i * 3 + 1] = r10 * r20 * sx2 + r11 * r21 * sy2 + r12 * r22 * sz2;
+        covB[i * 3 + 2] = r20 * r20 * sx2 + r21 * r21 * sy2 + r22 * r22 * sz2;
+    }
+
+    // ---- renderer -------------------------------------------------------
+    const VERT = `
+        precision highp float;
+        attribute vec2 corner;
+        attribute vec3 iCenter;
+        attribute vec3 iCovA;   // xx xy xz
+        attribute vec3 iCovB;   // yy yz zz
+        attribute vec4 iColor;
+        uniform vec2 uViewport;  // px
+        uniform vec2 uFocal;     // fx fy in px
+        varying vec4 vColor;
+        varying vec2 vCorner;
+        void main() {
+            vec4 cam = modelViewMatrix * vec4(iCenter, 1.0);
+            vec4 clip = projectionMatrix * cam;
+            if (cam.z > -0.05) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+            float iz = 1.0 / -cam.z;
+            float fx = uFocal.x, fy = uFocal.y;
+            // EWA: J W Sigma W^T J^T  (ES 1.0-safe: no transpose(), no mat3(mat4))
+            mat3 S = mat3(iCovA.x, iCovA.y, iCovA.z,
+                          iCovA.y, iCovB.x, iCovB.y,
+                          iCovA.z, iCovB.y, iCovB.z);
+            mat3 W = mat3(modelViewMatrix[0].xyz, modelViewMatrix[1].xyz, modelViewMatrix[2].xyz);
+            mat3 Wt = mat3(vec3(W[0].x, W[1].x, W[2].x),
+                           vec3(W[0].y, W[1].y, W[2].y),
+                           vec3(W[0].z, W[1].z, W[2].z));
+            mat3 V = W * S * Wt;
+            float tx = cam.x * iz, ty = cam.y * iz;
+            // rows of J (2x3), z negated into iz form
+            vec3 J0 = vec3(fx * iz, 0.0, fx * tx * iz);
+            vec3 J1 = vec3(0.0, fy * iz, fy * ty * iz);
+            float c00 = dot(J0, V * J0) + 0.3;
+            float c11 = dot(J1, V * J1) + 0.3;
+            float c01 = dot(J0, V * J1);
+            // eigen of [[c00 c01][c01 c11]]
+            float mid = 0.5 * (c00 + c11);
+            float rad = sqrt(max(0.0001, mid * mid - (c00 * c11 - c01 * c01)));
+            float l1 = mid + rad, l2 = max(0.02, mid - rad);
+            vec2 e1 = normalize(vec2(c01, l1 - c00));
+            if (abs(c01) < 1e-6) e1 = (c00 >= c11) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+            vec2 e2 = vec2(-e1.y, e1.x);
+            vec2 px = corner.x * e1 * 3.0 * sqrt(l1) + corner.y * e2 * 3.0 * sqrt(l2);
+            gl_Position = clip;
+            gl_Position.xy += px * 2.0 / uViewport * clip.w;
+            vColor = iColor;
+            vCorner = corner * 3.0;
+        }`;
+    // Dynamic (SpacetimeGaussians) vertex shader: the covariance cannot be
+    // CPU-precomputed because rotation is time-varying, so R(t) S is built
+    // per vertex from the quaternion polynomial; everything after Sigma is
+    // the same EWA block as the static path. ES 1.0-safe.
+    const DYN_VERT = `
+        precision highp float;
+        attribute vec2 corner;
+        attribute vec3 iCenter;
+        attribute vec3 iScale;
+        attribute vec4 iQuat;    // (x,y,z,w) at t = trbf center
+        attribute vec4 iOmega;   // same component order
+        attribute vec3 iMotA;    // dt coefficients
+        attribute vec3 iMotB;    // dt^2
+        attribute vec3 iMotC;    // dt^3
+        attribute vec2 iTrbf;    // (center, exp(scale))
+        attribute vec4 iColor;
+        uniform vec2 uViewport;
+        uniform vec2 uFocal;
+        uniform float uTime;
+        varying vec4 vColor;
+        varying vec2 vCorner;
+        void main() {
+            float dt = uTime - iTrbf.x;
+            float tw = exp(-(dt * dt) / max(iTrbf.y * iTrbf.y, 1e-12));
+            vec3 p = iCenter + iMotA * dt + iMotB * (dt * dt) + iMotC * (dt * dt * dt);
+            vec4 cam = modelViewMatrix * vec4(p, 1.0);
+            vec4 clip = projectionMatrix * cam;
+            if (cam.z > -0.05 || tw < 0.0039) { gl_Position = vec4(0.0, 0.0, 2.0, 1.0); return; }
+            vec4 q = iQuat + dt * iOmega;
+            q /= max(length(q), 1e-9);
+            float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+            float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+            float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+            mat3 R = mat3(
+                vec3(1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy)),
+                vec3(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx)),
+                vec3(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy)));
+            mat3 M = mat3(R[0] * iScale.x, R[1] * iScale.y, R[2] * iScale.z);
+            mat3 Mt = mat3(vec3(M[0].x, M[1].x, M[2].x),
+                           vec3(M[0].y, M[1].y, M[2].y),
+                           vec3(M[0].z, M[1].z, M[2].z));
+            mat3 S = M * Mt;
+            mat3 W = mat3(modelViewMatrix[0].xyz, modelViewMatrix[1].xyz, modelViewMatrix[2].xyz);
+            mat3 Wt = mat3(vec3(W[0].x, W[1].x, W[2].x),
+                           vec3(W[0].y, W[1].y, W[2].y),
+                           vec3(W[0].z, W[1].z, W[2].z));
+            mat3 V = W * S * Wt;
+            float iz = 1.0 / -cam.z;
+            float tx = cam.x * iz, ty = cam.y * iz;
+            vec3 J0 = vec3(uFocal.x * iz, 0.0, uFocal.x * tx * iz);
+            vec3 J1 = vec3(0.0, uFocal.y * iz, uFocal.y * ty * iz);
+            float c00 = dot(J0, V * J0) + 0.3;
+            float c11 = dot(J1, V * J1) + 0.3;
+            float c01 = dot(J0, V * J1);
+            float mid = 0.5 * (c00 + c11);
+            float rad = sqrt(max(0.0001, mid * mid - (c00 * c11 - c01 * c01)));
+            float l1 = mid + rad, l2 = max(0.02, mid - rad);
+            vec2 e1 = normalize(vec2(c01, l1 - c00));
+            if (abs(c01) < 1e-6) e1 = (c00 >= c11) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+            vec2 e2 = vec2(-e1.y, e1.x);
+            vec2 px = corner.x * e1 * 3.0 * sqrt(l1) + corner.y * e2 * 3.0 * sqrt(l2);
+            gl_Position = clip;
+            gl_Position.xy += px * 2.0 / uViewport * clip.w;
+            vColor = vec4(iColor.rgb, iColor.a * tw);
+            vCorner = corner * 3.0;
+        }`;
+    const FRAG = `
+        precision highp float;
+        varying vec4 vColor;
+        varying vec2 vCorner;
+        void main() {
+            float r2 = dot(vCorner, vCorner);
+            if (r2 > 9.0) discard;
+            float a = vColor.a * exp(-0.5 * r2);
+            if (a < 0.0039) discard;
+            gl_FragColor = vec4(vColor.rgb * a, a);   // premultiplied over
+        }`;
+
+    class SplatCloud {
+        constructor(THREE, capacity, dynamic) {
+            this.THREE = THREE;
+            this.capacity = capacity;
+            this.dynamic = !!dynamic;   // SpacetimeGaussians single-file 4D
+            this.time = 0;              // dynamic only: normalized clip time
+            this.frames = [];       // array of allocFrame results (>=1)
+            this.frameIndex = 0;
+            this.order = new Uint32Array(capacity);
+            this._depth = new Float32Array(capacity);
+            this._buckets = new Uint32Array(65536 + 1);
+            const geo = new THREE.InstancedBufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([0,0,0, 0,0,0, 0,0,0, 0,0,0]), 3)); // unused, three needs it
+            geo.setAttribute('corner', new THREE.BufferAttribute(new Float32Array([-1,-1, 1,-1, 1,1, -1,1]), 2));
+            geo.setIndex([0, 1, 2, 0, 2, 3]);
+            const mk = (w) => {
+                const a = new THREE.InstancedBufferAttribute(new Float32Array(capacity * w), w);
+                a.setUsage(THREE.DynamicDrawUsage); return a;
+            };
+            const uniforms = { uViewport: { value: new THREE.Vector2(1, 1) }, uFocal: { value: new THREE.Vector2(1, 1) } };
+            if (this.dynamic) {
+                this.aCenter = mk(3); this.aScale = mk(3); this.aQuat = mk(4); this.aOmega = mk(4);
+                this.aMotA = mk(3); this.aMotB = mk(3); this.aMotC = mk(3);
+                this.aTrbf = mk(2); this.aColor = mk(4);
+                geo.setAttribute('iCenter', this.aCenter); geo.setAttribute('iScale', this.aScale);
+                geo.setAttribute('iQuat', this.aQuat); geo.setAttribute('iOmega', this.aOmega);
+                geo.setAttribute('iMotA', this.aMotA); geo.setAttribute('iMotB', this.aMotB);
+                geo.setAttribute('iMotC', this.aMotC); geo.setAttribute('iTrbf', this.aTrbf);
+                geo.setAttribute('iColor', this.aColor);
+                uniforms.uTime = { value: 0 };
+                this._dynPos = new Float32Array(capacity * 3);
+            } else {
+                this.aCenter = mk(3); this.aCovA = mk(3); this.aCovB = mk(3); this.aColor = mk(4);
+                geo.setAttribute('iCenter', this.aCenter);
+                geo.setAttribute('iCovA', this.aCovA);
+                geo.setAttribute('iCovB', this.aCovB);
+                geo.setAttribute('iColor', this.aColor);
+            }
+            this.material = new THREE.ShaderMaterial({
+                vertexShader: this.dynamic ? DYN_VERT : VERT, fragmentShader: FRAG,
+                uniforms,
+                transparent: true, depthTest: true, depthWrite: false,
+                blending: THREE.CustomBlending,
+                blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+                blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+            });
+            this.mesh = new THREE.Mesh(geo, this.material);
+            this.mesh.frustumCulled = false;
+            this._geo = geo;
+        }
+
+        setTime(t) {   // dynamic only
+            this.time = t;
+            if (this.material.uniforms.uTime) this.material.uniforms.uTime.value = t;
+        }
+
+        setFrames(frames) {
+            this.frames = frames;
+            this.frameIndex = 0;
+        }
+
+        frame() { return this.frames[this.frameIndex]; }
+
+        setFrame(i) {
+            this.frameIndex = ((i % this.frames.length) + this.frames.length) % this.frames.length;
+        }
+
+        // Sort the CURRENT frame back-to-front for the given camera and gather
+        // into the instanced attributes. Call on eye move, frame change, or
+        // (dynamic) time change — dynamic positions are evaluated at
+        // this.time with the same polynomial the shader uses.
+        sortAndUpload(camera) {
+            const fr = this.frame(); if (!fr) return;
+            const n = Math.min(fr.n, this.capacity);
+            const m = camera.matrixWorldInverse.elements; // view matrix
+            const zx = m[2], zy = m[6], zz = m[10], zw = m[14];
+            const depth = this._depth;
+            let srcPos = fr.center;
+            if (this.dynamic) { evalDynamicPositions(fr, this.time, this._dynPos); srcPos = this._dynPos; }
+            let mn = Infinity, mx = -Infinity;
+            for (let i = 0; i < n; i++) {
+                const d = zx * srcPos[i * 3] + zy * srcPos[i * 3 + 1] + zz * srcPos[i * 3 + 2] + zw;
+                depth[i] = d;
+                if (d < mn) mn = d; if (d > mx) mx = d;
+            }
+            const buckets = this._buckets; buckets.fill(0);
+            const scale = (mx > mn) ? 65535 / (mx - mn) : 0;
+            for (let i = 0; i < n; i++) buckets[(((depth[i] - mn) * scale) | 0) + 1]++;
+            for (let b = 0; b < 65536; b++) buckets[b + 1] += buckets[b];
+            const order = this.order;
+            for (let i = 0; i < n; i++) order[buckets[((depth[i] - mn) * scale) | 0]++] = i;
+            // back-to-front: view z is NEGATIVE in front of the camera, so the
+            // most negative (farthest) has the SMALLEST key — order[] is
+            // already far -> near. Gather.
+            if (this.dynamic) {
+                const c = this.aCenter.array, s = this.aScale.array, q = this.aQuat.array,
+                      w = this.aOmega.array, ma = this.aMotA.array, mb = this.aMotB.array,
+                      mc = this.aMotC.array, tb = this.aTrbf.array, col = this.aColor.array;
+                for (let k = 0; k < n; k++) {
+                    const i = order[k];
+                    for (let a = 0; a < 3; a++) {
+                        c[k * 3 + a] = fr.center[i * 3 + a];
+                        s[k * 3 + a] = fr.scale[i * 3 + a];
+                        ma[k * 3 + a] = fr.motion[i * 9 + a];
+                        mb[k * 3 + a] = fr.motion[i * 9 + 3 + a];
+                        mc[k * 3 + a] = fr.motion[i * 9 + 6 + a];
+                    }
+                    for (let a = 0; a < 4; a++) {
+                        q[k * 4 + a] = fr.quat[i * 4 + a];
+                        w[k * 4 + a] = fr.omega[i * 4 + a];
+                        col[k * 4 + a] = fr.color[i * 4 + a];
+                    }
+                    tb[k * 2] = fr.trbf[i * 2]; tb[k * 2 + 1] = fr.trbf[i * 2 + 1];
+                }
+                for (const a of [this.aCenter, this.aScale, this.aQuat, this.aOmega,
+                                 this.aMotA, this.aMotB, this.aMotC, this.aTrbf, this.aColor]) a.needsUpdate = true;
+            } else {
+                const c = this.aCenter.array, ca = this.aCovA.array, cb = this.aCovB.array, col = this.aColor.array;
+                for (let k = 0; k < n; k++) {
+                    const i = order[k];
+                    c[k * 3] = fr.center[i * 3]; c[k * 3 + 1] = fr.center[i * 3 + 1]; c[k * 3 + 2] = fr.center[i * 3 + 2];
+                    ca[k * 3] = fr.covA[i * 3]; ca[k * 3 + 1] = fr.covA[i * 3 + 1]; ca[k * 3 + 2] = fr.covA[i * 3 + 2];
+                    cb[k * 3] = fr.covB[i * 3]; cb[k * 3 + 1] = fr.covB[i * 3 + 1]; cb[k * 3 + 2] = fr.covB[i * 3 + 2];
+                    col[k * 4] = fr.color[i * 4]; col[k * 4 + 1] = fr.color[i * 4 + 1];
+                    col[k * 4 + 2] = fr.color[i * 4 + 2]; col[k * 4 + 3] = fr.color[i * 4 + 3];
+                }
+                this.aCenter.needsUpdate = true; this.aCovA.needsUpdate = true;
+                this.aCovB.needsUpdate = true; this.aColor.needsUpdate = true;
+            }
+            this._geo.instanceCount = n;
+            if (this._geo._maxInstanceCount !== undefined) this._geo._maxInstanceCount = n; // r128 quirk
+        }
+
+        // Focal terms from the (possibly asymmetric) projection matrix.
+        updateViewportUniforms(camera, widthPx, heightPx) {
+            const p = camera.projectionMatrix.elements;
+            this.material.uniforms.uViewport.value.set(widthPx, heightPx);
+            this.material.uniforms.uFocal.value.set(p[0] * widthPx / 2, p[5] * heightPx / 2);
+        }
+    }
+
+    // Normalize a frame set to portal space: recenter on the SUBJECT centroid,
+    // uniform-scale so the SUBJECT height fits fitHeight, then put the subject
+    // centroid AT the portal plane (z = portalZ) — the same portal-plane
+    // pinning the 2.5D layers get. One transform for ALL frames (the subject
+    // must not re-normalize per frame or the animation swims).
+    // `subject` = {center:[x,y,z], height} from the asset's own metadata (the
+    // generator/rig knows its subject — 4DAnyone ships `framing` the same
+    // way); without it the union bbox is the fallback, which lets a large
+    // environment (ground plane, backdrop) dominate the fit.
+    function normalizeFrames(frames, portalZ, fitHeight, subject) {
+        let cx, cy, cz, h;
+        if (subject && subject.center && subject.height) {
+            cx = subject.center[0]; cy = subject.center[1]; cz = subject.center[2];
+            h = subject.height;
+        } else {
+            let mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+            for (const fr of frames) for (let i = 0; i < fr.n; i++)
+                for (let a = 0; a < 3; a++) {
+                    const v = fr.center[i * 3 + a];
+                    if (v < mn[a]) mn[a] = v; if (v > mx[a]) mx[a] = v;
+                }
+            cx = (mn[0] + mx[0]) / 2; cy = (mn[1] + mx[1]) / 2; cz = (mn[2] + mx[2]) / 2;
+            h = Math.max(1e-6, mx[1] - mn[1]);
+        }
+        const s = fitHeight / h;
+        for (const fr of frames) {
+            for (let i = 0; i < fr.n; i++) {
+                fr.center[i * 3] = (fr.center[i * 3] - cx) * s;
+                fr.center[i * 3 + 1] = (fr.center[i * 3 + 1] - cy) * s;
+                fr.center[i * 3 + 2] = (fr.center[i * 3 + 2] - cz) * s + portalZ;
+            }
+            if (fr.dynamic) {
+                // motion coefficients are DISPLACEMENTS — they scale, they do
+                // not translate; linear scales likewise; trbf is pure time.
+                for (let i = 0; i < fr.motion.length; i++) fr.motion[i] *= s;
+                for (let i = 0; i < fr.scale.length; i++) fr.scale[i] *= s;
+            } else {
+                const s2 = s * s;
+                for (let i = 0; i < fr.covA.length; i++) { fr.covA[i] *= s2; fr.covB[i] *= s2; }
+            }
+        }
+        return { scale: s };
+    }
+
+    // ---- SpacetimeGaussians (single-file 4D) ---------------------------
+    // Li et al., oppo-us-research/SpacetimeGaussians. One persistent gaussian
+    // set; per splat: cubic position polynomial, linear rotation, and a
+    // temporal opacity window. Evaluation law VERIFIED against their
+    // renderer/__init__.py and scene/oursfull.py:
+    //   dt   = t - trbf_center                     (t normalized over clip)
+    //   pos  = p0 + m[0:3] dt + m[3:6] dt^2 + m[6:9] dt^3
+    //   q    = normalize(q0 + dt * omega)
+    //   op   = sigmoid(opacity_logit) * exp(-(dt / exp(trbf_scale))^2)
+    //   scales log-stored, f_dc DC band (the full model's f_t feature/MLP
+    //   color path is NOT rendered — DC approximation, same as our .ply).
+    function parseSpacetimePly(buffer) {
+        const head = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 8192)));
+        const end = head.indexOf('end_header');
+        if (end < 0) throw new Error('stg ply: no end_header');
+        const headerLen = end + 'end_header'.length + 1;
+        const lines = head.slice(0, end).split('\n');
+        let n = 0; const props = [];
+        for (const line of lines) {
+            const t = line.trim().split(/\s+/);
+            if (t[0] === 'element' && t[1] === 'vertex') n = parseInt(t[2]);
+            else if (t[0] === 'property') props.push(t[2]);
+        }
+        const stride = props.length;
+        // headerLen is rarely 4-aligned; typed views need alignment, so slice
+        const f = new Float32Array(buffer.slice(headerLen));
+        const idx = {}; props.forEach((p, i) => { idx[p] = i; });
+        const need = ['x', 'y', 'z', 'trbf_center', 'trbf_scale', 'opacity',
+                      'scale_0', 'scale_1', 'scale_2', 'rot_0', 'rot_1', 'rot_2', 'rot_3',
+                      'f_dc_0', 'f_dc_1', 'f_dc_2'];
+        for (const k of need) if (!(k in idx)) throw new Error('stg ply: missing ' + k);
+        for (let m = 0; m < 9; m++) if (!(('motion_' + m) in idx)) throw new Error('stg ply: missing motion_' + m);
+        for (let m = 0; m < 4; m++) if (!(('omega_' + m) in idx)) throw new Error('stg ply: missing omega_' + m);
+        const out = {
+            n, dynamic: true,
+            center: new Float32Array(n * 3),
+            scale: new Float32Array(n * 3),        // LINEAR (exp applied)
+            quat: new Float32Array(n * 4),         // (x, y, z, w)
+            omega: new Float32Array(n * 4),        // (x, y, z, w) — same reorder as quat
+            motion: new Float32Array(n * 9),       // m1.xyz, m2.xyz, m3.xyz
+            trbf: new Float32Array(n * 2),         // center, exp(scale)
+            color: new Float32Array(n * 4),
+        };
+        for (let i = 0; i < n; i++) {
+            const o = i * stride;
+            out.center[i * 3] = f[o + idx.x]; out.center[i * 3 + 1] = f[o + idx.y]; out.center[i * 3 + 2] = f[o + idx.z];
+            for (let k = 0; k < 3; k++) out.scale[i * 3 + k] = Math.exp(f[o + idx['scale_' + k]]);
+            // 3DGS rot_0 = w; attribute order (x,y,z,w). omega reordered
+            // IDENTICALLY — q + dt*omega is linear, pairing must match.
+            out.quat[i * 4] = f[o + idx.rot_1]; out.quat[i * 4 + 1] = f[o + idx.rot_2];
+            out.quat[i * 4 + 2] = f[o + idx.rot_3]; out.quat[i * 4 + 3] = f[o + idx.rot_0];
+            out.omega[i * 4] = f[o + idx.omega_1]; out.omega[i * 4 + 1] = f[o + idx.omega_2];
+            out.omega[i * 4 + 2] = f[o + idx.omega_3]; out.omega[i * 4 + 3] = f[o + idx.omega_0];
+            for (let m = 0; m < 9; m++) out.motion[i * 9 + m] = f[o + idx['motion_' + m]];
+            out.trbf[i * 2] = f[o + idx.trbf_center];
+            out.trbf[i * 2 + 1] = Math.exp(f[o + idx.trbf_scale]);
+            out.color[i * 4] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_0]);
+            out.color[i * 4 + 1] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_1]);
+            out.color[i * 4 + 2] = clamp01(0.5 + SH_C0 * f[o + idx.f_dc_2]);
+            out.color[i * 4 + 3] = 1 / (1 + Math.exp(-f[o + idx.opacity]));
+        }
+        return out;
+    }
+
+    // 180° about X (y,z negated): 3DGS content is conventionally y-DOWN
+    // (COLMAP/OpenCV heritage) and the portal is y-up, so this is the
+    // DEFAULT import orientation — the same flip every canonical splat
+    // viewer bakes into its view matrix. Some producers author y-up
+    // (e.g. PlayCanvas spz exports); those disable it per layer/URL.
+    // Measured basis: nianticlabs spz_to_ply output matches our raw decode
+    // element-exactly (no hidden conversion in any container), so
+    // orientation is pure producer convention, not a format property.
+    function flipFrameRDF(fr) {
+        for (let i = 0; i < fr.n; i++) {
+            fr.center[i * 3 + 1] = -fr.center[i * 3 + 1];
+            fr.center[i * 3 + 2] = -fr.center[i * 3 + 2];
+        }
+        if (fr.dynamic) {
+            for (let i = 0; i < fr.n; i++) {
+                for (const off of [1, 2, 4, 5, 7, 8]) fr.motion[i * 9 + off] = -fr.motion[i * 9 + off];
+                // q' = r180x ⊗ q : (x,y,z,w) -> (w, -z, y, -x); omega same map
+                for (const arr of [fr.quat, fr.omega]) {
+                    const x = arr[i * 4], y = arr[i * 4 + 1], z = arr[i * 4 + 2], w = arr[i * 4 + 3];
+                    arr[i * 4] = w; arr[i * 4 + 1] = -z; arr[i * 4 + 2] = y; arr[i * 4 + 3] = -x;
+                }
+            }
+        } else {
+            // C' = F C F^T, F = diag(1,-1,-1): xy and xz negate, yz keeps
+            for (let i = 0; i < fr.n; i++) {
+                fr.covA[i * 3 + 1] = -fr.covA[i * 3 + 1];
+                fr.covA[i * 3 + 2] = -fr.covA[i * 3 + 2];
+            }
+        }
+        return fr;
+    }
+
+    // Evaluate a dynamic frame's positions at time t (CPU, for sorting).
+    function evalDynamicPositions(fr, t, dst) {
+        for (let i = 0; i < fr.n; i++) {
+            const dt = t - fr.trbf[i * 2], dt2 = dt * dt, dt3 = dt2 * dt;
+            const m = i * 9;
+            dst[i * 3]     = fr.center[i * 3]     + fr.motion[m] * dt     + fr.motion[m + 3] * dt2 + fr.motion[m + 6] * dt3;
+            dst[i * 3 + 1] = fr.center[i * 3 + 1] + fr.motion[m + 1] * dt + fr.motion[m + 4] * dt2 + fr.motion[m + 7] * dt3;
+            dst[i * 3 + 2] = fr.center[i * 3 + 2] + fr.motion[m + 2] * dt + fr.motion[m + 5] * dt2 + fr.motion[m + 8] * dt3;
+        }
+    }
+
+    // ---- splaTV .splatv (antimatter15 dynamic container) ---------------
+    // Layout VERIFIED against antimatter15/splaTV hybrid.js:
+    //   u32 magic 0x674b, u32 jsonLen, JSON chunk table, then 64 bytes/splat:
+    //   [0..2] f32 xyz; [3][4] half2 (rot_0,rot_1)(rot_2,rot_3) — 3DGS
+    //   (w,x,y,z); [5][6] half2 LINEAR scales (exp already applied);
+    //   [7] rgba8 color+opacity (final bytes, no SH transform);
+    //   [8..12] half2 motion_0..8; [13][14] half2 omega_0..3;
+    //   [15] half2 (trbf_center, exp(trbf_scale)).
+    // Same SpacetimeGaussians evaluation law as parseSpacetimePly.
+    function halfToFloat(h) {
+        const s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+        if (e === 0) return s * m * Math.pow(2, -24);
+        if (e === 31) return m ? NaN : s * Infinity;
+        return s * (1 + m / 1024) * Math.pow(2, e - 15);
+    }
+    function parseSplatv(buffer) {
+        const dv = new DataView(buffer);
+        if (dv.getUint32(0, true) !== 0x674b) throw new Error('splatv: bad magic');
+        const jsonLen = dv.getUint32(4, true);
+        const dataOff = 8 + jsonLen;
+        const n = Math.floor((buffer.byteLength - dataOff) / 64);
+        if (n < 1) throw new Error('splatv: no splats');
+        const u32 = new Uint32Array(buffer.slice(dataOff, dataOff + n * 64));
+        const f32 = new Float32Array(u32.buffer);
+        const u8 = new Uint8Array(u32.buffer);
+        const out = {
+            n, dynamic: true,
+            center: new Float32Array(n * 3), scale: new Float32Array(n * 3),
+            quat: new Float32Array(n * 4), omega: new Float32Array(n * 4),
+            motion: new Float32Array(n * 9), trbf: new Float32Array(n * 2),
+            color: new Float32Array(n * 4),
+        };
+        const lo = (v) => halfToFloat(v & 0xffff), hi = (v) => halfToFloat(v >>> 16);
+        for (let i = 0; i < n; i++) {
+            const b = i * 16;
+            out.center[i * 3] = f32[b]; out.center[i * 3 + 1] = f32[b + 1]; out.center[i * 3 + 2] = f32[b + 2];
+            const r0 = lo(u32[b + 3]), r1 = hi(u32[b + 3]), r2 = lo(u32[b + 4]), r3 = hi(u32[b + 4]);
+            out.quat[i * 4] = r1; out.quat[i * 4 + 1] = r2; out.quat[i * 4 + 2] = r3; out.quat[i * 4 + 3] = r0;
+            out.scale[i * 3] = lo(u32[b + 5]); out.scale[i * 3 + 1] = hi(u32[b + 5]); out.scale[i * 3 + 2] = lo(u32[b + 6]);
+            out.color[i * 4] = u8[(b + 7) * 4] / 255; out.color[i * 4 + 1] = u8[(b + 7) * 4 + 1] / 255;
+            out.color[i * 4 + 2] = u8[(b + 7) * 4 + 2] / 255; out.color[i * 4 + 3] = u8[(b + 7) * 4 + 3] / 255;
+            out.motion[i * 9] = lo(u32[b + 8]); out.motion[i * 9 + 1] = hi(u32[b + 8]);
+            out.motion[i * 9 + 2] = lo(u32[b + 9]); out.motion[i * 9 + 3] = hi(u32[b + 9]);
+            out.motion[i * 9 + 4] = lo(u32[b + 10]); out.motion[i * 9 + 5] = hi(u32[b + 10]);
+            out.motion[i * 9 + 6] = lo(u32[b + 11]); out.motion[i * 9 + 7] = hi(u32[b + 11]);
+            out.motion[i * 9 + 8] = lo(u32[b + 12]);
+            const o0 = lo(u32[b + 13]), o1 = hi(u32[b + 13]), o2 = lo(u32[b + 14]), o3 = hi(u32[b + 14]);
+            out.omega[i * 4] = o1; out.omega[i * 4 + 1] = o2; out.omega[i * 4 + 2] = o3; out.omega[i * 4 + 3] = o0;
+            out.trbf[i * 2] = lo(u32[b + 15]); out.trbf[i * 2 + 1] = Math.max(1e-6, hi(u32[b + 15]));
+        }
+        return out;
+    }
+
+    // ---- SPZ (Niantic) ------------------------------------------------
+    // Versions 1-3: 16-byte header + attribute sections, whole body gzipped.
+    // Section order VERIFIED against nianticlabs/spz load-spz.cc
+    // serializePackedGaussians: positions, alphas, colors, scales,
+    // rotations, sh. Decodes: pos 24-bit LE signed fixed / 2^fractionalBits;
+    // scale exp(byte/16 - 10); alpha byte/255 (sigmoid already applied);
+    // color rgb = 0.5 + SH_C0 * ((byte/255 - 0.5) / 0.15).
+    // Version 4 restructured the container to per-stream ZSTD — no native
+    // browser decoder, so it is REJECTED with a clear message rather than
+    // half-parsed. v3's smallest-three rotation decode follows the spec text
+    // (2-bit largest index in the top bits, 3 x 10-bit signed components,
+    // range ±1/√2); it has not yet been validated against a reference v3
+    // file — v2 (what Scaniverse emits) is the verified path.
+    async function parseSpz(buffer) {
+        let bytes = new Uint8Array(buffer);
+        if (bytes[0] === 0x1f && bytes[1] === 0x8b) { // gzip container (v1-3)
+            const ds = new DecompressionStream('gzip');
+            const out = await new Response(new Blob([buffer]).stream().pipeThrough(ds)).arrayBuffer();
+            bytes = new Uint8Array(out);
+        }
+        let dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        if (dv.getUint32(0, true) !== 0x5053474e) throw new Error('spz: bad magic');
+        const version = dv.getUint32(4, true);
+        let n, shDegree, fracBits, posB, alphaB, colorB, scaleB, rotB;
+        if (version >= 4) {
+            // v4 container (VERIFIED against load-spz.cc): 32-byte header
+            // {magic u32, version u32, numPoints u32, shDegree u8,
+            // fractionalBits u8, flags u8, numStreams u8, tocByteOffset u32,
+            // reserved 12B}; TOC at tocByteOffset = numStreams x {u64
+            // compressedSize, u64 uncompressedSize}; streams follow the TOC,
+            // each independently ZSTD, in order positions, alphas, colors,
+            // scales, rotations, sh (only non-empty streams present).
+            // ZSTD via the vendored pure-JS fzstd (fourd/vendor/fzstd.umd.js).
+            const zstd = (typeof fzstd !== 'undefined') ? fzstd
+                : (typeof require === 'function' ? (() => { try { return require('fzstd'); } catch (e) { return null; } })() : null);
+            if (!zstd) throw new Error('spz v' + version + ' uses per-stream ZSTD — fzstd not loaded (fourd/vendor/fzstd.umd.js)');
+            n = dv.getUint32(8, true);
+            shDegree = bytes[12]; fracBits = bytes[13];
+            const numStreams = bytes[15];
+            const toc = dv.getUint32(16, true);
+            const shDim4 = [0, 3, 8, 15][shDegree] || 0;
+            const expect = [n * 9, n, n * 3, n * 3, n * 4, n * shDim4 * 3].filter(s => s > 0);
+            if (numStreams !== expect.length)
+                throw new Error('spz v4: ' + numStreams + ' streams, expected ' + expect.length);
+            let dataOff = toc + numStreams * 16;
+            const parts = [];
+            for (let s = 0; s < numStreams; s++) {
+                const cs = Number(dv.getBigUint64(toc + s * 16, true));
+                const us = Number(dv.getBigUint64(toc + s * 16 + 8, true));
+                const out2 = zstd.decompress(bytes.subarray(dataOff, dataOff + cs));
+                if (out2.length !== us) throw new Error('spz v4: stream ' + s + ' decompressed ' + out2.length + ' != ' + us);
+                parts.push(out2); dataOff += cs;
+            }
+            // stitch a flat legacy-style buffer so the decode loop below is shared
+            const flat = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+            let fo = 0; for (const p of parts) { flat.set(p, fo); fo += p.length; }
+            bytes = flat; dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            let o = 0;
+            posB = o; o += n * 9;
+            alphaB = o; o += n;
+            colorB = o; o += n * 3;
+            scaleB = o; o += n * 3;
+            rotB = o; o += n * 4;
+        } else {
+            n = dv.getUint32(8, true);
+            shDegree = bytes[12]; fracBits = bytes[13];
+            const shDim = [0, 3, 8, 15][shDegree] || 0;
+            let o = 16;
+            posB = o; o += n * 9;
+            alphaB = o; o += n;
+            colorB = o; o += n * 3;
+            scaleB = o; o += n * 3;
+            rotB = o; o += n * (version >= 3 ? 4 : 3);
+            // + sh section (n * shDim * 3), read for length check only — DC-only renderer
+            if (o + n * shDim * 3 > bytes.length) throw new Error('spz: truncated');
+        }
+        const out = allocFrame(n);
+        const posScale = 1 / (1 << fracBits);
+        const INV_SQRT2 = Math.SQRT1_2;
+        for (let i = 0; i < n; i++) {
+            for (let a = 0; a < 3; a++) {
+                const b0 = posB + (i * 3 + a) * 3;
+                let f = bytes[b0] | (bytes[b0 + 1] << 8) | (bytes[b0 + 2] << 16);
+                if (f & 0x800000) f |= 0xff000000; // sign extend
+                out.center[i * 3 + a] = (f | 0) * posScale;
+            }
+            out.color[i * 4 + 3] = bytes[alphaB + i] / 255;
+            for (let a = 0; a < 3; a++)
+                out.color[i * 4 + a] = clamp01(0.5 + SH_C0 * ((bytes[colorB + i * 3 + a] / 255 - 0.5) / 0.15));
+            const sx = Math.exp(bytes[scaleB + i * 3] / 16 - 10);
+            const sy = Math.exp(bytes[scaleB + i * 3 + 1] / 16 - 10);
+            const sz = Math.exp(bytes[scaleB + i * 3 + 2] / 16 - 10);
+            let qw, qx, qy, qz;
+            if (version >= 3) {
+                // VERIFIED against load-spz.cc packQuaternionSmallestThree:
+                // comp = [iLargest:2][f0:10][f1:10][f2:10], each field =
+                // SIGN-MAGNITUDE (negbit<<9 | mag, mag = 511*|q|/sqrt(1/2)),
+                // fields in xyzw order skipping the largest, which is made
+                // positive. (First cut used 10-bit two's-complement — caught
+                // by the reference-CLI cross-check on biker.spz: positions
+                // exact, covariance 2.5x off.)
+                const w32 = dv.getUint32(rotB + i * 4, true);
+                const idx = (w32 >>> 30) & 3;
+                const c = [0, 0, 0];
+                for (let k = 0; k < 3; k++) {
+                    const v = (w32 >>> (20 - k * 10)) & 0x3ff;
+                    const mag = ((v & 0x1ff) / 511) * INV_SQRT2;
+                    c[k] = (v & 0x200) ? -mag : mag;
+                }
+                const rest = Math.sqrt(Math.max(0, 1 - c[0] * c[0] - c[1] * c[1] - c[2] * c[2]));
+                const q = [0, 0, 0, 0]; // x y z w
+                let ci = 0;
+                for (let k = 0; k < 4; k++) { if (k === idx) q[k] = rest; else q[k] = c[ci++]; }
+                qx = q[0]; qy = q[1]; qz = q[2]; qw = q[3];
+            } else {
+                qx = bytes[rotB + i * 3] / 127.5 - 1;
+                qy = bytes[rotB + i * 3 + 1] / 127.5 - 1;
+                qz = bytes[rotB + i * 3 + 2] / 127.5 - 1;
+                qw = Math.sqrt(Math.max(0, 1 - qx * qx - qy * qy - qz * qz));
+            }
+            covFromScaleQuat(sx, sy, sz, qw, qx, qy, qz, out.covA, out.covB, i);
+        }
+        return out;
+    }
+
+    // ---- dispatcher ----------------------------------------------------
+    // Sniffs by content first (magic/header), extension second. Async
+    // because spz decompresses through DecompressionStream.
+    async function parseAny(buffer, name) {
+        const lower = (name || '').toLowerCase();
+        const head = new Uint8Array(buffer, 0, Math.min(16, buffer.byteLength));
+        const isGzip = head[0] === 0x1f && head[1] === 0x8b;
+        const magic = head.length >= 4 ? (head[0] | (head[1] << 8) | (head[2] << 16) | (head[3] << 24)) >>> 0 : 0;
+        if (lower.endsWith('.ksplat'))
+            throw new Error('.ksplat is not supported yet — convert to .ply or .splat (GaussianSplats3D can export both)');
+        if (magic === 0x674b || lower.endsWith('.splatv')) return parseSplatv(buffer);
+        if (isGzip || magic === 0x5053474e || lower.endsWith('.spz')) return parseSpz(buffer);
+        const asText = String.fromCharCode(...head.slice(0, 4));
+        if (asText === 'ply\n' || asText.startsWith('ply') || lower.endsWith('.ply')) {
+            // SpacetimeGaussians single-file 4D ply carries trbf_center;
+            // plain 3DGS ply does not
+            const hdr = new TextDecoder().decode(new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 8192)));
+            return hdr.includes('trbf_center') ? parseSpacetimePly(buffer) : parsePly(buffer);
+        }
+        if (lower.endsWith('.splat') || buffer.byteLength % 32 === 0) return parseSplat(buffer);
+        throw new Error('unrecognized splat container: ' + name);
+    }
+
+    const api = { parseSplat, parsePly, parseSpz, parseSpacetimePly, parseSplatv, parseAny,
+                  evalDynamicPositions, flipFrameRDF, SplatCloud, normalizeFrames, allocFrame };
+    if (typeof module !== 'undefined' && module.exports) module.exports = api;
+    else global.FourDSplats = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+// ===== END A227 EMBEDDED SPLAT SUPPORT =====

@@ -175,3 +175,31 @@ flame_steak = Neural 3D Video). All 16 PASS + 2 bonus conformance checks
 
 Test assets stay in gitignored `fourd/testdata/` (local testing only, never
 redistributed; IP-flagged assets in the same sources were excluded).
+
+## A227 — everything in the original files (the usual workflow)
+
+Splat support is now EMBEDDED IN moebius.js: `moebius.html` and
+`harness/scratch_moebius.html` load only three.js + moebius.js, exactly as
+before splats existed. The embedded section (end of moebius.js) carries
+fzstd (MIT, 8KB, spz v4 zstd) and the FourDSplats parsers/renderer; the
+canonical copy lives THERE — `fourd/splat_renderer.js` is a marked mirror
+kept for the standalone PoC pages and node tools.
+
+Usual-workflow surface:
+- Layer modal: color slot takes splat files (multi-select = 4D sequence);
+  a per-layer "splat is y-up (skip flip)" checkbox replaces the window
+  flag for y-up-authored files (e.g. PlayCanvas spz).
+- Debug stamp: `splat=<layers>L/<total splats>[dyn]` — a sheet that can't
+  report its splat state can't be used as evidence.
+- `fourd/realscene_tests.js` runs IN CONTEXT: every scene is a layer in
+  scratch_moebius.html (troll 2.5D scene present, real camera path); the
+  saved tiles are real mixed composites.
+
+Conformance ground truth: T14/B1 compare our spz v3/v4 decodes against
+conversions produced by the built nianticlabs REFERENCE CLI
+(testdata/combined_ref.ply, testdata/biker_ref.ply — regenerate with
+`spz_to_ply` from a clone of nianticlabs/spz). Arbitration note: Babylon's
+own combined_SPZv3.ply pair measures cov rel 0.98 against the reference
+while our decode measures 7e-8 — their pair is not a conformance pair.
+Synthetic test fixtures (make_synthetic_*.js) are y-up authored and load
+with flip:false.

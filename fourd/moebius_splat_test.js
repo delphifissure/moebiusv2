@@ -90,7 +90,7 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
     // load the real splat layer
     const nSplats = await page.evaluate(async () => {
         const buf = await (await fetch('test_frame00.splat')).arrayBuffer();
-        const entry = await window._addSplatLayerFromBuffer(buf, 'test_frame00.splat');
+        const entry = await window._addSplatLayerFromBuffer(buf, 'test_frame00.splat', undefined, { flip: false }); // synthetic fixture is y-up authored
         return entry.cloud.frame().n;
     });
     console.log('splat layer loaded: ' + nSplats + ' splats');
@@ -169,7 +169,7 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
         const parts = [];
         for (const f of ['test_frame_00.splat', 'test_frame_06.splat'])
             parts.push({ buffer: await (await fetch(f)).arrayBuffer(), name: f });
-        const entry = await window._addSplatLayerFromBuffer(parts, 'seq-test');
+        const entry = await window._addSplatLayerFromBuffer(parts, 'seq-test', undefined, { flip: false }); // y-up fixture
         const grab = async () => {
             updateCameraAndProjection(); render();
             await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
@@ -197,7 +197,7 @@ function makeSpzV2(points) { // points: [{p:[3], s:[3] linear, q:[w,x,y,z], c:[r
         for (const sl of splatLayers) scene.remove(sl.mesh);
         splatLayers.length = 0;
         const buf = await (await fetch('test_spacetime.ply')).arrayBuffer();
-        const entry = await window._addSplatLayerFromBuffer(buf, 'test_spacetime.ply');
+        const entry = await window._addSplatLayerFromBuffer(buf, 'test_spacetime.ply', undefined, { flip: false }); // y-up fixture
         const grab = async () => {
             updateCameraAndProjection(); render();
             await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));

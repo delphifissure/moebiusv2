@@ -1,3 +1,6 @@
+// MIRROR — the CANONICAL copy of this code is embedded in moebius.js
+// (A227). This file exists only for the standalone PoC pages (splat.html,
+// fourd.html) and node-side tools. Fix bugs in moebius.js FIRST, then sync.
 // fourd/splat_renderer.js — minimal gaussian-splat renderer for the 4D portal PoC.
 //
 // Scope (PoC-honest):
