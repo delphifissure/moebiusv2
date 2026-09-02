@@ -26,14 +26,17 @@ const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const WT = path.resolve(__dirname, '..'), H = __dirname;
-const OUT = path.join(__dirname, 'shots', 'a228');
-const POSES = [['rest', 0, 0], ['a221', 0.100, -0.023], ['sheet2', 0.141, 0.023], ['sheet1', 0.180, 0.008], ['mirror', -0.141, 0.023]];
+const OUT = path.join(__dirname, 'shots', 'a228', process.env.TAG || '');
+const POSES = [['rest', 0, 0], ['a221', 0.100, -0.023], ['sheet2', 0.141, 0.023], ['sheet1', 0.180, 0.008], ['mirror', -0.141, 0.023],
+               ['off1', 0.06, 0.012], ['off2', -0.09, -0.02], ['off3', 0.16, -0.03]];   // off1-3: NOT on any sweep grid
 const Z = 0.199;
 
 (async () => {
     fs.mkdirSync(OUT, { recursive: true });
-    fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png'));
-    fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png'));
+    // IMG=<color>,<depth> TAG=<name>: run another scene (staged as the harness's defaultImg pair, troll restored on exit)
+    if (process.env.IMG) { const [c, d] = process.env.IMG.split(','); fs.copyFileSync(path.resolve(WT, c), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.resolve(WT, d), path.join(H, 'defaultImgDepth.png')); }
+    else { fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); }
+    process.on('exit', () => { try { fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); } catch (e) {} });
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 1500));
     const browser = await chromium.launch({ executablePath: CHROME, headless: true,
@@ -43,7 +46,7 @@ const Z = 0.199;
     const newPage = async () => {
         const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
         page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 160)));
-        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A212 FG pre-tear')) console.log('  [page] ' + t.slice(0, 150)); });
+        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A212 FG pre-tear') || t.includes('[A232]') || t.includes('A232')) console.log('  [page] ' + t.slice(0, 420)); });
         await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
         for (let t = 0; t < 45; t++) {
             const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
@@ -60,7 +63,9 @@ const Z = 0.199;
             if (o.fs) window._frontStop = true;          // A230 arm (FS=1 in the environment)
             if (o.scan) window._vpScan = true;           // a80 viewpoint scan (SCAN=1)
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
-            bgQuickBake = true; buildBackgroundLayer();
+            if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
+            if (o.sweep && o.carve) { window._plugSweepBake(); }   // A232 arm (SWEEP=1): the C arm is the sweep-defined plug
+            else { bgQuickBake = true; buildBackgroundLayer(); }
             isSweeping = true;
             const countAlpha = (below) => {
                 const prevRT = renderer.getRenderTarget();
@@ -105,9 +110,9 @@ const Z = 0.199;
                            total: holes.W * holes.Hh, png: cv.toDataURL('image/png') });
             }
             return out;
-        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH });
         for (const r of res) {
-            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
             console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) +
                 '  plugOnly=' + String(r.plugOnly).padStart(7) + ' (' + (100 * r.plugOnly / r.total).toFixed(1) + '% of frame)' +
                 '  plugSeen=' + String(r.plugSeen).padStart(6));

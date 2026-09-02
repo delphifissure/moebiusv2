@@ -15,7 +15,7 @@ const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const TAG = process.env.TAG || 'troll';
-const OUT = path.join(__dirname, 'shots', 'a231', TAG);
+const OUT = path.join(__dirname, 'shots', 'a231', TAG + (process.env.FLUSH ? '_flush' : ''));
 const Z = 0.199;
 // pose grid across the cone (the user's stamped extremes are |x| 0.18, |y| 0.023 at z 0.199)
 const POSES = [];
@@ -49,6 +49,7 @@ for (const p of [[0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141, 0.023
     }
     const res = await page.evaluate(async (o) => {
         window._rayReproject = true; window._srCapture = true; window._plugCarve = true; window._foldProbe = true;
+        if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
         bgQuickBake = true; buildBackgroundLayer(); isSweeping = true;
         const dbg = window._qbDbg, msk = window._qbMask, cv = window._carveDbg;
         if (!dbg || !msk || !cv) return { err: 'missing debug' };
@@ -59,9 +60,9 @@ for (const p of [[0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141, 0.023
         const gQ = plate.geometry;
         if (plate.userData._fullIdx) gQ.setIndex(plate.userData._fullIdx);
         else if (mediaLayers[0].mesh.geometry.userData._fullIndex) gQ.setIndex(new THREE.BufferAttribute(mediaLayers[0].mesh.geometry.userData._fullIndex.slice(), 1));
-        // texel-ID map: R = x & 255, G = 16 + (x >> 8) + 4 * (y >> 8), B = y & 255  (G >= 16 marks "plate")
+        // texel-ID map: R = x & 255, G = 16 + (x >> 8) + 16 * (y >> 8), B = y & 255  (G >= 16 marks "plate"; x < 4096, y < 3840 — the first cut packed 2 bits and mis-decoded plates wider than 1024)
         const id = new Uint8Array(N * 4);
-        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const o4 = (y * pw + x) * 4; id[o4] = x & 255; id[o4 + 1] = 16 + (x >> 8) + 4 * (y >> 8); id[o4 + 2] = y & 255; id[o4 + 3] = 255; }
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const o4 = (y * pw + x) * 4; id[o4] = x & 255; id[o4 + 1] = 16 + (x >> 8) + 16 * (y >> 8); id[o4 + 2] = y & 255; id[o4 + 3] = 255; }
         const idT = new THREE.DataTexture(id, pw, ph, THREE.RGBAFormat, THREE.UnsignedByteType);
         idT.needsUpdate = true; idT.flipY = false; idT.minFilter = THREE.NearestFilter; idT.magFilter = THREE.NearestFilter; idT.generateMipmaps = false;
         if ('colorSpace' in idT) idT.colorSpace = THREE.NoColorSpace; if ('encoding' in idT) idT.encoding = THREE.LinearEncoding;
@@ -87,7 +88,7 @@ for (const p of [[0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141, 0.023
                 const o4 = i * 4; const a = isFloat ? buf[o4 + 3] : buf[o4 + 3] / 255; if (a < 0.03) continue;
                 const r = isFloat ? Math.round(buf[o4] * 255) : buf[o4], g = isFloat ? Math.round(buf[o4 + 1] * 255) : buf[o4 + 1], b = isFloat ? Math.round(buf[o4 + 2] * 255) : buf[o4 + 2];
                 if (g < 16) continue;                     // foreground (black) or nothing
-                const gg = g - 16; const tx = r + 256 * (gg & 3), ty = b + 256 * (gg >> 2);
+                const gg = g - 16; const tx = r + 256 * (gg & 15), ty = b + 256 * (gg >> 4);
                 if (tx >= pw || ty >= ph) { bad++; continue; }
                 const row = ph - 1 - ty;                  // texture row -> source row
                 vis[row * pw + tx] = 1; n++;
@@ -110,7 +111,7 @@ for (const p of [[0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141, 0.023
         const g = (v) => { const k = Math.max(0, Math.min(255, Math.round(v * 255))); return [k, k, k]; };
         return { pw, ph, N, bad, perPose, nVis, visDem, visNotDem, visCore, nCore, nDem, visCat, catN,
                  png: toPng((i) => vis[i] ? (disocc[i] ? [255, 255, 255] : [255, 60, 60]) : (disocc[i] ? [70, 70, 160] : g(dQ[i] * 0.4))) };
-    }, { poses: POSES, z: Z });
+    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
     fs.writeFileSync(path.join(OUT, 'ever_visible.png'), Buffer.from(res.png.split(',')[1], 'base64'));
     const pc = (a, b) => (100 * a / Math.max(1, b)).toFixed(1) + '%';
