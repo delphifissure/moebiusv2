@@ -20,6 +20,12 @@
 // SAME hole count as with it off (the A228 backdrop exclusion).
 // Composite PNGs per arm/pose -> scratchpad for the user's live pass.
 //   node harness/a228_carve.js
+// Arms (environment): SWEEP=1 sweep-defined plug region (A232) for the C arm;
+//   FLUSH=1 a162 flush exemption (A233) in both arms; HOLE=1 hole-driven
+//   demand (A234) inside the sweep bake; NX=<n> poses across the cone (17
+//   default in the bake; the pad law, Addendum 175, wants ~80 — use a GPU);
+//   COLLAR=1 same-texel collar (A231b); SCAN=1 a80 viewpoint scan;
+//   IMG=<color.png>,<depth.png> TAG=<name> to run another scene.
 'use strict';
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
