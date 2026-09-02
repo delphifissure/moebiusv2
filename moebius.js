@@ -13865,18 +13865,22 @@ function bgBuildBackgroundLayerCore() {
                             if (yp < colTp[x]) colTp[x] = yp; if (yp > colBp[x]) colBp[x] = yp;
                             if (ym < colTm[x]) colTm[x] = ym; if (ym > colBm[x]) colBm[x] = ym;
                         } }
+                    // Audit (window._srCapture): which criterion kept each texel
+                    // (1 demand, 2 collar, 3 rim) + the final plate depth, flipped rows.
+                    const catC = window._srCapture ? new Uint8Array(PNq) : null;
                     for (let y = 0; y < ph; y++) { const dR = (ph-1-y)*pw, sR = y*pw;
                         for (let x = 0; x < pw; x++) { const j = dR+x;
-                            if (distC[j] === 0) { grown[j] = 1; continue; }
+                            if (distC[j] === 0) { grown[j] = 1; if (catC) catC[j] = 1; continue; }
                             const sF = bgShiftPxAt(_lC, plateF[j]);
                             const disp = Math.abs(sF - bgShiftPxAt(_lC, plateQ[sR+x]));
                             const thr = (Math.max(4, Math.ceil(disp)) + 2) * 5;
-                            if (distC[j] <= thr) { grown[j] = 1; continue; }
+                            if (distC[j] <= thr) { grown[j] = 1; if (catC) catC[j] = 2; continue; }
                             const pad = Math.max(4, Math.ceil(Math.abs(sF - sDQ[sR+x]))) + 2;
                             const xp = x + sF, xm = x - sF, yp = y + sF, ym = y - sF;
                             if (xp < rowLp[y] + pad || xp > rowRp[y] - pad || xm < rowLm[y] + pad || xm > rowRm[y] - pad ||
-                                yp < colTp[x] + pad || yp > colBp[x] - pad || ym < colTm[x] + pad || ym > colBm[x] - pad) { grown[j] = 1; nRim++; }
+                                yp < colTp[x] + pad || yp > colBp[x] - pad || ym < colTm[x] + pad || ym > colBm[x] - pad) { grown[j] = 1; nRim++; if (catC) catC[j] = 3; }
                         } }
+                    if (catC) window._carveDbg = { cat: catC, plateF: plateF.slice(), pw, ph };
                     console.log('[QUICK-BAKE] A229 rim demand: ' + nRim + ' border-band texels kept beyond demand + collar');
                     const srcC = gQ.index.array;
                     const gpC = L.mesh.geometry.parameters || {};
