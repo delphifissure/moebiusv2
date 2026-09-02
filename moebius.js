@@ -7372,7 +7372,7 @@ function runFGSubtraction(colorTexture, useColorAlphaForGaps, fgThreshold) {
 // ============================================================================
 // A127: the on-canvas stamp is a BUILD REFERENCE, not a changelog. The full
 // feature list still prints to the console at load; the grid gets the version.
-const MOEBIUS_BUILD = 'v3.13.63-a228';
+const MOEBIUS_BUILD = 'v3.13.64-a229';
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -13822,13 +13822,36 @@ function bgBuildBackgroundLayerCore() {
                             if (x > 0 && distC[i2+pw-1] + 7 < v) v = distC[i2+pw-1] + 7; }
                         distC[i2] = v; }
                     const grown = new Uint8Array(PNq);
+                    // A229 RIM DEMAND. a228's hole diff put EVERY carve-only
+                    // hole on the plate's outer silhouette (slivers 1-4 px wide
+                    // along the rim, one notch at a corner) and none interior:
+                    // the image border is not a cliff in the disocc map, so the
+                    // rim generated no demand and the carve dropped the margin
+                    // the full backstop had been supplying. The rim IS a reveal
+                    // boundary: the FG's border texel renders at the source
+                    // depth dQ, the plug's at the final plateF, and wherever
+                    // those differ the plug rim projects past the FG rim by
+                    // |shiftPx(plateF) - shiftPx(dQ)| at the cone rim — the
+                    // same a102/a104 shift law, in texels, that prices the
+                    // collar. So a border texel is kept iff its texel distance
+                    // to the nearest frame edge is within that displacement
+                    // (a62 pad as for the collar). No new constant, no new
+                    // unit: same LUT, same pad, chamfer units (5 per texel).
+                    let nRim = 0;
                     for (let y = 0; y < ph; y++) { const dR = (ph-1-y)*pw, sR = y*pw;
+                        const dyB = Math.min(y, ph-1-y);
                         for (let x = 0; x < pw; x++) { const j = dR+x;
                             if (distC[j] === 0) { grown[j] = 1; continue; }
-                            const disp = Math.abs(bgShiftPxAt(_lC, plateF[j]) - bgShiftPxAt(_lC, plateQ[sR+x]));
+                            const sF = bgShiftPxAt(_lC, plateF[j]);
+                            const disp = Math.abs(sF - bgShiftPxAt(_lC, plateQ[sR+x]));
                             const thr = (Math.max(4, Math.ceil(disp)) + 2) * 5;
-                            if (distC[j] <= thr) grown[j] = 1;
+                            if (distC[j] <= thr) { grown[j] = 1; continue; }
+                            const distB = 5 * Math.min(dyB, x, pw-1-x);
+                            const dispB = Math.abs(sF - bgShiftPxAt(_lC, dQ[sR+x]));
+                            const thrB = (Math.max(4, Math.ceil(dispB)) + 2) * 5;
+                            if (distB <= thrB) { grown[j] = 1; nRim++; }
                         } }
+                    console.log('[QUICK-BAKE] A229 rim demand: ' + nRim + ' border-band texels kept beyond demand + collar');
                     const srcC = gQ.index.array;
                     const gpC = L.mesh.geometry.parameters || {};
                     const vwC = (gpC.widthSegments || 0) + 1, vhC = (gpC.heightSegments || 0) + 1;
