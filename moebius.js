@@ -13830,26 +13830,52 @@ function bgBuildBackgroundLayerCore() {
                     // the full backstop had been supplying. The rim IS a reveal
                     // boundary: the FG's border texel renders at the source
                     // depth dQ, the plug's at the final plateF, and wherever
-                    // those differ the plug rim projects past the FG rim by
-                    // |shiftPx(plateF) - shiftPx(dQ)| at the cone rim — the
-                    // same a102/a104 shift law, in texels, that prices the
-                    // collar. So a border texel is kept iff its texel distance
-                    // to the nearest frame edge is within that displacement
-                    // (a62 pad as for the collar). No new constant, no new
-                    // unit: same LUT, same pad, chamfer units (5 per texel).
+                    // those differ the plug rim projects past the FG rim.
+                    // Exact law, per row (head moving in x) and per column
+                    // (head moving in y): at the cone rim the untorn FG row y
+                    // covers the screen span [min_j, max_j] of j + s(dQ[j,y])
+                    // (and of j - s(dQ[j,y]) for the opposite head direction),
+                    // s = a102/a104 shiftPx from the LUT, because the FG is a
+                    // continuous sheet across the row. The plug texel k lands
+                    // at k +/- s(plateF[k,y]) and is UNCOVERED iff it lands
+                    // outside that span; a texel whose plateF equals dQ is one
+                    // of the j terms and can never be outside it, so only
+                    // texels the plate moved (flood/clamps) can qualify, and
+                    // they qualify by exactly their own displacement. The a62
+                    // pad rides on the comparison, as on the collar. No new
+                    // constant, no new unit: same LUT, same pad, texels.
+                    // Two earlier cuts are recorded in Addendum 169: comparing
+                    // plug and FG at the same texel against distance-to-border
+                    // left 46 px of specks at the mirror pose; comparing
+                    // against the border texel alone was hole-free but kept
+                    // 90.7% of the plate, because it ignored that FG texel k
+                    // covers the same landing spot as plug texel k.
                     let nRim = 0;
+                    const sDQ = new Float32Array(PNq);
+                    for (let i2 = 0; i2 < PNq; i2++) sDQ[i2] = bgShiftPxAt(_lC, dQ[i2]);
+                    const rowLp = new Float32Array(ph).fill(1e9), rowRp = new Float32Array(ph).fill(-1e9);
+                    const rowLm = new Float32Array(ph).fill(1e9), rowRm = new Float32Array(ph).fill(-1e9);
+                    const colTp = new Float32Array(pw).fill(1e9), colBp = new Float32Array(pw).fill(-1e9);
+                    const colTm = new Float32Array(pw).fill(1e9), colBm = new Float32Array(pw).fill(-1e9);
+                    for (let y = 0; y < ph; y++) { const sR = y*pw;
+                        for (let x = 0; x < pw; x++) { const s = sDQ[sR+x];
+                            const xp = x + s, xm = x - s, yp = y + s, ym = y - s;
+                            if (xp < rowLp[y]) rowLp[y] = xp; if (xp > rowRp[y]) rowRp[y] = xp;
+                            if (xm < rowLm[y]) rowLm[y] = xm; if (xm > rowRm[y]) rowRm[y] = xm;
+                            if (yp < colTp[x]) colTp[x] = yp; if (yp > colBp[x]) colBp[x] = yp;
+                            if (ym < colTm[x]) colTm[x] = ym; if (ym > colBm[x]) colBm[x] = ym;
+                        } }
                     for (let y = 0; y < ph; y++) { const dR = (ph-1-y)*pw, sR = y*pw;
-                        const dyB = Math.min(y, ph-1-y);
                         for (let x = 0; x < pw; x++) { const j = dR+x;
                             if (distC[j] === 0) { grown[j] = 1; continue; }
                             const sF = bgShiftPxAt(_lC, plateF[j]);
                             const disp = Math.abs(sF - bgShiftPxAt(_lC, plateQ[sR+x]));
                             const thr = (Math.max(4, Math.ceil(disp)) + 2) * 5;
                             if (distC[j] <= thr) { grown[j] = 1; continue; }
-                            const distB = 5 * Math.min(dyB, x, pw-1-x);
-                            const dispB = Math.abs(sF - bgShiftPxAt(_lC, dQ[sR+x]));
-                            const thrB = (Math.max(4, Math.ceil(dispB)) + 2) * 5;
-                            if (distB <= thrB) { grown[j] = 1; nRim++; }
+                            const pad = Math.max(4, Math.ceil(Math.abs(sF - sDQ[sR+x]))) + 2;
+                            const xp = x + sF, xm = x - sF, yp = y + sF, ym = y - sF;
+                            if (xp < rowLp[y] + pad || xp > rowRp[y] - pad || xm < rowLm[y] + pad || xm > rowRm[y] - pad ||
+                                yp < colTp[x] + pad || yp > colBp[x] - pad || ym < colTm[x] + pad || ym > colBm[x] - pad) { grown[j] = 1; nRim++; }
                         } }
                     console.log('[QUICK-BAKE] A229 rim demand: ' + nRim + ' border-band texels kept beyond demand + collar');
                     const srcC = gQ.index.array;
