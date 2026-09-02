@@ -7432,10 +7432,60 @@ window._plugVisibilitySweep = function (opts) {
     const poses = opts.poses || [];
     if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * (2 * ix / (NX - 1) - 1), ex * asp * (2 * iy / (NY - 1) - 1)]);
     const seen = new Uint8Array(N); let bad = 0, nPix = 0;
+    // A234: hole -> covering texel. Needs the final plate depths and the demand
+    // mask (captured by the bake under _plugSweepCapture) and the shift LUT.
+    const wantHoles = !!opts.holeDemand && window._qbPlateF && window._qbDisocc;
+    const holeTex = wantHoles ? new Uint8Array(N) : null; let holeIn = 0, holeOut = 0, holeNoCal = 0;
+    let farAt = null, lutS = null;
+    if (wantHoles) {
+        lutS = bgShiftLUTFor(pw, ph);
+        // nearest demand texel's plate depth, per texel (source rows): BFS from the demand set
+        farAt = new Float32Array(N).fill(-1); const qb = new Int32Array(N); let qh = 0, qt = 0;
+        const dis = window._qbDisocc, pF = window._qbPlateF;
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (dis[i]) { farAt[i] = pF[(ph - 1 - y) * pw + x]; qb[qt++] = i; } }
+        while (qh < qt) { const i = qb[qh++]; const x = i % pw, y = (i / pw) | 0; const v = farAt[i];
+            if (x > 0 && farAt[i - 1] < 0) { farAt[i - 1] = v; qb[qt++] = i - 1; } if (x < pw - 1 && farAt[i + 1] < 0) { farAt[i + 1] = v; qb[qt++] = i + 1; }
+            if (y > 0 && farAt[i - pw] < 0) { farAt[i - pw] = v; qb[qt++] = i - pw; } if (y < ph - 1 && farAt[i + pw] < 0) { farAt[i + pw] = v; qb[qt++] = i + pw; } }
+    }
+    const sxT = plateScrW / pw, syT = plateScrH / ph;                        // texel -> screen px at rest
     for (const [x, y] of poses) {
         camera.position.set(x, y, z0); shoot();
+        // self-calibration of the shift law at this pose from the decoded plate pixels:
+        // screen displacement from the rest position vs LUT shift of the texel's own plate depth
+        let cxN = 0, cxD = 0, cyN = 0, cyD = 0;
+        if (wantHoles) {
+            const pF = window._qbPlateF;
+            for (let i = 0; i < W * Hh; i += 3) {
+                const o4 = i * 4; const a = isFloat ? buf[o4 + 3] : buf[o4 + 3] / 255; if (a < 0.03) continue;
+                const g = isFloat ? Math.round(buf[o4 + 1] * 255) : buf[o4 + 1]; if (g < 16) continue;
+                const r = isFloat ? Math.round(buf[o4] * 255) : buf[o4], b = isFloat ? Math.round(buf[o4 + 2] * 255) : buf[o4 + 2];
+                const gg = g - 16; const tx = r + 256 * (gg & 15), ty = b + 256 * (gg >> 4); if (tx >= pw || ty >= ph) continue;
+                const sTex = bgShiftPxAt(lutS, pF[ty * pw + tx]); if (Math.abs(sTex) < 1) continue;
+                const px = i % W, py = (i / W) | 0;
+                const dx = px - (bx0 + (tx + 0.5) * sxT), dy = py - (by0 + (ty + 0.5) * syT);
+                cxN += dx * sTex; cxD += sTex * sTex; cyN += dy * sTex; cyD += sTex * sTex;
+            }
+        }
+        const cxK = cxD > 0 ? cxN / cxD : 0, cyK = cyD > 0 ? cyN / cyD : 0;   // screen px per LUT shift unit, this pose
         for (let i = 0; i < W * Hh; i++) {
-            const o4 = i * 4; const a = isFloat ? buf[o4 + 3] : buf[o4 + 3] / 255; if (a < 0.03) continue;
+            const o4 = i * 4; const a = isFloat ? buf[o4 + 3] : buf[o4 + 3] / 255;
+            if (a < 0.03) {
+                if (!wantHoles) continue;
+                if (cxD === 0 && cyD === 0) { holeNoCal++; continue; }
+                // covering texel at the band's far depth: rest texel of this pixel, corrected by the far shift (two fixed-point steps)
+                const px = i % W, py = (i / W) | 0;
+                let tx = (px - bx0) / sxT - 0.5, ty = (py - by0) / syT - 0.5;
+                for (let it = 0; it < 2; it++) {
+                    const txi = Math.max(0, Math.min(pw - 1, Math.round(tx))), tyi = Math.max(0, Math.min(ph - 1, Math.round(ty)));
+                    const d = farAt[(ph - 1 - tyi) * pw + txi]; if (d < 0) break;
+                    const sT = bgShiftPxAt(lutS, d);
+                    tx = (px - cxK * sT - bx0) / sxT - 0.5; ty = (py - cyK * sT - by0) / syT - 0.5;
+                }
+                const txr = Math.round(tx), tyr = Math.round(ty);
+                if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) { holeOut++; continue; }
+                holeTex[(ph - 1 - tyr) * pw + txr] = 1; holeIn++;
+                continue;
+            }
             const r = isFloat ? Math.round(buf[o4] * 255) : buf[o4], g = isFloat ? Math.round(buf[o4 + 1] * 255) : buf[o4 + 1], b = isFloat ? Math.round(buf[o4 + 2] * 255) : buf[o4 + 2];
             if (g < 16) continue;
             const gg = g - 16; const tx = r + 256 * (gg & 15), ty = b + 256 * (gg >> 4);
@@ -7449,7 +7499,7 @@ window._plugVisibilitySweep = function (opts) {
     camera.position.copy(cam0); updateCameraAndProjection();
     if (sweepWas !== undefined) isSweeping = sweepWas;
     let nSeen = 0; for (let i = 0; i < N; i++) nSeen += seen[i];
-    return { seen, pw, ph, N, nSeen, bad, nPix, poses: poses.length, minif, plateScrW, plateScrH, ex };
+    return { seen, pw, ph, N, nSeen, bad, nPix, poses: poses.length, minif, plateScrW, plateScrH, ex, holeTex, holeIn, holeOut, holeNoCal };
 };
 window._plugSweepBake = function (opts) {
     // REGION ONLY. A first cut (Addendum 173) also joined the seen set to the
@@ -7466,9 +7516,24 @@ window._plugSweepBake = function (opts) {
     const t0 = Date.now();
     window._plugCarve = false; window._plugRegion = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
-    bgQuickBake = true; buildBackgroundLayer();                       // pass 1: the full backstop (content final)
-    const s1 = window._plugVisibilitySweep(opts);
+    window._extraDemand = null;
+    bgQuickBake = true; buildBackgroundLayer();                       // pass 1: the full backstop
+    let s1 = window._plugVisibilitySweep(opts);
     if (!s1) { console.warn('[A232] sweep unavailable'); return null; }
+    let holeStats = null;
+    if (opts.holeDemand && s1.holeTex) {
+        // A234: the uncovered pixels name the texels that must take the far fill
+        const { pw: pw0, ph: ph0 } = s1; const N0 = pw0 * ph0;
+        const extra = new Uint8Array(N0); let nE = 0;
+        for (let y = 0; y < ph0; y++) for (let x = 0; x < pw0; x++) { const i = y * pw0 + x; if (!s1.holeTex[i]) continue;
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= pw0 || yy >= ph0) continue; const j = yy * pw0 + xx; if (!extra[j]) { extra[j] = 1; nE++; } } }
+        holeStats = { pass1HoleIn: s1.holeIn, pass1HoleOut: s1.holeOut, noCal: s1.holeNoCal, extraTex: nE };
+        window._extraDemand = extra;
+        bgQuickBake = true; buildBackgroundLayer();                   // pass 1b: with the hole-driven demand
+        const s1b = window._plugVisibilitySweep(opts);                // re-measure: holes should be ~0, region from this plate
+        if (s1b) { holeStats.pass2HoleIn = s1b.holeIn; holeStats.pass2HoleOut = s1b.holeOut; holeStats.seen1 = s1.nSeen; s1 = s1b; }
+        console.log('[A234] hole-driven demand: pass-1 holes in-frame ' + holeStats.pass1HoleIn + ' px (outpaint ' + holeStats.pass1HoleOut + ', uncalibrated ' + holeStats.noCal + ') -> ' + nE + ' texels joined the demand; after rebake holes in-frame ' + holeStats.pass2HoleIn + ' px (outpaint ' + holeStats.pass2HoleOut + '); seen ' + holeStats.seen1 + ' -> ' + s1.nSeen);
+    }
     const { pw, ph, N } = s1; const torn = window._qbTorn || null;
     const seenF = new Uint8Array(N); let nRev = 0, nPin = 0;
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.seen[i]) continue; const f = (ph - 1 - y) * pw + x; seenF[f] = 1; if (torn && torn[f]) nPin++; else nRev++; }
@@ -7488,7 +7553,7 @@ window._plugSweepBake = function (opts) {
     for (let i = 0; i < N; i++) if (dist[i] <= padTex * 5) { region[i] = 1; nReg++; }
     window._plugRegion = region; window._plugCarve = true;
     bgQuickBake = true; buildBackgroundLayer();                       // pass 2: the same plate, carved to the region
-    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, ex: s1.ex, bad1: s1.bad, seen: s1.nSeen, reveal: nRev, pinhole: nPin, region: nReg, flush: !!opts.flush, ms: Date.now() - t0 };
+    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, ex: s1.ex, bad1: s1.bad, seen: s1.nSeen, reveal: nRev, pinhole: nPin, region: nReg, flush: !!opts.flush, holes: holeStats, ms: Date.now() - t0 };
     console.log('[A232] sweep plug' + (opts.flush ? ' (flush-exempt plate)' : '') + ': ' + s1.poses + ' poses to |ex| ' + s1.ex.toFixed(3) + ', plate ' + pw + 'x' + ph + ' sampled at 1:' + s1.minif +
         '; seen ' + s1.nSeen + ' texels (' + (100 * s1.nSeen / N).toFixed(1) + '%) = reveals ' + nRev + ' + pinholes ' + nPin +
         '; region (pad ' + padTex + ') ' + nReg + ' (' + (100 * nReg / N).toFixed(1) + '%); ' + stats.ms + 'ms');
@@ -12575,6 +12640,19 @@ function bgBuildBackgroundLayerCore() {
                 if (addedC) console.log('[DIR-PLATE] ink-adjacency closure: +' + addedC + 'px of silhouette ink joined the SD region');
             }
             window._qbSize = { pw, ph };   // A232: plate texture size for the visibility sweep
+            // A234 HOLE-DRIVEN DEMAND (window._extraDemand, source rows). Set by
+            // window._plugSweepBake({holeDemand:true}) from the UNCOVERED pixels
+            // of a visibility sweep: for each hole the plate texel that would
+            // cover it at the band's far depth (one inverse shift away). Those
+            // texels join the demand and take the far fill. Unlike the seen-set
+            // join (Addendum 173, removed) this cannot run away: a texel moved
+            // to the far fill closes holes and opens none. null = no effect.
+            if (window._extraDemand && window._extraDemand.length === PNq) {
+                let nX = 0; const ex = window._extraDemand;
+                for (let i = 0; i < PNq; i++) if (ex[i] && !disocc[i]) { disocc[i] = 1; nD++; nX++; }
+                console.log('[QUICK-BAKE] A234 hole-driven demand: +' + nX + ' texels that cover measured holes at the far depth joined the demand (' + (100 * nX / PNq).toFixed(2) + '% of plate)');
+            }
+            if (window._plugSweepCapture) window._qbDisocc = disocc.slice();
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
@@ -13952,6 +14030,7 @@ function bgBuildBackgroundLayerCore() {
             // backstop (a216) is the default until the carve is verified
             // hole-free on their screen; window._plugCarve = true + rebake
             // re-enables it for that verification.
+            if (window._plugSweepCapture) window._qbPlateF = plateF;   // A234: final plate depths (flipped rows) for the sweep's inverse shift (captured whether or not the carve runs)
             if (window._plugCarve === true) {
                 try {
                     const _t0C = Date.now();

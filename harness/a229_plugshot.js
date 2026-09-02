@@ -22,7 +22,7 @@ const Z = 0.199;
                '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     for (const carve of [false, true]) {
         const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
-        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A229') || t.includes('A232')) console.log('  [page] ' + t.slice(0, 420)); });
+        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A229') || t.includes('A232') || t.includes('A234')) console.log('  [page] ' + t.slice(0, 420)); });
         await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
         for (let t = 0; t < 45; t++) {
             const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
@@ -35,7 +35,7 @@ const Z = 0.199;
             if (o.scan) window._vpScan = true;           // a80 scan (SCAN=1)
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
             if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
-            if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush }); } else { bgQuickBake = true; buildBackgroundLayer(); }   // A232 arm (SWEEP=1)
+            if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush, holeDemand: !!o.hole, nx: o.nx || undefined }); } else { bgQuickBake = true; buildBackgroundLayer(); }   // A232 arm (SWEEP=1)
             isSweeping = true;
             const out = {};
             for (const L of mediaLayers) if (L.mesh) L.mesh.visible = false;
@@ -65,9 +65,9 @@ const Z = 0.199;
             }
             for (const L of mediaLayers) if (L.mesh) L.mesh.visible = true;
             return out;
-        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, nx: process.env.NX ? parseInt(process.env.NX) : 0 });
         for (const [name] of POSES) {
-            const f = path.join(OUT, (carve ? 'carve' : 'default') + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + '_plugonly_' + name + '.png');
+            const f = path.join(OUT, (carve ? 'carve' : 'default') + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + '_plugonly_' + name + '.png');
             fs.writeFileSync(f, Buffer.from(res[name].split(',')[1], 'base64'));
             console.log('wrote ' + f);
         }
