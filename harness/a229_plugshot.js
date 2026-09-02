@@ -31,6 +31,8 @@ const Z = 0.199;
         const res = await page.evaluate(async (o) => {
             window._rayReproject = true;
             if (o.carve) window._plugCarve = true;
+            if (o.fs) window._frontStop = true;          // A230 arm (FS=1)
+            if (o.scan) window._vpScan = true;           // a80 scan (SCAN=1)
             bgQuickBake = true; buildBackgroundLayer(); isSweeping = true;
             const out = {};
             for (const L of mediaLayers) if (L.mesh) L.mesh.visible = false;
@@ -60,9 +62,9 @@ const Z = 0.199;
             }
             for (const L of mediaLayers) if (L.mesh) L.mesh.visible = true;
             return out;
-        }, { carve, poses: POSES, z: Z });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN });
         for (const [name] of POSES) {
-            const f = path.join(OUT, (carve ? 'carve' : 'default') + '_plugonly_' + name + '.png');
+            const f = path.join(OUT, (carve ? 'carve' : 'default') + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + '_plugonly_' + name + '.png');
             fs.writeFileSync(f, Buffer.from(res[name].split(',')[1], 'base64'));
             console.log('wrote ' + f);
         }

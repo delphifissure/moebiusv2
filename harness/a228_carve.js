@@ -57,6 +57,8 @@ const Z = 0.199;
         const res = await page.evaluate(async (o) => {
             window._rayReproject = true;
             if (o.carve) window._plugCarve = true;
+            if (o.fs) window._frontStop = true;          // A230 arm (FS=1 in the environment)
+            if (o.scan) window._vpScan = true;           // a80 viewpoint scan (SCAN=1)
             bgQuickBake = true; buildBackgroundLayer();
             isSweeping = true;
             const countAlpha = (below) => {
@@ -102,9 +104,9 @@ const Z = 0.199;
                            total: holes.W * holes.Hh, png: cv.toDataURL('image/png') });
             }
             return out;
-        }, { carve, poses: POSES, z: Z });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN });
         for (const r of res) {
-            fs.writeFileSync(path.join(OUT, tag + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
             console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) +
                 '  plugOnly=' + String(r.plugOnly).padStart(7) + ' (' + (100 * r.plugOnly / r.total).toFixed(1) + '% of frame)' +
                 '  plugSeen=' + String(r.plugSeen).padStart(6));

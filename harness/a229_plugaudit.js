@@ -20,7 +20,9 @@ const H = __dirname, WT = path.resolve(__dirname, '..');
 // Other scenes: IMG=<color.png>,<depth.png> TAG=<name>  (files are staged as
 // the harness's defaultImg pair for the run and the troll pair restored after)
 const TAG = process.env.TAG || 'troll';
-const OUT = path.join(__dirname, 'shots', 'a229', TAG === 'troll' ? '' : TAG);
+// ARM=fs -> window._frontStop (A230); ARM=fsscan -> front-stop + a80 viewpoint scan
+const ARM = process.env.ARM || 'base';
+const OUT = path.join(__dirname, 'shots', 'a229', (TAG === 'troll' ? '' : TAG) + (ARM === 'base' ? '' : (TAG === 'troll' ? 'troll_' : '_') + ARM));
 
 (async () => {
     fs.mkdirSync(OUT, { recursive: true });
@@ -47,13 +49,37 @@ const OUT = path.join(__dirname, 'shots', 'a229', TAG === 'troll' ? '' : TAG);
         const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
         if (ok) break; await new Promise(r2 => setTimeout(r2, 1000));
     }
-    const res = await page.evaluate(async () => {
-        window._rayReproject = true; window._plugCarve = true; window._srCapture = true;
+    const res = await page.evaluate(async (o) => {
+        window._rayReproject = true; window._plugCarve = true; window._srCapture = true; window._foldProbe = true;
+        if (o.arm === 'fs' || o.arm === 'fsscan') window._frontStop = true;
+        if (o.arm === 'fsscan') window._vpScan = true;
         bgQuickBake = true; buildBackgroundLayer(); isSweeping = true;
-        const dbg = window._qbDbg, msk = window._qbMask, cv = window._carveDbg;
+        const dbg = window._qbDbg, msk = window._qbMask, cv = window._carveDbg, fp = window._fpData;
         if (!dbg || !msk || !cv) return { err: 'missing debug: ' + [!!dbg, !!msk, !!cv] };
         const { pw, ph } = cv; const N = pw * ph;
         const dQ = dbg.d, plateQ = dbg.plate, disocc = msk.disocc, cat = cv.cat, plateF = cv.plateF;
+        // A62 PROBE: how did the plate under the unreached cores come to be?
+        // Near cores = source depth above the 90th percentile and not demand.
+        let probe = null;
+        if (fp && fp.P && fp.P.length === N) {
+            const sorted = Float32Array.from(dQ).sort(); const q90 = sorted[Math.floor(0.9 * (N - 1))];
+            const acc = (m) => { let n = 0, g = 0, cl = 0, fo = 0, sAv = 0, sP = 0, sD = 0, sQ = 0, nCl = 0;
+                for (let i = 0; i < N; i++) { if (!m(i)) continue; n++; if (fp.ground && fp.ground[i]) g++; if (fp.claimedF[i]) { cl++; sAv += fp.carAv[i]; nCl++; } if (fp.foldF[i]) fo++; sP += fp.P[i]; sD += dQ[i]; sQ += plateQ[i]; }
+                return { n, groundPct: n ? 100 * g / n : 0, claimedPct: n ? 100 * cl / n : 0, foldPct: n ? 100 * fo / n : 0, meanAnchor: nCl ? sAv / nCl : -1, meanP: n ? sP / n : -1, meanSrc: n ? sD / n : -1, meanPlateQ: n ? sQ / n : -1 }; };
+            let gAll = 0; if (fp.ground) for (let i = 0; i < N; i++) if (fp.ground[i]) gAll++;
+            // runaway / pit indicator: a62-ground texels claimed by OBJECT fronts, and how far below source they went
+            let gClaimObj = 0, gDrop = 0, nDis = 0, sup = 0;
+            for (let i = 0; i < N; i++) { if (disocc[i]) nDis++; if (window._fpSupport && window._fpSupport[i]) sup++;
+                if (fp.ground && fp.ground[i] && fp.claimedF[i] && !fp.foldF[i]) { gClaimObj++; gDrop += dQ[i] - fp.P[i]; } }
+            // background reference: median source depth of the far half (source below median), for the "reached background?" question
+            const medFar = sorted[Math.floor(0.25 * (N - 1))];
+            probe = { q90, groundAllPct: 100 * gAll / N, supportPct: 100 * sup / N, demandPct: 100 * nDis / N, medFar,
+                      groundClaimedByObjPct: gAll ? 100 * gClaimObj / gAll : 0, groundClaimedMeanDrop: gClaimObj ? gDrop / gClaimObj : 0,
+                      cores: acc((i) => dQ[i] >= q90 && !disocc[i]),
+                      nearAll: acc((i) => dQ[i] >= q90),
+                      nearBand: acc((i) => dQ[i] >= q90 && disocc[i]),
+                      tearStep: fp.tearStep };
+        }
         const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
         // stats per category (cat is flipped-row; dQ/plateQ/disocc are source-row)
         const cnt = [0, 0, 0, 0], clone = [0, 0, 0, 0], departed = [0, 0, 0, 0];
@@ -144,7 +170,8 @@ const OUT = path.join(__dirname, 'shots', 'a229', TAG === 'troll' ? '' : TAG);
         }
         return {
             pw, ph, q, cnt, cloneN: clone, departed, nCore, coreKept, coreKeptClone, coreDropped, nCore2, nComp, nRamp, rampTex, TS,
-            comps: compInfo.slice(0, 12), hasGround: !!gr, nNonGround, nObjCore, nObjBand, objComps: objComps.slice(0, 10),
+            comps: compInfo.slice(0, 12), hasGround: !!gr, nNonGround, nObjCore, nObjBand, objComps: objComps.slice(0, 10), probe,
+            a62ground: (fp && fp.ground) ? toPng((x, y) => { const i = S(x, y); return fp.ground[i] ? [40, 160, 40] : fp.claimedF[i] ? (fp.foldF[i] ? [255, 160, 0] : [60, 120, 255]) : g(dQ[i] * 0.6); }) : null,
             a62: gr ? toPng((x, y) => { const i = S(x, y); return !gr[i] && !disocc[i] ? [0, 220, 255] : disocc[i] ? [255, 255, 255] : g(dQ[i] * 0.5); }) : null,
             core: toPng((x, y) => core[S(x, y)] ? [0, 220, 255] : disocc[S(x, y)] ? [255, 255, 255] : g(dQ[S(x, y)] * 0.5)),
             core2: toPng((x, y) => core2[S(x, y)] ? [0, 220, 255] : (lab[S(x, y)] >= 0 ? [255, 120, 0] : disocc[S(x, y)] ? [255, 255, 255] : g(dQ[S(x, y)] * 0.5))),
@@ -155,7 +182,7 @@ const OUT = path.join(__dirname, 'shots', 'a229', TAG === 'troll' ? '' : TAG);
             clone: toPng((x, y) => { const c = cat[F(x, y)]; if (!c) return [0, 0, 0]; return Math.abs(plateF[F(x, y)] - dQ[S(x, y)]) <= q ? [255, 220, 0] : [90, 90, 90]; }),
             disocc: toPng((x, y) => disocc[S(x, y)] ? [255, 255, 255] : [0, 0, 0]),
         };
-    });
+    }, { arm: ARM });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
     for (const k of ['src', 'plate', 'diff', 'cat', 'clone', 'disocc', 'core', 'core2'])
         fs.writeFileSync(path.join(OUT, 'audit_' + (k === 'src' ? 'depth_src' : k === 'plate' ? 'depth_plate' : k === 'diff' ? 'depth_diff' : k) + '.png'), Buffer.from(res[k].split(',')[1], 'base64'));
@@ -178,5 +205,16 @@ const OUT = path.join(__dirname, 'shots', 'a229', TAG === 'troll' ? '' : TAG);
             ' + UNREACHED OBJECT CORE ' + res.nObjCore + ' (' + (100 * res.nObjCore / N).toFixed(1) + '% of plate)');
         for (const c of res.objComps) console.log('   a62core ' + String(c.n).padStart(7) + ' texels  x ' + c.bx0 + '-' + c.bx1 + '  y ' + c.by0 + '-' + c.by1);
     } else console.log('A62 FOOTPRINT: no ground mask captured');
+    if (res.probe) {
+        if (res.a62ground) fs.writeFileSync(path.join(OUT, 'audit_a62ground.png'), Buffer.from(res.a62ground.split(',')[1], 'base64'));
+        const p = res.probe, f = (o) => 'n=' + o.n + ' ground ' + o.groundPct.toFixed(1) + '% claimed ' + o.claimedPct.toFixed(1) + '% fold ' + o.foldPct.toFixed(1) +
+            '% | src ' + o.meanSrc.toFixed(3) + ' plateQ ' + o.meanPlateQ.toFixed(3) + ' P ' + o.meanP.toFixed(3) + ' anchor ' + o.meanAnchor.toFixed(3);
+        console.log('A62 PROBE [' + ARM + ']: ground ' + p.groundAllPct.toFixed(1) + '% of plate; support ' + p.supportPct.toFixed(1) + '%; demand ' + p.demandPct.toFixed(1) +
+            '%; tearStep ' + p.tearStep + '; q90 depth ' + p.q90.toFixed(3) + '; far-quartile depth ' + p.medFar.toFixed(3) +
+            '; a62-ground claimed by object fronts ' + p.groundClaimedByObjPct.toFixed(2) + '% (mean drop ' + p.groundClaimedMeanDrop.toFixed(3) + ')');
+        console.log('   near ALL   (src>=q90):             ' + f(p.nearAll));
+        console.log('   near CORES (src>=q90, not demand): ' + f(p.cores));
+        console.log('   near BAND  (src>=q90, demand):     ' + f(p.nearBand));
+    }
     await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
