@@ -12455,6 +12455,8 @@ function bgBuildBackgroundLayerCore() {
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
+            let plateFPreSmooth = null;   // A231: plateF after the ordering clamps, before the a126 smoothing (the carve's collar reads this)
+            let plateFPreCross = null;    // A231b: plateF after a135 (same-texel ordering) and BEFORE a162 (cross-texel); window._collarSameTexel selects it for the collar
             if (window._srCapture) { window._qbMask = { disocc: Array.from(disocc), ground: window._dirGroundDbg || null, pw, ph }; }  // A61 audit: post-cliff-gate SD mask (top-down)
             // A58c FLUSH PLUG DEPTH. plateQ is the cone-erosion FLOOR — it
             // takes the farther depth, so it sits TOO FAR BACK inside the
@@ -13572,6 +13574,7 @@ function bgBuildBackgroundLayerCore() {
                     // clamp is conservative in the only direction that is safe.
                     //
                     // window._noCrossTexelOrder = true disables it.
+                    plateFPreCross = plateF ? plateF.slice() : null;   // A231b snapshot (see the carve's collar)
                     if (window._noCrossTexelOrder !== true && plateF) {
                         const _t0X = Date.now();
                         const _xl = bgShiftLUTFor(pw, ph);
@@ -13619,6 +13622,16 @@ function bgBuildBackgroundLayerCore() {
                             (Date.now() - _t0X) + 'ms');
                     }
                 }
+                // A231: the carve's collar measures ORDERING-clamp displacement
+                // (a135/a162 — texels moved because they would occlude the
+                // foreground). a126 below is a smoothing of the whole plate
+                // toward a cone envelope; under an unreached occluder core it
+                // lowers the core by up to half the depth range (troll: 0.79 ->
+                // 0.63), and the collar read that as a clamp displacement and
+                // kept the entire core (80,353 of 84,965 near-core texels,
+                // Addendum 170/171). Snapshot here so the collar sees only the
+                // ordering clamps; a126 still runs on the full plate.
+                plateFPreSmooth = plateF ? plateF.slice() : null;
                 // window._legacyPlateTear restores the a87 tear.
                 if (window._legacyPlateTear !== true) {
                     if (plateF) {
@@ -13872,7 +13885,17 @@ function bgBuildBackgroundLayerCore() {
                         for (let x = 0; x < pw; x++) { const j = dR+x;
                             if (distC[j] === 0) { grown[j] = 1; if (catC) catC[j] = 1; continue; }
                             const sF = bgShiftPxAt(_lC, plateF[j]);
-                            const disp = Math.abs(sF - bgShiftPxAt(_lC, plateQ[sR+x]));
+                            // A231: collar against the pre-a126 plate (ordering clamps only).
+                            // A231b (window._collarSameTexel): against the pre-a162 plate —
+                            // a162 pushes every unreached core texel back to the exact bound
+                            // where it lands ON the silhouette's reveal zone (shift(A) =
+                            // shift(B) + dist), so the collar reads a displacement of
+                            // hundreds of px and keeps the whole core; those texels then sit
+                            // NEARER than the band's far plate in the very reveals the band
+                            // serves. Measured arm, not default.
+                            const _pre = (window._collarSameTexel === true && plateFPreCross) ? plateFPreCross : plateFPreSmooth;
+                            const sFc = _pre ? bgShiftPxAt(_lC, _pre[j]) : sF;
+                            const disp = Math.abs(sFc - bgShiftPxAt(_lC, plateQ[sR+x]));
                             const thr = (Math.max(4, Math.ceil(disp)) + 2) * 5;
                             if (distC[j] <= thr) { grown[j] = 1; if (catC) catC[j] = 2; continue; }
                             const pad = Math.max(4, Math.ceil(Math.abs(sF - sDQ[sR+x]))) + 2;

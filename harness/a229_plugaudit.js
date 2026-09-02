@@ -53,6 +53,7 @@ const OUT = path.join(__dirname, 'shots', 'a229', (TAG === 'troll' ? '' : TAG) +
         window._rayReproject = true; window._plugCarve = true; window._srCapture = true; window._foldProbe = true;
         if (o.arm === 'fs' || o.arm === 'fsscan') window._frontStop = true;
         if (o.arm === 'fsscan') window._vpScan = true;
+        if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
         bgQuickBake = true; buildBackgroundLayer(); isSweeping = true;
         const dbg = window._qbDbg, msk = window._qbMask, cv = window._carveDbg, fp = window._fpData;
         if (!dbg || !msk || !cv) return { err: 'missing debug: ' + [!!dbg, !!msk, !!cv] };
@@ -182,7 +183,7 @@ const OUT = path.join(__dirname, 'shots', 'a229', (TAG === 'troll' ? '' : TAG) +
             clone: toPng((x, y) => { const c = cat[F(x, y)]; if (!c) return [0, 0, 0]; return Math.abs(plateF[F(x, y)] - dQ[S(x, y)]) <= q ? [255, 220, 0] : [90, 90, 90]; }),
             disocc: toPng((x, y) => disocc[S(x, y)] ? [255, 255, 255] : [0, 0, 0]),
         };
-    }, { arm: ARM });
+    }, { arm: ARM, collar: !!process.env.COLLAR });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
     for (const k of ['src', 'plate', 'diff', 'cat', 'clone', 'disocc', 'core', 'core2'])
         fs.writeFileSync(path.join(OUT, 'audit_' + (k === 'src' ? 'depth_src' : k === 'plate' ? 'depth_plate' : k === 'diff' ? 'depth_diff' : k) + '.png'), Buffer.from(res[k].split(',')[1], 'base64'));
