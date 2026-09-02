@@ -64,7 +64,7 @@ const Z = 0.199;
             if (o.scan) window._vpScan = true;           // a80 viewpoint scan (SCAN=1)
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
             if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
-            if (o.sweep && o.carve) { window._plugSweepBake(); }   // A232 arm (SWEEP=1): the C arm is the sweep-defined plug
+            if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush }); }   // A232 arm (SWEEP=1): the C arm is the sweep-defined plug
             else { bgQuickBake = true; buildBackgroundLayer(); }
             isSweeping = true;
             const countAlpha = (below) => {

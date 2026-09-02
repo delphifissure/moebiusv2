@@ -7381,10 +7381,9 @@ const MOEBIUS_BUILD = 'v3.13.65-a232';
 // texel-ID colour map and the foreground a black one, render a grid of eye
 // poses across the view cone, decode the ID of every pixel where the plate
 // reaches the screen, union. The union is the renderer's own answer, with
-// every clamp and tear included. Then bake again with (a) that set minus the
-// torn footprint joined to the DEMAND (reveals carry the far continuation;
-// pinholes keep the source clone) and (b) that set, dilated by the sampling
-// ratio plus the a62 pad, as the plug REGION the carve keeps. Every number
+// every clamp and tear included. Then bake again with that set, dilated by
+// the sampling ratio plus the a62 pad, as the plug REGION the carve keeps
+// (the plate's CONTENT is not changed by the measurement). Every number
 // is an existing one: the fade-end angle for the cone, the a62 pad, the
 // chamfer (5,7)/5 (Borgefors 1986); the pose grid is 17x5 (an instrument
 // choice, reported with the result, not a physical constant).
@@ -7453,15 +7452,26 @@ window._plugVisibilitySweep = function (opts) {
     return { seen, pw, ph, N, nSeen, bad, nPix, poses: poses.length, minif, plateScrW, plateScrH, ex };
 };
 window._plugSweepBake = function (opts) {
+    // REGION ONLY. A first cut (Addendum 173) also joined the seen set to the
+    // DEMAND and iterated: lowering a texel's plate depth makes it lag the
+    // foreground more, so more plate comes into view, so more demand — the
+    // seen set grew 214,722 -> 256,598 in two passes with no sign of
+    // converging, ground pinholes reclassified as reveals rendered as wash,
+    // and holes did not close (+305 px at the mirror pose). Removed (rule 7).
+    // The region is measured on a plate whose CONTENT does not change with
+    // the measurement: the shipped clamps, optionally with the A233 flush
+    // exemption (opts.flush) which keeps foreground-surface texels moving
+    // with the foreground instead of surfacing in the reveals.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._extraDemand = null; window._plugRegion = null; window._plugSweepCapture = true;
-    bgQuickBake = true; buildBackgroundLayer();                       // pass 1: the full backstop
+    window._plugCarve = false; window._plugRegion = null; window._plugSweepCapture = true;
+    if (opts.flush) window._plateFlushExempt = true;
+    bgQuickBake = true; buildBackgroundLayer();                       // pass 1: the full backstop (content final)
     const s1 = window._plugVisibilitySweep(opts);
     if (!s1) { console.warn('[A232] sweep unavailable'); return null; }
     const { pw, ph, N } = s1; const torn = window._qbTorn || null;
-    const extra = new Uint8Array(N), seenF = new Uint8Array(N); let nRev = 0, nPin = 0;
-    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.seen[i]) continue; const f = (ph - 1 - y) * pw + x; seenF[f] = 1; if (torn && torn[f]) nPin++; else { extra[i] = 1; nRev++; } }
+    const seenF = new Uint8Array(N); let nRev = 0, nPin = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.seen[i]) continue; const f = (ph - 1 - y) * pw + x; seenF[f] = 1; if (torn && torn[f]) nPin++; else nRev++; }
     // region = seen, dilated by the sampling ratio + the a62 pad (max(4,·)+2 -> 6 texels), chamfer (5,7)/5
     const padTex = s1.minif + 6;
     const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
@@ -7476,44 +7486,12 @@ window._plugSweepBake = function (opts) {
         dist[i] = v; }
     const region = new Uint8Array(N); let nReg = 0;
     for (let i = 0; i < N; i++) if (dist[i] <= padTex * 5) { region[i] = 1; nReg++; }
-    window._extraDemand = extra; window._plugRegion = region; window._plugCarve = true;
-    bgQuickBake = true; buildBackgroundLayer();                       // pass 2: the plug
-    // ITERATE: joining reveals to the demand lowers their plate depth, and a
-    // lower texel parallaxes less, so the set the renderer shows moves. Sweep
-    // the FULL plate again with the pass-2 depths; anything newly seen joins
-    // the region and the demand; rebake. Report the delta (the measure of
-    // convergence), stop when it is below the pad's own reach or after the
-    // requested passes.
-    const iters = Math.max(1, opts.iter || 2);
-    let seenLast = s1.seen, grew = 0, pass = 2;
-    for (let it = 2; it <= iters; it++) {
-        const sN = window._plugVisibilitySweep(opts);                 // full plate, current depths
-        if (!sN) break;
-        let nNew = 0;
-        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!sN.seen[i] || seenLast[i]) continue; const f = (ph - 1 - y) * pw + x;
-            nNew++; seenF[f] = 1; if (!(torn && torn[f])) extra[i] = 1; seenLast[i] = 1; }
-        grew = nNew;
-        if (!nNew) break;
-        // re-dilate from the enlarged seen set
-        dist.fill(INF); for (let i = 0; i < N; i++) if (seenF[i]) dist[i] = 0;
-        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
-            if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
-            if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
-            dist[i] = v; }
-        for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist[i];
-            if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
-            if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
-            dist[i] = v; }
-        nReg = 0; for (let i = 0; i < N; i++) { region[i] = dist[i] <= padTex * 5 ? 1 : 0; nReg += region[i]; }
-        bgQuickBake = true; buildBackgroundLayer(); pass++;
-    }
-    const s2 = window._plugVisibilitySweep(Object.assign({}, opts, { fullPlate: false }));
-    let nSeenAll = 0; for (let i = 0; i < N; i++) nSeenAll += seenLast[i];
-    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, ex: s1.ex, bad1: s1.bad, seen1: s1.nSeen, seenAll: nSeenAll, lastGrowth: grew, passes: pass,
-                    reveal: nRev, pinhole: nPin, region: nReg, seen2: s2 ? s2.nSeen : -1, ms: Date.now() - t0 };
-    console.log('[A232] sweep plug: ' + s1.poses + ' poses to |ex| ' + s1.ex.toFixed(3) + ', plate ' + pw + 'x' + ph + ' sampled at 1:' + s1.minif +
-        '; pass-1 seen ' + s1.nSeen + ' (' + (100 * s1.nSeen / N).toFixed(1) + '%) = reveals ' + nRev + ' + pinholes ' + nPin +
-        '; after ' + pass + ' bakes seen ' + nSeenAll + ' (last growth ' + grew + '); region (pad ' + padTex + ') ' + nReg + ' (' + (100 * nReg / N).toFixed(1) + '%); plug as built seen in ' + (s2 ? s2.nSeen : -1) + '; ' + stats.ms + 'ms');
+    window._plugRegion = region; window._plugCarve = true;
+    bgQuickBake = true; buildBackgroundLayer();                       // pass 2: the same plate, carved to the region
+    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, ex: s1.ex, bad1: s1.bad, seen: s1.nSeen, reveal: nRev, pinhole: nPin, region: nReg, flush: !!opts.flush, ms: Date.now() - t0 };
+    console.log('[A232] sweep plug' + (opts.flush ? ' (flush-exempt plate)' : '') + ': ' + s1.poses + ' poses to |ex| ' + s1.ex.toFixed(3) + ', plate ' + pw + 'x' + ph + ' sampled at 1:' + s1.minif +
+        '; seen ' + s1.nSeen + ' texels (' + (100 * s1.nSeen / N).toFixed(1) + '%) = reveals ' + nRev + ' + pinholes ' + nPin +
+        '; region (pad ' + padTex + ') ' + nReg + ' (' + (100 * nReg / N).toFixed(1) + '%); ' + stats.ms + 'ms');
     window._plugSweepStats = stats;
     return stats;
 };
@@ -12596,21 +12574,7 @@ function bgBuildBackgroundLayerCore() {
                 }
                 if (addedC) console.log('[DIR-PLATE] ink-adjacency closure: +' + addedC + 'px of silhouette ink joined the SD region');
             }
-            // A232 SWEEP-DEFINED DEMAND (window._extraDemand, source rows): the
-            // texels the RENDERER showed the plate in during a cone sweep of the
-            // full backstop, minus the torn footprint (pinholes keep the source
-            // clone). Everything seen is a reveal and must carry the far
-            // continuation: join the demand here so the flush depth fill, the
-            // wash and the SD mask all treat it as behind-the-occluder. The a80
-            // warp scan could only PRUNE the cone-departure set; this is the
-            // renderer's own visibility as the oracle (Addendum 172). Set by
-            // window._plugSweepBake(); null otherwise (no effect).
-            window._qbSize = { pw, ph };
-            if (window._extraDemand && window._extraDemand.length === PNq) {
-                let nX = 0; const ex = window._extraDemand;
-                for (let i = 0; i < PNq; i++) if (ex[i] && !disocc[i]) { disocc[i] = 1; nD++; nX++; }
-                console.log('[QUICK-BAKE] A232 sweep demand: +' + nX + ' texels seen by the renderer outside the cone-departure set joined the demand (' + (100 * nX / PNq).toFixed(1) + '% of plate)');
-            }
+            window._qbSize = { pw, ph };   // A232: plate texture size for the visibility sweep
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }

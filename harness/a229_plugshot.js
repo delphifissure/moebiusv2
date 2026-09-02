@@ -35,7 +35,7 @@ const Z = 0.199;
             if (o.scan) window._vpScan = true;           // a80 scan (SCAN=1)
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
             if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
-            if (o.sweep && o.carve) { window._plugSweepBake(); } else { bgQuickBake = true; buildBackgroundLayer(); }   // A232 arm (SWEEP=1)
+            if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush }); } else { bgQuickBake = true; buildBackgroundLayer(); }   // A232 arm (SWEEP=1)
             isSweeping = true;
             const out = {};
             for (const L of mediaLayers) if (L.mesh) L.mesh.visible = false;
