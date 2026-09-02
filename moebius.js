@@ -7535,28 +7535,39 @@ window._plugSweepBake = function (opts) {
         console.log('[A234] hole-driven demand: pass-1 holes in-frame ' + holeStats.pass1HoleIn + ' px (outpaint ' + holeStats.pass1HoleOut + ', uncalibrated ' + holeStats.noCal + ') -> ' + nE + ' texels joined the demand; after rebake holes in-frame ' + holeStats.pass2HoleIn + ' px (outpaint ' + holeStats.pass2HoleOut + '); seen ' + holeStats.seen1 + ' -> ' + s1.nSeen);
     }
     const { pw, ph, N } = s1; const torn = window._qbTorn || null;
-    const seenF = new Uint8Array(N); let nRev = 0, nPin = 0;
-    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.seen[i]) continue; const f = (ph - 1 - y) * pw + x; seenF[f] = 1; if (torn && torn[f]) nPin++; else nRev++; }
-    // region = seen, dilated by the sampling ratio + the a62 pad (max(4,·)+2 -> 6 texels), chamfer (5,7)/5
-    const padTex = s1.minif + 6;
-    const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
-    for (let i = 0; i < N; i++) if (seenF[i]) dist[i] = 0;
-    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
-        if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
-        if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
-        dist[i] = v; }
-    for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist[i];
-        if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
-        if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
-        dist[i] = v; }
-    const region = new Uint8Array(N); let nReg = 0;
-    for (let i = 0; i < N; i++) if (dist[i] <= padTex * 5) { region[i] = 1; nReg++; }
+    // Two seed classes, two pads (Addendum 175: on bristlecone one pad of
+    // minif+6 around a pinhole dither that covers the foliage made the region
+    // 95% of the plate — a sheet again). REVEALS (seen, not in the torn
+    // footprint) get the sampling ratio + the a62 pad: they are where the
+    // foreground MOVES away and between-pose coverage is the pad's job.
+    // PINHOLES (seen through the foreground's own tears) are covered by the
+    // torn footprint's clone at its own depth and do not move relative to
+    // the foreground: they get the sampling ratio only.
+    const revF = new Uint8Array(N), pinF = new Uint8Array(N); let nRev = 0, nPin = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.seen[i]) continue; const f = (ph - 1 - y) * pw + x; if (torn && torn[f]) { pinF[f] = 1; nPin++; } else { revF[f] = 1; nRev++; } }
+    const padTex = s1.minif + 6, padPin = s1.minif;
+    const chamfer = (seed) => {
+        const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
+        for (let i = 0; i < N; i++) if (seed[i]) dist[i] = 0;
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
+            if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
+            if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
+            dist[i] = v; }
+        for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist[i];
+            if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
+            if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
+            dist[i] = v; }
+        return dist;
+    };
+    const dR = chamfer(revF), dP = chamfer(pinF);
+    const region = new Uint8Array(N); let nReg = 0, nRegR = 0;
+    for (let i = 0; i < N; i++) { const r = dR[i] <= padTex * 5; if (r) nRegR++; if (r || dP[i] <= padPin * 5) { region[i] = 1; nReg++; } }
     window._plugRegion = region; window._plugCarve = true;
     bgQuickBake = true; buildBackgroundLayer();                       // pass 2: the same plate, carved to the region
-    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, ex: s1.ex, bad1: s1.bad, seen: s1.nSeen, reveal: nRev, pinhole: nPin, region: nReg, flush: !!opts.flush, holes: holeStats, ms: Date.now() - t0 };
+    const stats = { pw, ph, poses: s1.poses, minif: s1.minif, padTex, padPin, ex: s1.ex, bad1: s1.bad, seen: s1.nSeen, reveal: nRev, pinhole: nPin, region: nReg, regionReveal: nRegR, flush: !!opts.flush, holes: holeStats, ms: Date.now() - t0 };
     console.log('[A232] sweep plug' + (opts.flush ? ' (flush-exempt plate)' : '') + ': ' + s1.poses + ' poses to |ex| ' + s1.ex.toFixed(3) + ', plate ' + pw + 'x' + ph + ' sampled at 1:' + s1.minif +
         '; seen ' + s1.nSeen + ' texels (' + (100 * s1.nSeen / N).toFixed(1) + '%) = reveals ' + nRev + ' + pinholes ' + nPin +
-        '; region (pad ' + padTex + ') ' + nReg + ' (' + (100 * nReg / N).toFixed(1) + '%); ' + stats.ms + 'ms');
+        '; region ' + nReg + ' (' + (100 * nReg / N).toFixed(1) + '%: reveals+pad ' + padTex + ' -> ' + nRegR + ', pinholes+pad ' + padPin + ' add the rest); ' + stats.ms + 'ms');
     window._plugSweepStats = stats;
     return stats;
 };
