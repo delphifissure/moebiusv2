@@ -14388,7 +14388,7 @@ function bgBuildBackgroundLayerCore() {
             //      was a211's +30.7% ground-speckle failure).
             // No far-match gate is needed: the quick plate is FULL-FRAME
             // opaque, so every hole opens onto baked content (a161).
-            if (window._fragTear === true && L.mesh && L.mesh.material && L.mesh.material.uniforms && L.mesh.material.uniforms.u_fragTear) {
+            if (window._fragTear && L.mesh && L.mesh.material && L.mesh.material.uniforms && L.mesh.material.uniforms.u_fragTear) {
                 // A241: the tear becomes a per-fragment, per-pose test; the mesh stays whole.
                 const fu = L.mesh.material.uniforms;
                 if (L.mesh.geometry.userData._fullIndex && L.mesh.geometry.index.array.length !== L.mesh.geometry.userData._fullIndex.length)
@@ -14427,7 +14427,7 @@ function bgBuildBackgroundLayerCore() {
                 fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
                 console.log('[QUICK-BAKE] A241 per-fragment tear armed: rest density ' + (pw / plateScrPx).toFixed(3) + ' texels/px (plate ' + plateScrPx.toFixed(0) + ' px wide at rest), factor ' + fu.u_fragTearFactor.value + ', gate ' + fu.u_fragTearGate.value + '; the baked A212 tear is skipped');
             }
-            if (fgPreTear && window._fragTear !== true && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
+            if (fgPreTear && !window._fragTear && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                 try {
                     const g = L.mesh.geometry, gp = g.parameters;
                     const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
