@@ -7586,9 +7586,23 @@ window._plugSweepBake = function (opts) {
 //   opts.plateIdx  Uint8Array (flipped rows): 1 = plate texel exists (carved)
 window._plugCpuSweep = function (opts) {
     opts = opts || {};
-    const sz = window._qbSize, dQ = window._qbDQ, pF = window._qbPlateF, torn = window._qbFgTorn;
+    const sz = window._qbSize, dQ = window._qbDQ, pF = window._qbPlateF;
     if (!sz || !dQ || !pF) return null;
     const pw = sz.pw, ph = sz.ph, N = pw * ph;
+    // torn foreground = the A212 scan-gated pre-tear (_qbFgTorn, source rows) UNION the
+    // a160 fold tear whose footprint the plug took (_qbTorn, flipped rows) — both are
+    // holes in the rendered foreground mesh.
+    let torn = null;
+    // 'a212' is the rendered foreground: validated on the troll against the renderer
+    // sweep by covered area (CPU 33.2% vs renderer 32.8% of the plate, 97.7% of the
+    // renderer's seen texels inside the CPU area, 94.6% the other way; the a160 fold
+    // tear is NOT applied to the rendered mesh, only its footprint to the plug, and
+    // including it over-covers by 45%). Other modes are validation arms.
+    const tm = opts.tornMode || 'a212';
+    if (tm !== 'none' && (window._qbFgTorn || window._qbTorn)) {
+        torn = new Uint8Array(N); const a = (tm === 'a160') ? null : window._qbFgTorn, b = (tm === 'a212') ? null : window._qbTorn;
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if ((a && a[i]) || (b && b[(ph - 1 - y) * pw + x])) torn[i] = 1; }
+    }
     const lut = bgShiftLUTFor(pw, ph);
     const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
     const _cz = (camera && camera.position) ? camera.position.z : 0.2;
@@ -7610,6 +7624,13 @@ window._plugCpuSweep = function (opts) {
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
+    // The foreground's fragment shader cuts STRETCHED fragments (uvRate below
+    // bgBandCutStretchFrac of the expected rate, armed for the FG at bake, line
+    // ~13685): a mesh edge stretched beyond 1/bgBandCutStretchFrac texels of
+    // screen per texel is not drawn. Mirror that as a span-length cut; the
+    // shader's second, mask-relative 'torn' test and its dither are not
+    // modelled (validation: harness/a236_cpusweep.js).
+    const cutLen = (opts.noCut ? Infinity : ((typeof bgBandCutStretchFrac === 'number' && bgBandCutStretchFrac > 0) ? 1 / bgBandCutStretchFrac : Infinity));
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
         if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; } };
     const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
@@ -7624,8 +7645,8 @@ window._plugCpuSweep = function (opts) {
             for (let x = 0; x < pw; x++) { const i = r + x; if (torn && torn[i]) continue;
                 const xs = x + sFG[i] * fx, ys = y + sFG[i] * fy, d = dQ[i];
                 splat(xs, ys, d, -2);
-                if (x + 1 < pw && !(torn && torn[i + 1])) span(xs, ys, d, x + 1 + sFG[i + 1] * fx, y + sFG[i + 1] * fy, dQ[i + 1], -2);
-                if (y + 1 < ph && !(torn && torn[i + pw])) span(xs, ys, d, x + sFG[i + pw] * fx, y + 1 + sFG[i + pw] * fy, dQ[i + pw], -2);
+                if (x + 1 < pw && !(torn && torn[i + 1])) { const x1 = x + 1 + sFG[i + 1] * fx, y1 = y + sFG[i + 1] * fy; if (Math.hypot(x1 - xs, y1 - ys) <= cutLen) span(xs, ys, d, x1, y1, dQ[i + 1], -2); }
+                if (y + 1 < ph && !(torn && torn[i + pw])) { const x1 = x + sFG[i + pw] * fx, y1 = y + 1 + sFG[i + pw] * fy; if (Math.hypot(x1 - xs, y1 - ys) <= cutLen) span(xs, ys, d, x1, y1, dQ[i + pw], -2); }
             } }
         // plate: continuous mesh (or the carved subset), behind the foreground on ties
         for (let y = 0; y < ph; y++) { const r = y * pw;
