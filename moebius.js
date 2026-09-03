@@ -7571,6 +7571,94 @@ window._plugSweepBake = function (opts) {
     window._plugSweepStats = stats;
     return stats;
 };
+// ======================================================================
+// A236 CPU VISIBILITY SWEEP — the same question as the renderer sweep, answered
+// in JS with the a104 ray law: every foreground texel (and the spans between
+// untorn neighbours, i.e. its triangles) and every plate texel is warped to
+// the pose's screen cell, nearest wins (ties to the foreground, as the
+// polygon offset does), and a plate texel that owns a cell is SEEN. Seconds
+// per 100 poses on any CPU; validated against the renderer sweep on the
+// troll (harness/a236_cpusweep.js) before being trusted. Needs a bake with
+// window._plugSweepCapture = true (captures dQ, plateF, torn foreground).
+//   opts.poses [[ex,ey]...] world units | opts.nx/ny grid across the cone
+//   opts.scale  screen cell size in texels (the renderer sweep samples at
+//               1:minif; use the same to compare) | opts.sign  ray sign
+//   opts.plateIdx  Uint8Array (flipped rows): 1 = plate texel exists (carved)
+window._plugCpuSweep = function (opts) {
+    opts = opts || {};
+    const sz = window._qbSize, dQ = window._qbDQ, pF = window._qbPlateF, torn = window._qbFgTorn;
+    if (!sz || !dQ || !pF) return null;
+    const pw = sz.pw, ph = sz.ph, N = pw * ph;
+    const lut = bgShiftLUTFor(pw, ph);
+    const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    const _cz = (camera && camera.position) ? camera.position.z : 0.2;
+    const D = Math.max(1e-3, Math.abs(_cz - _pz));
+    const fadeDeg = (typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45;
+    const exRim = D * Math.tan(fadeDeg * Math.PI / 180);
+    const asp = (typeof terrariumHeight === 'number' && typeof terrariumWidth === 'number') ? terrariumHeight / terrariumWidth : 0.5625;
+    const NX = opts.nx || 17, NY = opts.ny || 5;
+    const poses = opts.poses || [];
+    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([exRim * (2 * ix / (NX - 1) - 1), exRim * asp * (2 * iy / (NY - 1) - 1)]);
+    const sc = opts.scale || 1, sign = (opts.sign === undefined) ? -1 : opts.sign;
+    const GW = Math.ceil(pw / sc), GH = Math.ceil(ph / sc), G = GW * GH;
+    const plateIdx = opts.plateIdx || null;
+    // per-texel rim shift (texels), source rows for FG, flipped rows for plate
+    const sFG = new Float32Array(N), sPL = new Float32Array(N);
+    for (let i = 0; i < N; i++) sFG[i] = bgShiftPxAt(lut, dQ[i]);
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) sPL[y * pw + x] = bgShiftPxAt(lut, pF[(ph - 1 - y) * pw + x]);   // source rows
+    const pFs = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pFs[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+    const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
+    const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
+    const t0 = Date.now();
+    const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
+        if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; } };
+    const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
+        const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / sc; const steps = Math.ceil(n);
+        if (steps <= 1) return;
+        for (let k = 1; k < steps; k++) { const t = k / steps; splat(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, d0 + (d1 - d0) * t, id); } };
+    for (const [ex, ey] of poses) {
+        const fx = sign * ex / exRim, fy = sign * ey / exRim;
+        zb.fill(-1e9); own.fill(-1);
+        // foreground: untorn texels + spans to right/down neighbours (the two edges of each quad)
+        for (let y = 0; y < ph; y++) { const r = y * pw;
+            for (let x = 0; x < pw; x++) { const i = r + x; if (torn && torn[i]) continue;
+                const xs = x + sFG[i] * fx, ys = y + sFG[i] * fy, d = dQ[i];
+                splat(xs, ys, d, -2);
+                if (x + 1 < pw && !(torn && torn[i + 1])) span(xs, ys, d, x + 1 + sFG[i + 1] * fx, y + sFG[i + 1] * fy, dQ[i + 1], -2);
+                if (y + 1 < ph && !(torn && torn[i + pw])) span(xs, ys, d, x + sFG[i + pw] * fx, y + 1 + sFG[i + pw] * fy, dQ[i + pw], -2);
+            } }
+        // plate: continuous mesh (or the carved subset), behind the foreground on ties
+        for (let y = 0; y < ph; y++) { const r = y * pw;
+            for (let x = 0; x < pw; x++) { const i = r + x; const f = (ph - 1 - y) * pw + x; if (plateIdx && !plateIdx[f]) continue;
+                const xs = x + sPL[i] * fx, ys = y + sPL[i] * fy, d = pFs[i];
+                splat(xs, ys, d, i);
+                if (x + 1 < pw && !(plateIdx && !plateIdx[f + 1])) span(xs, ys, d, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, pFs[i + 1], i);
+                if (y + 1 < ph && !(plateIdx && !plateIdx[f - pw])) span(xs, ys, d, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, pFs[i + pw], i);
+            } }
+        for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) holeCells++; }
+    }
+    let nSeen = 0; for (let i = 0; i < N; i++) nSeen += seen[i];
+    return { seen, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, ms: Date.now() - t0 };
+};
+// MacBook / any-browser recipe (Addendum 176): load a scene in moebius.html,
+// open the console, then:  window._plugSweepReport({ nx: 33 })
+// -> runs the flush-exempt hole-driven sweep plug at 33x5 poses on the GPU,
+//    prints the stats, and leaves the plug baked; window._plugToggleFG() hides
+//    or shows the foreground so the plug can be looked at on its own.
+window._plugSweepReport = function (opts) {
+    opts = Object.assign({ flush: true, holeDemand: true, nx: 33 }, opts || {});
+    const st = window._plugSweepBake(opts);
+    if (!st) { console.warn('[A232] no bake'); return null; }
+    const N = st.pw * st.ph;
+    console.log('%c[A232] sweep plug report', 'font-weight:bold',
+        '\n  plate ' + st.pw + 'x' + st.ph + ', ' + st.poses + ' poses, sampled 1:' + st.minif + ', flush ' + st.flush +
+        '\n  seen ' + st.seen + ' (' + (100 * st.seen / N).toFixed(1) + '% of plate) = reveals ' + st.reveal + ' + pinholes ' + st.pinhole +
+        '\n  region ' + st.region + ' (' + (100 * st.region / N).toFixed(1) + '%), reveal pad ' + st.padTex + ' / pinhole pad ' + st.padPin +
+        (st.holes ? ('\n  holes in-frame before ' + st.holes.pass1HoleIn + ' px -> after ' + st.holes.pass2HoleIn + ' px; ' + st.holes.extraTex + ' texels joined the demand') : '') +
+        '\n  ' + (st.ms / 1000).toFixed(1) + ' s');
+    return st;
+};
+window._plugToggleFG = function () { const L = mediaLayers && mediaLayers[0]; if (!L || !L.mesh) return; L.mesh.visible = !L.mesh.visible; if (typeof render === 'function') render(); return L.mesh.visible; };
 const MOEBIUS_FEATURES = 'FG-SUB rimdepth v3.13.25-a128 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, detected quantum, derived tie-break) + a90 one cone-slope definition + a91 derived per-cell tear (fold limit T=1) + a93 window floors as fractions + a94 tear at cell diagonal extent + a95 seed lip as reveal width + a96 float plug depth + a97 tie-break scaled to the cone step + a99 float depth ingest (16-bit PNG decode) + a101 per-depth cone slope + a102 EXACT FOLD ENVELOPE (shift/shiftInv, no linearisation) + a103 live portal geometry (pn, D, portal Z) + a104 ONE parallax law (three private copies retired) + a105 derived backstop sweep poses + a106 exact SD-scan warp + a108 angle in the grid stamp + a109 120-degree cone + a111 cap cards paint (unmasked source; rest black 19.8%% -> 0%%) + a112 NEW IMAGE REVERTS TO REALTIME + full bake teardown + a113 EXTENSION MARGIN FROM THE SHIFT ENVELOPE (isotropic; look-up black 9.72%% -> 0.00%%) + a114 the extension is v1-only (quick and v2 return before it) + a115 the bake claims its own depth key (a112 was destroying every non-UI bake) + a117 CLIFF-ONLY FG TEAR (the fold limit dropped 40%% of the mesh and the cap cards painted it as a comb; now 0.5%%, comb 7.91 -> 5.61) + a120 SD GAP MASK FROM COVERAGE NOT EDGE DETECTION (rest-pose claim 14.36%% -> 0.57%%, and it now grows 10.5x across the cone) + a121 ALL-VIEWPOINT SCAN OFF BY DEFAULT (pruned 0px on all four suite assets, cost 2.7s of 10s; quick bake 10.1s -> 6.2s) + a122 THE SD EXPORT-PREVIEW VIEWS RENDERED NOTHING (deprecated stub + a target that was never constructed; now live, synchronous, same predicates as the bundle) + a123 SD BUNDLE EXPORTS COLD (no longer demands you open the Debug Sheet first) + a126 THE PLATE IS SLOPE-LIMITED, NOT TORN (it is the backstop: a hole in it has nothing behind it) + a127 CONE BACK TO 35/45 (the 120deg premise is contradicted by the device LUT in this same file) + a127b k IS PRINTED (568px = 67%% of image width at 45deg; fold limit 0.63 source quanta) + a128 the plate step is named honestly (bgConeSlopePerPx, NOT 1/k, and cone-blind; the fold-correct 1/k measured WORSE at 32-38deg); conservative defaults kept (membrane/row-colours OPT-IN)';
 const MOEBIUS_DEBUG_VERSION = MOEBIUS_BUILD;
 let _dbgExportTarget = null;
@@ -12651,6 +12739,7 @@ function bgBuildBackgroundLayerCore() {
                 if (addedC) console.log('[DIR-PLATE] ink-adjacency closure: +' + addedC + 'px of silhouette ink joined the SD region');
             }
             window._qbSize = { pw, ph };   // A232: plate texture size for the visibility sweep
+            if (window._plugSweepCapture) window._qbDQ = dQ;   // A236: source depth (source rows) for the CPU sweep
             // A234 HOLE-DRIVEN DEMAND (window._extraDemand, source rows). Set by
             // window._plugSweepBake({holeDemand:true}) from the UNCOVERED pixels
             // of a visibility sweep: for each hole the plate texel that would
@@ -14224,6 +14313,7 @@ function bgBuildBackgroundLayerCore() {
                              ? window._qbSrcQuantum : 0;
                     const txA = new Int32Array(3), tyA = new Int32Array(3);
                     let nKeep = 0, nDrop = 0;
+                    const tornFG = window._plugSweepCapture ? new Uint8Array(pw * ph) : null;   // A236: torn foreground texels, source rows
                     for (let t = 0; t < src.length; t += 3) {
                         let mnD = 2, mxD = -1, inScan = false;
                         for (let k = 0; k < 3; k++) {
@@ -14246,8 +14336,9 @@ function bgBuildBackgroundLayerCore() {
                             if (Math.abs(bgShiftPxAt(lutT, mxD) - bgShiftPxAt(lutT, mnD)) > ext) keep = false;
                         }
                         if (keep) { out[nKeep++] = src[t]; out[nKeep++] = src[t+1]; out[nKeep++] = src[t+2]; }
-                        else nDrop++;
+                        else { nDrop++; if (tornFG) for (let k = 0; k < 3; k++) tornFG[tyA[k] * pw + txA[k]] = 1; }
                     }
+                    if (tornFG) window._qbFgTorn = tornFG;
                     g.setIndex(new THREE.BufferAttribute(out.slice(0, nKeep), 1));
                     console.log('[QUICK-BAKE] A212 FG pre-tear: ' + nDrop + ' of ' + (src.length/3|0) +
                         ' triangles torn (a160 fold criterion, scan-gated; every hole is plate-backed)');
