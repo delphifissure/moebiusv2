@@ -13536,7 +13536,16 @@ function bgBuildBackgroundLayerCore() {
             // looks terrible, go back to the wash." Same protocol as a213d:
             // the screen prices the trade, and the blend did not earn the
             // default. window._bandFillBlend = true + rebake re-enables it.
-            if (!plateColorTex && window._bandFillBlend === true) {
+            // A242 MEMBRANE (window._plugMembrane, measured arm; Addendum 179 R3): the same
+            // far-rim, depth-gated domain as A213/A215, but the colour is the solution of
+            // Laplace's equation on it with the rim colours as boundary values (the membrane
+            // of Perez, Gangnet & Blake 2003 with zero guidance; the harmonic case of
+            // Bertalmio et al. 2000) — the smoothest fill with those boundary values, so no
+            // Voronoi stripes (A213d) and no ray streaks (A219), and, because no near-side
+            // texel is on the boundary, no clone. Solved by SOR (Young 1954; Numerical
+            // Recipes 19.5: omega = 2 / (1 + sin(pi / L)), L the domain extent in texels)
+            // to below half an 8-bit step.
+            if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane)) {
                 try {
                     const tBF0 = Date.now();
                     const cImgF = (L.elements && L.elements.color) || L.textures.color.image;
@@ -13600,7 +13609,53 @@ function bgBuildBackgroundLayerCore() {
                     // (|plateQ[i] - plateQ[prev]| <= TOLB) — the same gates
                     // as the BFS, so a scan cannot carry colour through a
                     // cliff. Weights 1/(dist * steplen), Shepard p = 1.
-                    let nBlend = 0;
+                    let nBlend = 0, nSor = 0, sorRes = -1, sorL = 0, sorOmega = 0, nCoupled = 0;
+                    if (!!window._plugMembrane) {
+                        // couplings: a domain texel talks to a neighbour only through the same
+                        // depth gate the BFS used (source neighbour: |plate - src| <= TOLB, a
+                        // Dirichlet value; domain neighbour: |plate - plate| <= TOLB, an unknown)
+                        const nb = new Int32Array(qt2 * 4).fill(-1); const nbSrc = new Uint8Array(qt2 * 4);
+                        const domK = new Int32Array(PNq).fill(-1); for (let k = 0; k < qt2; k++) domK[q2[k]] = k;
+                        const dRim = new Int32Array(qt2).fill(-1); const qd = new Int32Array(qt2); let dh = 0, dt = 0;
+                        for (let k = 0; k < qt2; k++) { const i = q2[k]; const x = i % pw, y = (i / pw) | 0;
+                            const cN = [x > 0 ? i-1 : -1, x < pw-1 ? i+1 : -1, y > 0 ? i-pw : -1, y < ph-1 ? i+pw : -1];
+                            let touchesRim = false;
+                            for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0) continue;
+                                if (state[j] === 2) { if (Math.abs(plateQ[i] - dQ[j]) <= TOLB) { nb[k*4+s] = j; nbSrc[k*4+s] = 1; touchesRim = true; } }
+                                else if (state[j] === 1 && Math.abs(plateQ[i] - plateQ[j]) <= TOLB) { nb[k*4+s] = j; } }
+                            if (touchesRim) { dRim[k] = 0; qd[dt++] = k; }
+                        }
+                        // domain extent = twice the deepest texel's distance from the rim (the SOR L)
+                        while (dh < dt) { const k = qd[dh++]; const d = dRim[k] + 1;
+                            for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0 || nbSrc[k*4+s]) continue; const kj = domK[j]; if (kj >= 0 && dRim[kj] < 0) { dRim[kj] = d; qd[dt++] = kj; } } }
+                        let maxDist = 0; for (let k = 0; k < qt2; k++) { if (dRim[k] > maxDist) maxDist = dRim[k]; if (dRim[k] >= 0) nCoupled++; }
+                        sorL = 2 * maxDist + 2;
+                        sorOmega = 2 / (1 + Math.sin(Math.PI / sorL));
+                        const fr = new Float32Array(qt2), fg2 = new Float32Array(qt2), fb2 = new Float32Array(qt2);
+                        for (let k = 0; k < qt2; k++) { const i = q2[k]; fr[k] = cd[i*4]; fg2[k] = cd[i*4+1]; fb2[k] = cd[i*4+2]; }   // BFS colours as the start
+                        const TOLC = 0.5;            // half an 8-bit step: below the output quantum
+                        const MAXS = 3000;
+                        let maxD = 1e9;
+                        while (nSor < MAXS && maxD > TOLC) {
+                            maxD = 0;
+                            const fwd = (nSor & 1) === 0;   // alternate sweep direction (symmetric SOR)
+                            for (let kk = 0; kk < qt2; kk++) { const k = fwd ? kk : (qt2 - 1 - kk);
+                                if (dRim[k] < 0) continue;   // a pocket with no path to the rim keeps its BFS colour
+                                let sr = 0, sg = 0, sb = 0, n = 0;
+                                for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0) continue;
+                                    if (nbSrc[k*4+s]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; }
+                                    else { const kj = domK[j]; sr += fr[kj]; sg += fg2[kj]; sb += fb2[kj]; }
+                                    n++; }
+                                if (n === 0) continue;
+                                const nr = fr[k] + sorOmega * (sr / n - fr[k]), ng = fg2[k] + sorOmega * (sg / n - fg2[k]), nbv = fb2[k] + sorOmega * (sb / n - fb2[k]);
+                                const dm = Math.max(Math.abs(nr - fr[k]), Math.abs(ng - fg2[k]), Math.abs(nbv - fb2[k])); if (dm > maxD) maxD = dm;
+                                fr[k] = nr; fg2[k] = ng; fb2[k] = nbv;
+                            }
+                            nSor++;
+                        }
+                        sorRes = maxD;
+                        for (let k = 0; k < qt2; k++) { const i = q2[k]; cd[i*4] = fr[k]; cd[i*4+1] = fg2[k]; cd[i*4+2] = fb2[k]; }
+                    } else {
                     {
                         const wr2 = new Float32Array(PNq), wg2 = new Float32Array(PNq),
                               wb2 = new Float32Array(PNq), ww2 = new Float32Array(PNq);
@@ -13648,10 +13703,17 @@ function bgBuildBackgroundLayerCore() {
                             if (n > 0) { cd[i*4] = sr/n; cd[i*4+1] = sg/n; cd[i*4+2] = sb/n; }
                         }
                     }
+                    }
                     cxF.putImageData(pxF, 0, 0);
+                    if (window._plugSweepCapture) { window._qbPlateColor = cd.slice(); window._qbBandState = state.slice(); }   // A242 audit: the plate colour (source rows) and the domain
                     plateColorTex = new THREE.CanvasTexture(cvF);
                     plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
+                    if (!!window._plugMembrane)
+                        console.log('[QUICK-BAKE] A242 membrane band fill: ' + nGated + ' gated / ' + nPocket + ' pocket of ' + nD + ' band px, ' + nCoupled +
+                            ' coupled to the rim; SOR L=' + sorL + ' omega=' + sorOmega.toFixed(3) + ', ' + nSor + ' sweeps, residual ' + sorRes.toFixed(3) +
+                            '/255 (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
+                    else
                     console.log('[QUICK-BAKE] A215 two-sided band fill: ' + nGated + ' gated / ' + nPocket +
                         ' pocket of ' + nD + ' band px, ' + nBlend + ' ray-blended (8-dir Shepard p=1), ' + NREL +
                         ' relax passes (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
