@@ -128,8 +128,11 @@ const Z = 0.199;
         return res;
     };
 
-    const D = await runArm('D-default', false);
-    const C = await runArm('C-carve  ', true);
+    // ARMS=D (or C): run only that arm (A241c: the default-arm comparison alone, half the port time)
+    const arms = (process.env.ARMS || 'DC').toUpperCase();
+    const D = arms.includes('D') ? await runArm('D-default', false) : null;
+    const C = arms.includes('C') ? await runArm('C-carve  ', true) : null;
+    if (!D || !C) { console.log('(single arm ' + arms + ': no carve-vs-default table)'); await browser.close(); srv.kill(); process.exit(0); }
     console.log('---- carve vs default (holes delta = holes the carve leaves open; negative = fewer):');
     let worst = 0;
     for (let i = 0; i < POSES.length; i++) {

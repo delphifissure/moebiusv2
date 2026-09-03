@@ -14406,13 +14406,19 @@ function bgBuildBackgroundLayerCore() {
                     const lut2 = bgShiftLUTFor(pw, ph);
                     const foldAt = new Float32Array(vw2 * vh2).fill(2.0);
                     const tx2 = new Int32Array(3), ty2 = new Int32Array(3);
-                    let nFold = 0;
+                    // A241c: the same source-quantum gate as the baked A212 tear below ((mxD - mnD) > qN).
+                    // Without it a one-quantum terrace of the 8-bit depth on a near figure has a rim
+                    // shift span above the cell extent and every terrace row tears (the ladder on the
+                    // star-watcher figure at sheet1, a241b_sheet1_crop2.png).
+                    const qN2 = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 0;
+                    let nFold = 0, nQuantumSkipped = 0;
                     for (let t = 0; t < src2.length; t += 3) {
                         let mnD = 2, mxD = -1, inScan = false;
                         for (let k = 0; k < 3; k++) { const vi = src2[t + k]; const vx = vi % vw2, vy = (vi / vw2) | 0;
                             const pxT = idMap2 ? vx : Math.round(vx * sx2), pyT = idMap2 ? vy : Math.round(vy * sy2); tx2[k] = pxT; ty2[k] = pyT;
                             const d = dQ[pyT * pw + pxT]; if (d < mnD) mnD = d; if (d > mxD) mxD = d; if (disocc[pyT * pw + pxT]) inScan = true; }
                         if (!(inScan || window._a212Ungated === true)) continue;
+                        if (!((mxD - mnD) > qN2)) { nQuantumSkipped++; continue; }
                         const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
                         const span = Math.abs(bgShiftPxAt(lut2, mxD) - bgShiftPxAt(lut2, mnD));
                         if (span <= 0) continue;
@@ -14421,7 +14427,7 @@ function bgBuildBackgroundLayerCore() {
                         for (let k = 0; k < 3; k++) { const vi = src2[t + k]; if (f < foldAt[vi]) foldAt[vi] = f; }
                     }
                     g2.setAttribute('aFoldAt', new THREE.BufferAttribute(foldAt, 1));
-                    console.log('[QUICK-BAKE] A241b vertex fold points: ' + nFold + ' cells fold inside the cone (' + (100 * nFold / (src2.length / 3)).toFixed(1) + '%); pose fraction drives the cut per frame');
+                    console.log('[QUICK-BAKE] A241b vertex fold points: ' + nFold + ' cells fold inside the cone (' + (100 * nFold / (src2.length / 3)).toFixed(1) + '%), ' + nQuantumSkipped + ' scan cells skipped by the source-quantum gate (A241c); pose fraction drives the cut per frame');
                 }
                 fu.u_fragTearGate.value = (window._fragTearUngated === true) ? 0.0 : 1.0;
                 fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
