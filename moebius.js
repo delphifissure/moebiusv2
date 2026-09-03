@@ -2393,6 +2393,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
         u_fragTearFactor: { value: 2.0 },    // stretch beyond which a cell has folded: shift span > its own extent (A212/a102)
         u_texelsPerPxRest: { value: 0.0 },
+        u_poseFrac: { value: 0.0 },          // A241b: |eye offset| / rim offset, updated every frame
         // A189 THE BAND CUT MEASURES PER RENDERED PIXEL AND ITS THRESHOLDS NAME
         // THE CANVAS. dFdx(vUv) and fwidth() are per-fragment-quad, so every
         // quantity in the cut is "per pixel of whatever we are rasterising
@@ -2424,6 +2425,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
 
     const commonVertexVaryings = `
         varying vec2 vUv;
+        varying float vFoldAt;   // A241b: pose fraction at which this vertex's cells fold (>= 2 = never)
         varying float vNormalizedDepth;
         varying float vClipW;
         varying vec3 vViewPosition;
@@ -2458,7 +2460,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
         uniform float u_bandCutUvRate;
         uniform float u_cutContactRamp;
-        uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest;   // A241
+        uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac;   // A241
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
         // --- A171 APERTURE CROP ---
@@ -2469,6 +2471,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform vec3  u_eyeWorld;
 
         varying vec2 vUv;
+        varying float vFoldAt;
         varying float vNormalizedDepth;
         varying float vClipW;
         varying vec3 vViewPosition;
@@ -2516,7 +2519,16 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // the density at rest. At rest the ratio is 1 and nothing is cut; at the
         // rim exactly the A212 cells cross 2x. Folded cells are back-facing and
         // cut outright. Gated like A212's scan gate by the bake's demand mask.
-        if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
+        // A241b (u_fragTear == 2): the same law carried by the VERTICES. At bake
+        // each cell's fold point is the pose fraction f at which its rim shift
+        // span times f exceeds its extent (A212's test made continuous in the
+        // eye offset); a vertex carries the minimum over its cells (A111's
+        // predicate: a texel incident to any folding cell). The fragment
+        // compares the interpolated fold point with the current pose fraction —
+        // a continuous field, no per-quad derivative noise, no speckle.
+        if (u_fragTear > 1.5 && !u_isBackgroundLayer && !isGap) {
+            if (u_poseFrac > vFoldAt) isGap = true;
+        } else if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
             bool gateOk = (u_fragTearGate < 0.5) || (texture2D(u_sdMask, vUv).r > 0.25);
             if (gateOk) {
                 float pxS = (u_pxScale > 0.0) ? u_pxScale : 1.0;
@@ -2773,6 +2785,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
 
     const baseVertexShaderPrefix = `
         ${commonVertexVaryings}
+        attribute float aFoldAt;
         uniform float u_portalPlaneDepthNorm;
         uniform float u_worldOuterVolumeDepth;
         uniform float u_worldInnerVolumeDepth;
@@ -2976,7 +2989,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         specificUniforms = { map: { value: mainTexture }, displacementMap: { value: depthTextureForMode } };
         vertexShaderSource = `
             ${baseVertexShaderPrefix} uniform sampler2D displacementMap;
-            void main() { vUv = uv; vNormalizedDepth = texture2D(displacementMap, vUv).r; ${viewSpaceDisplacementLogic} }`;
+            void main() { vUv = uv; vFoldAt = aFoldAt; vNormalizedDepth = texture2D(displacementMap, vUv).r; ${viewSpaceDisplacementLogic} }`;
 
         fragmentShaderSource = `
             ${fragmentShaderHead} uniform sampler2D map; uniform sampler2D displacementMap;
@@ -14383,7 +14396,33 @@ function bgBuildBackgroundLayerCore() {
                 const layerAspect = pw / ph, frameAspect = terrariumWidth / terrariumHeight;
                 const layerWf = (layerAspect > frameAspect) ? 1.0 : (layerAspect / frameAspect);   // plate width as a fraction of the frame width
                 const plateScrPx = Math.max(1, renderer.domElement.width * layerWf);
-                fu.u_fragTear.value = 1.0; fu.u_texelsPerPxRest.value = pw / plateScrPx;
+                fu.u_fragTear.value = (window._fragTear === 2 || window._fragTearMode === 2) ? 2.0 : 1.0; fu.u_texelsPerPxRest.value = pw / plateScrPx;
+                if (fu.u_fragTear.value === 2.0) {
+                    // per-vertex fold point = min over incident cells of extent / rim shift span (A212's own quantities)
+                    const g2 = L.mesh.geometry, gp2 = g2.parameters;
+                    const vw2 = ((gp2.widthSegments || 1) | 0) + 1, vh2 = ((gp2.heightSegments || 1) | 0) + 1;
+                    const src2 = g2.userData._fullIndex || g2.index.array;
+                    const sx2 = (pw - 1) / Math.max(1, vw2 - 1), sy2 = (ph - 1) / Math.max(1, vh2 - 1), idMap2 = (vw2 === pw && vh2 === ph);
+                    const lut2 = bgShiftLUTFor(pw, ph);
+                    const foldAt = new Float32Array(vw2 * vh2).fill(2.0);
+                    const tx2 = new Int32Array(3), ty2 = new Int32Array(3);
+                    let nFold = 0;
+                    for (let t = 0; t < src2.length; t += 3) {
+                        let mnD = 2, mxD = -1, inScan = false;
+                        for (let k = 0; k < 3; k++) { const vi = src2[t + k]; const vx = vi % vw2, vy = (vi / vw2) | 0;
+                            const pxT = idMap2 ? vx : Math.round(vx * sx2), pyT = idMap2 ? vy : Math.round(vy * sy2); tx2[k] = pxT; ty2[k] = pyT;
+                            const d = dQ[pyT * pw + pxT]; if (d < mnD) mnD = d; if (d > mxD) mxD = d; if (disocc[pyT * pw + pxT]) inScan = true; }
+                        if (!(inScan || window._a212Ungated === true)) continue;
+                        const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
+                        const span = Math.abs(bgShiftPxAt(lut2, mxD) - bgShiftPxAt(lut2, mnD));
+                        if (span <= 0) continue;
+                        const f = ext / span;                       // pose fraction (of the rim offset) at which this cell folds
+                        if (f < 1) nFold++;
+                        for (let k = 0; k < 3; k++) { const vi = src2[t + k]; if (f < foldAt[vi]) foldAt[vi] = f; }
+                    }
+                    g2.setAttribute('aFoldAt', new THREE.BufferAttribute(foldAt, 1));
+                    console.log('[QUICK-BAKE] A241b vertex fold points: ' + nFold + ' cells fold inside the cone (' + (100 * nFold / (src2.length / 3)).toFixed(1) + '%); pose fraction drives the cut per frame');
+                }
                 fu.u_fragTearGate.value = (window._fragTearUngated === true) ? 0.0 : 1.0;
                 fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
                 console.log('[QUICK-BAKE] A241 per-fragment tear armed: rest density ' + (pw / plateScrPx).toFixed(3) + ' texels/px (plate ' + plateScrPx.toFixed(0) + ' px wide at rest), factor ' + fu.u_fragTearFactor.value + ', gate ' + fu.u_fragTearGate.value + '; the baked A212 tear is skipped');
@@ -18110,6 +18149,15 @@ function initializeSubjectLockConstant() {
 
 function updateCameraAndProjection() {
     if (!camera || !canvasElement) return;
+    // A241b: the per-fragment tear needs the current eye offset as a fraction of the rim offset
+    if (window._fragTear && typeof mediaLayers !== 'undefined') {
+        const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+        const D = Math.max(1e-3, Math.abs(camera.position.z - _pz));
+        const exR = D * Math.tan(((typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45) * Math.PI / 180);
+        const asp = (typeof terrariumHeight === 'number' && typeof terrariumWidth === 'number') ? terrariumHeight / terrariumWidth : 0.5625;
+        const pf = Math.max(Math.abs(camera.position.x) / exR, Math.abs(camera.position.y) / (exR * asp));
+        for (const L of mediaLayers) { const u = L.mesh && L.mesh.material && L.mesh.material.uniforms; if (u && u.u_poseFrac) u.u_poseFrac.value = pf; }
+    }
 
     // --- 1. Handle Dolly Zoom & Subject Lock ---
     if (dollyZoomActive) {
