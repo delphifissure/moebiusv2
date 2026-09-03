@@ -14432,6 +14432,9 @@ function bgBuildBackgroundLayerCore() {
                 fu.u_fragTearGate.value = (window._fragTearUngated === true) ? 0.0 : 1.0;
                 fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
                 console.log('[QUICK-BAKE] A241 per-fragment tear armed: rest density ' + (pw / plateScrPx).toFixed(3) + ' texels/px (plate ' + plateScrPx.toFixed(0) + ' px wide at rest), factor ' + fu.u_fragTearFactor.value + ', gate ' + fu.u_fragTearGate.value + '; the baked A212 tear is skipped');
+            } else if (L.mesh && L.mesh.material && L.mesh.material.uniforms && L.mesh.material.uniforms.u_fragTear && L.mesh.material.uniforms.u_fragTear.value !== 0.0) {
+                // A241c: an unflagged bake disarms the per-fragment tear (the uniform would otherwise keep cutting with stale fold points)
+                L.mesh.material.uniforms.u_fragTear.value = 0.0; L.mesh.material.uniforms.u_poseFrac.value = 0.0;
             }
             if (fgPreTear && !window._fragTear && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                 try {
