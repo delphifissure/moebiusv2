@@ -11679,7 +11679,18 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 return (dxp*dxp + dyp*dyp) * sCone * sCone <= pr * pr;
             };
             if (ground && ground[j]) {
-                if (!fold || !(dQ[j] - v2 > tearStep)) continue;
+                // A239 (window._foldClaimPx, measured arm): a fold front may enter a
+                // ground texel when the source there is proud of the carried plate by
+                // more than a full tear step (0.06 = 15 quanta). The foreground tears
+                // at the per-cell fold limit (sqrt2 px of rim shift, A212), so every
+                // glancing micro-fold shallower than a tear step opens a gap the plate
+                // never fills with the far side (Addendum 177: 26-57% of torn texels
+                // outside the demand are clones, 0.03-0.11 deep). The arm gates the
+                // claim on the SAME law the tear uses: rim shift difference > N px.
+                const _proudF = (typeof window._foldClaimPx === 'number' && _coneL)
+                    ? (Math.abs(bgShiftPxAt(_coneL, dQ[j]) - bgShiftPxAt(_coneL, v2)) > window._foldClaimPx)
+                    : (dQ[j] - v2 > tearStep);
+                if (!fold || !_proudF) continue;
                 if (!promOK(j)) continue;
                 if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
                 continue;
