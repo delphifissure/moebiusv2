@@ -70,6 +70,7 @@ const Z = 0.199;
             if (o.scan) window._vpScan = true;           // a80 viewpoint scan (SCAN=1)
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
             if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
+            if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }   // FLAGS=name=value,...
             if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush, holeDemand: !!o.hole, nx: o.nx || undefined }); }   // A232 arm (SWEEP=1): the C arm is the sweep-defined plug
             else { bgQuickBake = true; buildBackgroundLayer(); }
             isSweeping = true;
@@ -116,9 +117,9 @@ const Z = 0.199;
                            total: holes.W * holes.Hh, png: cv.toDataURL('image/png') });
             }
             return out;
-        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, nx: process.env.NX ? parseInt(process.env.NX) : 0 });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
         for (const r of res) {
-            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.FLAGS ? '_' + process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
             console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) +
                 '  plugOnly=' + String(r.plugOnly).padStart(7) + ' (' + (100 * r.plugOnly / r.total).toFixed(1) + '% of frame)' +
                 '  plugSeen=' + String(r.plugSeen).padStart(6));
