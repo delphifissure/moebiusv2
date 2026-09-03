@@ -2386,6 +2386,13 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_bandCutMaxGrad: { value: 0.04 },
         u_bandCutUvRate: { value: 0.0 }, // 0 = stretch test off until armed
         u_cutContactRamp: { value: 1.0 }, // A84: contact-rubber exemption from the mask gate
+        // A241 PER-FRAGMENT TEAR (window._fragTear, measured arm): the A212 fold law
+        // evaluated at the CURRENT pose in the fragment shader instead of baked at
+        // the cone rim. u_texelsPerPxRest = the foreground's texel density at rest.
+        u_fragTear: { value: 0.0 },
+        u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
+        u_fragTearFactor: { value: 2.0 },    // stretch beyond which a cell has folded: shift span > its own extent (A212/a102)
+        u_texelsPerPxRest: { value: 0.0 },
         // A189 THE BAND CUT MEASURES PER RENDERED PIXEL AND ITS THRESHOLDS NAME
         // THE CANVAS. dFdx(vUv) and fwidth() are per-fragment-quad, so every
         // quantity in the cut is "per pixel of whatever we are rasterising
@@ -2451,6 +2458,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
         uniform float u_bandCutUvRate;
         uniform float u_cutContactRamp;
+        uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest;   // A241
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
         // --- A171 APERTURE CROP ---
@@ -2496,6 +2504,29 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // (far-surface vs far-surface) rubber-band exactly like FG cliffs;
         // a discarded fragment shows black, which is the honest answer for
         // content no capture carries (same statement as the view fade).
+        // --- A241 PER-FRAGMENT TEAR (view-dependent A212) ---
+        // A212 tears a foreground cell at bake time when its rim-pose shift span
+        // exceeds its own extent, i.e. when the cell would be stretched to 2x or
+        // folded at the cone rim — and the tear is then open at EVERY pose,
+        // including rest, where the plate shows through (Addendum 177 item 5:
+        // 2,606 px of wash where source pixels should be). Here the same law is
+        // applied to the fragment's actual stretch at the current pose: the
+        // texel density along the most-stretched direction (minor singular value
+        // of the texel-space Jacobian, the a81/a82 rotation-free invariant) against
+        // the density at rest. At rest the ratio is 1 and nothing is cut; at the
+        // rim exactly the A212 cells cross 2x. Folded cells are back-facing and
+        // cut outright. Gated like A212's scan gate by the bake's demand mask.
+        if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
+            bool gateOk = (u_fragTearGate < 0.5) || (texture2D(u_sdMask, vUv).r > 0.25);
+            if (gateOk) {
+                float pxS = (u_pxScale > 0.0) ? u_pxScale : 1.0;
+                vec2 jx = dFdx(vUv) * u_textureSize, jy = dFdy(vUv) * u_textureSize;   // texels per rendered px
+                float jmax = max(length(jx), length(jy));
+                float svMin = abs(jx.x * jy.y - jx.y * jy.x) / max(jmax, 1e-9);        // texels per px along the most stretched direction
+                float stretch = u_texelsPerPxRest / max(svMin * pxS, 1e-9);
+                if (stretch > u_fragTearFactor || !gl_FrontFacing) isGap = true;
+            }
+        }
         if (u_useBandCut && (!u_isBackgroundLayer || u_bandCutAll) && !isGap) {
             if (u_bandCutAll || texture2D(u_bandMask, vUv).r > 0.5) {
                 // (a) STRETCH: UV advances far slower per screen px than an
@@ -11550,10 +11581,17 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // accumulated plane evaluation.
     const QUANT = sCone / 4;
     const flrF = window._foldProbe ? new Uint8Array(PN2) : null;   // PROBE: claim value came from the a63b descent floor
+    // A240 PROBE: why did a front last refuse this texel? 1 ground gate (object
+    // front at a ground texel), 2 fold proud-gate failed, 3 object claim failed
+    // (bid not below the source), 4 lost takes() to another front, 5 prominence
+    // bound failed, 6 pass-through only (seen but never claimable). visitF = any
+    // front looked at it.
+    const refuseF = window._foldProbe ? new Uint8Array(PN2) : null, visitF = window._foldProbe ? new Uint8Array(PN2) : null;
+    const budDeadF = window._foldProbe ? new Uint8Array(PN2) : null;   // a front died here on budget
     let h = 0, guard = 0, GUARD = PN2 * 24;
     while (h < q.length && guard++ < GUARD) {
         const i = q[h++]; const v = carry[i]; const fold = foldF[i]; const bud = hopB[i];
-        if (bud <= 1) continue;
+        if (bud <= 1) { if (budDeadF) budDeadF[i] = 1; continue; }
         const gx = carGx[i], gy = carGy[i];
         const ax = carAx[i], ay = carAy[i], av = carAv[i];
         const x = i%pw, y = (i/pw)|0;
@@ -11690,15 +11728,21 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
                 const _proudF = (typeof window._foldClaimPx === 'number' && _coneL)
                     ? (Math.abs(bgShiftPxAt(_coneL, dQ[j]) - bgShiftPxAt(_coneL, v2)) > window._foldClaimPx)
                     : (dQ[j] - v2 > tearStep);
-                if (!fold || !_proudF) continue;
-                if (!promOK(j)) continue;
+                if (visitF) visitF[j] = 1;
+                if (!fold) { if (refuseF && !claimedF[j]) refuseF[j] = 1; continue; }
+                if (!_proudF) { if (refuseF && !claimedF[j]) refuseF[j] = 2; continue; }
+                if (!promOK(j)) { if (refuseF && !claimedF[j]) refuseF[j] = 5; continue; }
+                if (!takes(j)) { if (refuseF && !claimedF[j]) refuseF[j] = 4; }
                 if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = 1; hopB[j] = bud - 1; q.push(j); }
                 continue;
             }
-            if (!ground && !(dQ[j] - v > tearStep)) continue;
+            if (visitF) visitF[j] = 1;
+            if (!ground && !(dQ[j] - v > tearStep)) { if (refuseF && !claimedF[j]) refuseF[j] = 3; continue; }
             if (v2 < dQ[j] - 0.001 && promOK(j)) {
+                if (!takes(j)) { if (refuseF && !claimedF[j]) refuseF[j] = 4; }
                 if (takes(j)) { P[j] = v2; claimedF[j] = 1; if (flrF) flrF[j] = (av - tearStep > planeV) ? 1 : 0; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = BOOT; foldF[j] = fold; hopB[j] = bud - 1; q.push(j); }
             } else if (passRem[i] > 1 && !seenP[j]) {
+                if (refuseF && !claimedF[j]) refuseF[j] = (v2 < dQ[j] - 0.001) ? 5 : 3;
                 seenP[j] = 1; carry[j] = v2; carGx[j] = gx; carGy[j] = gy; carAx[j] = ax; carAy[j] = ay; carAv[j] = av; passRem[j] = passRem[i] - 1; foldF[j] = fold; hopB[j] = bud - 1; q.push(j);
             }
         }
@@ -11764,7 +11808,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     if (window._foldProbe) {
         window._fpData = { pw, ph, P: P.slice(), dQ: dQ.slice(), ground: ground ? ground.slice() : null,
                            claimedF: claimedF.slice(), foldF: foldF.slice(), carAv: carAv.slice(),
-                           carAx: carAx.slice(), carAy: carAy.slice(), flrF, tearStep };
+                           carAx: carAx.slice(), carAy: carAy.slice(), flrF, tearStep, refuseF, visitF, budDeadF, seedSeen: seenP.slice() };
     }
     return { plate: P, ground, cells: q.length, guardHit: guard >= GUARD };
 }
@@ -14331,7 +14375,20 @@ function bgBuildBackgroundLayerCore() {
             //      was a211's +30.7% ground-speckle failure).
             // No far-match gate is needed: the quick plate is FULL-FRAME
             // opaque, so every hole opens onto baked content (a161).
-            if (fgPreTear && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
+            if (window._fragTear === true && L.mesh && L.mesh.material && L.mesh.material.uniforms && L.mesh.material.uniforms.u_fragTear) {
+                // A241: the tear becomes a per-fragment, per-pose test; the mesh stays whole.
+                const fu = L.mesh.material.uniforms;
+                if (L.mesh.geometry.userData._fullIndex && L.mesh.geometry.index.array.length !== L.mesh.geometry.userData._fullIndex.length)
+                    L.mesh.geometry.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex.slice(), 1));
+                const layerAspect = pw / ph, frameAspect = terrariumWidth / terrariumHeight;
+                const layerWf = (layerAspect > frameAspect) ? 1.0 : (layerAspect / frameAspect);   // plate width as a fraction of the frame width
+                const plateScrPx = Math.max(1, renderer.domElement.width * layerWf);
+                fu.u_fragTear.value = 1.0; fu.u_texelsPerPxRest.value = pw / plateScrPx;
+                fu.u_fragTearGate.value = (window._fragTearUngated === true) ? 0.0 : 1.0;
+                fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
+                console.log('[QUICK-BAKE] A241 per-fragment tear armed: rest density ' + (pw / plateScrPx).toFixed(3) + ' texels/px (plate ' + plateScrPx.toFixed(0) + ' px wide at rest), factor ' + fu.u_fragTearFactor.value + ', gate ' + fu.u_fragTearGate.value + '; the baked A212 tear is skipped');
+            }
+            if (fgPreTear && window._fragTear !== true && L.mesh && L.mesh.geometry && L.mesh.geometry.index && L.mesh.geometry.parameters) {
                 try {
                     const g = L.mesh.geometry, gp = g.parameters;
                     const vw = ((gp.widthSegments || 1) | 0) + 1, vh = ((gp.heightSegments || 1) | 0) + 1;
