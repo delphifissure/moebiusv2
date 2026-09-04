@@ -7795,8 +7795,12 @@ window._plugGeoBand = function (opts) {
     const s1 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     const { pw, ph, N } = s1; const torn = s1.torn; const disBefore = window._qbDisocc;
-    // band := reveal texels dilated by the between-pose step (+1 for rounding), plus the pinholes (plate seen through the foreground's own tears)
-    const PAD = s1.stepPad + 1;
+    // band := reveal texels (+1 texel for rounding), plus the pinholes (plate seen through the foreground's own tears).
+    // No between-pose pad: along any direction the reveal at a smaller eye offset is contained in the reveal at a
+    // larger one (the shift law is linear in the offset), so the union over the grid's outer poses covers every
+    // interior pose; the measured alternative (pad = the NEAR texel's step between poses, 72 texels on the troll)
+    // widened the band to 80% of the plate for nothing.
+    const PAD = 1;
     const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
     for (let i = 0; i < N; i++) if (s1.revealTex[i]) dist[i] = 0;
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
@@ -7817,7 +7821,7 @@ window._plugGeoBand = function (opts) {
     const stats = { pw, ph, poses: s1.poses, revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin, pad: PAD, stepPad: s1.stepPad,
                     bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, seen1: s1.nSeen, seen2: s2 ? s2.nSeen : -1, reveal2: nRev2, reveal2Outside: nOutside, ms: Date.now() - t0 };
     console.log('[A244] geometric band: ' + s1.poses + ' poses; reveal cells ' + s1.revealIn + ' (outpaint ' + s1.revealOut + ' excluded) -> ' + nRev + ' reveal texels + ' + nPin + ' pinholes, pad ' + PAD +
-        ' texels (between-pose step ' + s1.stepPad + ' + 1); band ' + stats.bandBefore + ' -> ' + nB + ' (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); after rebake: reveal texels ' + nRev2 + ', of which outside the band ' + nOutside + '; seen ' + s1.nSeen + ' -> ' + stats.seen2 + '; ' + stats.ms + 'ms');
+        ' texel; band ' + stats.bandBefore + ' -> ' + nB + ' (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); after rebake: reveal texels ' + nRev2 + ', of which outside the band ' + nOutside + '; seen ' + s1.nSeen + ' -> ' + stats.seen2 + '; ' + stats.ms + 'ms');
     window._plugGeoStats = stats;
     return stats;
 };
