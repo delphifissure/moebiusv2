@@ -13107,6 +13107,11 @@ function bgBuildBackgroundLayerCore() {
                     if (rep[i] && !disocc[i]) { disocc[i] = 1; nD++; nAdd++; }
                     else if (!rep[i] && disocc[i]) { disocc[i] = 0; nD--; nDrop++; plateQ[i] = dQ[i]; }
                 }
+                // A244i: the band's plate depth for every later gate is the far field (the colour membrane's
+                // rim gate reads plateQ; for added texels plateQ was still the SOURCE depth, so the gate
+                // admitted the near side and refused the far rims — the dark fill behind the star-watcher
+                // figure, seam 62 where the other scenes reached 9–16)
+                if (window._geoFarField && window._geoFarField.length === PNq) { const ff = window._geoFarField; for (let i = 0; i < PNq; i++) if (disocc[i]) plateQ[i] = ff[i]; }
                 console.log('[QUICK-BAKE] A244 geometric band: +' + nAdd + ' revealed texels joined, -' + nDrop + ' never-revealed front texels left the band (restored to source depth); band now ' + nD);
             }
             if (window._plugSweepCapture) window._qbDisocc = disocc.slice();
