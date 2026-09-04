@@ -13419,6 +13419,7 @@ function bgBuildBackgroundLayerCore() {
             }
             renderer.setRenderTarget(null);
             // quick mode replaces any prior stack
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
                 bgLayerMesh = null; }
@@ -14686,36 +14687,46 @@ function bgBuildBackgroundLayerCore() {
             // The plug's border is the source frame's border, so at any off-axis pose the part of
             // the frame the near foreground vacates at the leading edge has no plug behind it —
             // 254 enclosed black pixels 1–8 px outside the plug's receded left border at sheet1
-            // (Addendum 180 item 17). The plug is given a margin of M texels on every side, M the
-            // largest rim shift of any texel (bgShiftPxAt over the plate — the farthest any content
-            // can move relative to the frame inside the cone; derived, not chosen). The textures
-            // stay as they are: the extended geometry's UVs run past [0,1] and ClampToEdge
-            // sampling replicates the edge depth and the edge colour outward — the membrane's own
-            // Neumann continuation, no new content invented.
+            // (Addendum 180 item 17). A ring of four strips extends the plug by M texels on every
+            // side, M the largest rim shift of a FOREGROUND texel on the frame's border (how far the
+            // foreground can vacate the border inside the cone; derived from the LUT, not chosen —
+            // the global maximum, 568 texels on the troll, made a 1988x2160-cell mesh for nothing).
+            // The strips sample the same textures with UVs past [0,1]: ClampToEdge replicates the
+            // edge depth and the edge colour outward — the membrane's own Neumann continuation.
+            // Across the margin the depth is constant, so one cell suffices; along the edge the
+            // strips keep the foreground's vertex density. Drawn only inside the frame's rest
+            // footprint (u_restClip).
+            let plugRing = null;
             if (!!window._plugMargin) {
                 try {
                     const lutM = bgShiftLUTFor(pw, ph); let sMaxM = 0;
-                    for (let i = 0; i < PNq; i++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[i])); if (a > sMaxM) sMaxM = a; }
-                    for (let i = 0; i < PNq; i++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[i])); if (a > sMaxM) sMaxM = a; }
+                    for (let x = 0; x < pw; x++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[x])), b = Math.abs(bgShiftPxAt(lutM, dQ[(ph - 1) * pw + x])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
+                    for (let y = 0; y < ph; y++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[y * pw])), b = Math.abs(bgShiftPxAt(lutM, dQ[y * pw + pw - 1])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
                     const M = Math.ceil(sMaxM) + 1;
                     const gp0 = L.mesh.geometry.parameters; const w0 = gp0.width, h0 = gp0.height;
                     const segW = ((gp0.widthSegments || 1) | 0), segH = ((gp0.heightSegments || 1) | 0);
-                    const mx = Math.round(M * segW / Math.max(1, pw)), my = Math.round(M * segH / Math.max(1, ph));   // margin in mesh cells
-                    const gW = w0 * (segW + 2 * mx) / segW, gH = h0 * (segH + 2 * my) / segH;
-                    const gM = new THREE.PlaneGeometry(gW, gH, segW + 2 * mx, segH + 2 * my);
-                    const uv = gM.attributes.uv; const su = (segW + 2 * mx) / segW, sv = (segH + 2 * my) / segH, ou = mx / segW, ov = my / segH;
-                    for (let k = 0; k < uv.count; k++) { uv.setXY(k, uv.getX(k) * su - ou, uv.getY(k) * sv - ov); }
-                    uv.needsUpdate = true;
-                    gQ = gM;
+                    const mw = w0 * M / pw, mh = h0 * M / ph;                       // margin in world units
+                    const uM = M / pw, vM = M / ph;                                  // margin in texture units
+                    const strip = (W, Hh, sx, sy, cx, cy, u0, u1, v0, v1) => {
+                        const g = new THREE.PlaneGeometry(W, Hh, sx, sy); g.translate(cx, cy, 0);
+                        const uv = g.attributes.uv; for (let k = 0; k < uv.count; k++) uv.setXY(k, u0 + (u1 - u0) * uv.getX(k), v0 + (v1 - v0) * uv.getY(k)); uv.needsUpdate = true;
+                        return g; };
+                    plugRing = [
+                        strip(mw, h0 + 2 * mh, 1, segH, -w0 / 2 - mw / 2, 0, -uM, 0, -vM, 1 + vM),        // left
+                        strip(mw, h0 + 2 * mh, 1, segH,  w0 / 2 + mw / 2, 0, 1, 1 + uM, -vM, 1 + vM),      // right
+                        strip(w0, mh, segW, 1, 0,  h0 / 2 + mh / 2, 0, 1, 1, 1 + vM),                       // top
+                        strip(w0, mh, segW, 1, 0, -h0 / 2 - mh / 2, 0, 1, -vM, 0)                           // bottom
+                    ];
                     if (matQ.uniforms.u_restClip) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight);   // the frame's rest footprint in NDC (the window projection maps the portal to [-1,1] at every pose)
-                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest rim shift ' + sMaxM.toFixed(1) + ') = ' + mx + 'x' + my + ' mesh cells on every side; geometry ' + (segW + 2 * mx) + 'x' + (segH + 2 * my) + ' cells, UVs past [0,1] clamp to the edge');
-                } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); }
+                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border foreground rim shift ' + sMaxM.toFixed(1) + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; drawn inside the rest footprint only');
+                } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); plugRing = null; }
             }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
             bgLayerMesh.position.copy(L.mesh.position);
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
+            if (plugRing) { bgLayerMesh.userData.ring = plugRing.map((g) => { const m = new THREE.Mesh(g, matQ); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; return m; }); }
 
             // A214: the a149 quick skirt is REMOVED, not flagged (rule 7).
             // Its only output was beyond-frame clamp-to-edge continuation —
@@ -14728,6 +14739,7 @@ function bgBuildBackgroundLayerCore() {
             const showQ = document.getElementById('bgLayerToggle');
             bgLayerMesh.visible = showQ ? showQ.checked : true;
             scene.add(bgLayerMesh);
+            if (bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) scene.add(m);   // A245 ring
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
