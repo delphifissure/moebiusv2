@@ -14723,7 +14723,7 @@ function bgBuildBackgroundLayerCore() {
                     // every pose), which leaves the bars as they are at rest and lets torn foreground drifting into them open
                     // onto nothing off-axis. The screen prices this trade.
                     if (matQ.uniforms.u_restClip) { if (window._plugMargin === 2) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight); else matQ.uniforms.u_restClip.value.set(1, 1); }
-                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border foreground rim shift ' + sMaxM.toFixed(1) + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; drawn inside the rest footprint only');
+                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border foreground rim shift ' + sMaxM.toFixed(1) + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; clip ' + (window._plugMargin === 2 ? 'rest footprint' : 'whole window'));
                 } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); plugRing = null; }
             }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
