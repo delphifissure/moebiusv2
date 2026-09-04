@@ -7835,6 +7835,7 @@ window._plugGeoBand = function (opts) {
     let nClampF = 0; for (let i = 0; i < N; i++) if (farField[i] > dQ[i]) { farField[i] = dQ[i]; nClampF++; }
     window._geoFarField = farField;
     const msF = Date.now() - tF;
+    if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     const torn = s1.torn;
@@ -14674,6 +14675,34 @@ function bgBuildBackgroundLayerCore() {
                         ' texels (' + (100*nGrown/PNq).toFixed(1) + '% of plate), ' + (Date.now()-_t0C) + 'ms');
                 } catch (eC) { console.warn('[QUICK-BAKE] a217 plug carve failed (full plate kept):', eC); }
             }
+            // A245 PLUG MARGIN (window._plugMargin, measured arm; Addendum 179 class G3, rule R1).
+            // The plug's border is the source frame's border, so at any off-axis pose the part of
+            // the frame the near foreground vacates at the leading edge has no plug behind it —
+            // 254 enclosed black pixels 1–8 px outside the plug's receded left border at sheet1
+            // (Addendum 180 item 17). The plug is given a margin of M texels on every side, M the
+            // largest rim shift of any texel (bgShiftPxAt over the plate — the farthest any content
+            // can move relative to the frame inside the cone; derived, not chosen). The textures
+            // stay as they are: the extended geometry's UVs run past [0,1] and ClampToEdge
+            // sampling replicates the edge depth and the edge colour outward — the membrane's own
+            // Neumann continuation, no new content invented.
+            if (!!window._plugMargin) {
+                try {
+                    const lutM = bgShiftLUTFor(pw, ph); let sMaxM = 0;
+                    for (let i = 0; i < PNq; i++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[i])); if (a > sMaxM) sMaxM = a; }
+                    for (let i = 0; i < PNq; i++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[i])); if (a > sMaxM) sMaxM = a; }
+                    const M = Math.ceil(sMaxM) + 1;
+                    const gp0 = L.mesh.geometry.parameters; const w0 = gp0.width, h0 = gp0.height;
+                    const segW = ((gp0.widthSegments || 1) | 0), segH = ((gp0.heightSegments || 1) | 0);
+                    const mx = Math.round(M * segW / Math.max(1, pw)), my = Math.round(M * segH / Math.max(1, ph));   // margin in mesh cells
+                    const gW = w0 * (segW + 2 * mx) / segW, gH = h0 * (segH + 2 * my) / segH;
+                    const gM = new THREE.PlaneGeometry(gW, gH, segW + 2 * mx, segH + 2 * my);
+                    const uv = gM.attributes.uv; const su = (segW + 2 * mx) / segW, sv = (segH + 2 * my) / segH, ou = mx / segW, ov = my / segH;
+                    for (let k = 0; k < uv.count; k++) { uv.setXY(k, uv.getX(k) * su - ou, uv.getY(k) * sv - ov); }
+                    uv.needsUpdate = true;
+                    gQ = gM;
+                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest rim shift ' + sMaxM.toFixed(1) + ') = ' + mx + 'x' + my + ' mesh cells on every side; geometry ' + (segW + 2 * mx) + 'x' + (segH + 2 * my) + ' cells, UVs past [0,1] clamp to the edge');
+                } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); }
+            }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
             bgLayerMesh.position.copy(L.mesh.position);
             bgLayerMesh.rotation.copy(L.mesh.rotation);
@@ -14750,6 +14779,7 @@ function bgBuildBackgroundLayerCore() {
                     // fold field is no longer row-wise noisy on a terraced depth (the teeth of
                     // Addendum 180 item 13c). The quantum gate reads the same windowed range.
                     const winF = !!window._foldWindow;
+                    const ffGate = (window._geoFarField && window._geoFarField.length === pw * ph) ? window._geoFarField : null;
                     const RWDf = Math.max(1, Math.round(4 * pw / 1200));
                     const dwMxF = winF ? bgSlide2D(dQ, pw, ph, RWDf, false) : null, dwMnF = winF ? bgSlide2D(dQ, pw, ph, RWDf, true) : null;
                     const foldTex = window._plugSweepCapture ? new Float32Array(pw * ph).fill(2.0) : null;   // A243: per-texel fold point (min over incident cells), source rows, for the CPU sweep
@@ -14763,7 +14793,11 @@ function bgBuildBackgroundLayerCore() {
                             // tear step, the A44 criterion); on a slope the window's range is the slope times the window, not a
                             // step, and using it tore 43% of the troll's cells (a243_sheet1_composite_zoom.png, falsified).
                             const cliffHere = winF && (dwMxF[ti] - dwMnF[ti]) > fgTearStep;
-                            const dlo = cliffHere ? dwMnF[ti] : dQ[ti], dhi = cliffHere ? dwMxF[ti] : dQ[ti]; if (dlo < mnD) mnD = dlo; if (dhi > mxD) mxD = dhi; if (disocc[ti]) inScan = true; }
+                            const dlo = cliffHere ? dwMnF[ti] : dQ[ti], dhi = cliffHere ? dwMxF[ti] : dQ[ti]; if (dlo < mnD) mnD = dlo; if (dhi > mxD) mxD = dhi;
+                            // A244g: with the a-priori far field the scan gate is band-independent — a cell may tear where
+                            // something lies behind it (source deeper than the far field by more than the tear's noise floor),
+                            // so the tear no longer depends on the band that depends on the tear (item 17)
+                            if (disocc[ti] || (ffGate && dQ[ti] - ffGate[ti] > 2 * qN2)) inScan = true; }
                         if (!(inScan || window._a212Ungated === true)) continue;
                         if (!((mxD - mnD) > qN2)) { nQuantumSkipped++; continue; }
                         const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
