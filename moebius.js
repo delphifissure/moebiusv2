@@ -14731,7 +14731,21 @@ function bgBuildBackgroundLayerCore() {
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
-            if (plugRing) { bgLayerMesh.userData.ring = plugRing.map((g) => { const m = new THREE.Mesh(g, matQ); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; return m; }); }
+            if (plugRing) {
+                // A245e: the ring is displaced by the FAR FIELD, not the plate. Where near content touches the
+                // border (the troll's feet) the plate's edge texel is near, so a ring replicating it moved with
+                // the foreground and left the vacated corner black (mirror pose, 2,660 px). What the vacated
+                // border shows is what lies behind the near content: the far field's border value.
+                let matR = matQ;
+                if (window._geoFarField && window._geoFarField.length === PNq) {
+                    const ffF = new Float32Array(PNq); const ff = window._geoFarField;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) ffF[(ph - 1 - y) * pw + x] = ff[y * pw + x];
+                    const farDT = new THREE.DataTexture(ffF, pw, ph, THREE.RedFormat, THREE.FloatType); farDT.needsUpdate = true; farDT.flipY = false;
+                    farDT.minFilter = THREE.LinearFilter; farDT.magFilter = THREE.LinearFilter;
+                    matR = matQ.clone(); matR.uniforms.displacementMap.value = farDT;
+                }
+                bgLayerMesh.userData.ring = plugRing.map((g) => { const m = new THREE.Mesh(g, matR); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; return m; });
+            }
 
             // A214: the a149 quick skirt is REMOVED, not flagged (rule 7).
             // Its only output was beyond-frame clamp-to-edge continuation —
