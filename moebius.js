@@ -7788,13 +7788,14 @@ window._plugCpuSweep = function (opts) {
 window._plugGeoBand = function (opts) {
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._extraDemand = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band (its plate depths seed the inversion)
     const s1 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     const { pw, ph, N } = s1; const torn = s1.torn; const disBefore = window._qbDisocc;
+    window._geoRef = { band: disBefore.slice(), plate: window._qbPlateF.slice() };   // A244d: the pass-1 band and plate = the reference far depth for the rim gate
     // band := reveal texels (+1 texel for rounding), plus the pinholes (plate seen through the foreground's own tears).
     // No between-pose pad: along any direction the reveal at a smaller eye offset is contained in the reveal at a
     // larger one (the shift law is linear in the offset), so the union over the grid's outer poses covers every
@@ -13157,6 +13158,40 @@ function bgBuildBackgroundLayerCore() {
                 const filledD = bgPullPushFill(cpxD, valD, pw, ph, true);
                 for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                     for (let x = 0; x < pw; x++) { const i = s+x; if (disocc[i]) plateF[d2+x] = filledD[i*3] / 255; } }
+            }
+            // A244d FAR-RIM DEPTH MEMBRANE (geometric band only). The a58c continuation above is
+            // isotropic: it takes its boundary from EVERY non-band texel, so with the band reaching
+            // the occluder's core the core island (source depth, never revealed) pulls the band's
+            // plate toward the near depth — a relief clone in depth (C2), and the colour gate then
+            // admits the core's colours (the bright arm-shaped patch beside the arm, geo3). Here the
+            // band's depth is the membrane of the FAR rim only: a non-band neighbour is a boundary
+            // value when its source depth agrees with the local reference far depth (the pass-1
+            // plate nearest to the texel) within the tear step; the core, a cliff nearer, is not.
+            // Same solver, same gate, as the colour.
+            if (window._bandReplace && window._geoRef && window._geoRef.band && window._geoRef.band.length === PNq && window._geoDepth !== false) {
+                const tGD = Date.now(); const ref = window._geoRef; const TOLD2 = fgTearStep;
+                // reference far depth: BFS from the pass-1 band with its plate depth (source rows)
+                const farAt = new Float32Array(PNq).fill(-1); const qb = new Int32Array(PNq); let qh = 0, qt = 0;
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (ref.band[i]) { farAt[i] = ref.plate[(ph-1-y)*pw+x]; qb[qt++] = i; } }
+                while (qh < qt) { const i = qb[qh++]; const x = i % pw, y = (i / pw) | 0; const v = farAt[i];
+                    if (x > 0 && farAt[i-1] < 0) { farAt[i-1] = v; qb[qt++] = i-1; } if (x < pw-1 && farAt[i+1] < 0) { farAt[i+1] = v; qb[qt++] = i+1; }
+                    if (y > 0 && farAt[i-pw] < 0) { farAt[i-pw] = v; qb[qt++] = i-pw; } if (y < ph-1 && farAt[i+pw] < 0) { farAt[i+pw] = v; qb[qt++] = i+pw; } }
+                const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (disocc[i]) uIdx[i] = nU++;
+                const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
+                             dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
+                             vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
+                let nDir = 0, nNearRim = 0;
+                for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0;
+                    lv.x[u] = x; lv.y[u] = y; const init = (farAt[i] >= 0 ? farAt[i] : dQ[i]) * 255; lv.vR[u] = lv.vG[u] = lv.vB[u] = init;
+                    const cN = [x > 0 ? i-1 : -1, x < pw-1 ? i+1 : -1, y > 0 ? i-pw : -1, y < ph-1 ? i+pw : -1];
+                    for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0) continue;
+                        if (disocc[j]) lv.nb[u*4+s] = uIdx[j];
+                        else if (farAt[i] >= 0 && Math.abs(dQ[j] - farAt[i]) <= TOLD2) { const v = dQ[j] * 255; lv.dR[u] += v; lv.dG[u] += v; lv.dB[u] += v; lv.dW[u]++; nDir++; }
+                        else nNearRim++; } }
+                const mg = bgMembraneSolve(lv, 0.5, 60);
+                let nSet = 0;
+                for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const f = (ph-1-((i / pw) | 0))*pw + (i % pw); plateF[f] = Math.max(0, Math.min(1, lv.vR[u] / 255)); nSet++; }
+                console.log('[QUICK-BAKE] A244d far-rim depth membrane: ' + nSet + ' band texels, ' + nDir + ' far-rim boundary contacts, ' + nNearRim + ' near-rim contacts excluded; ' + mg.sweeps[0][1] + ' cycles, extrapolated error ' + (mg.residual / 255).toFixed(4) + ' depth (' + (Date.now() - tGD) + 'ms)');
             }
             // A58d ANAMORPHIC PLUG REGION. The disocclusion a near occluder
             // opens on a FARTHER surface is its silhouette PROJECTED onto that
