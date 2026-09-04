@@ -7824,9 +7824,32 @@ window._plugGeoBand = function (opts) {
     for (let i = 0; i < N; i++) { const pin = !!(s1.seen[i] && torn && torn[i]); const b = (dist[i] <= PAD * 5) || pin; if (s1.revealTex[i]) nRev++; if (pin) nPin++;
         if (b) { band[i] = 1; nB++; } if (b && disBefore[i]) nKeep++; else if (b) nAdd++; else if (disBefore[i]) nDrop++; }
     window._bandReplace = band;
-    bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the geometric band
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the geometric band, membrane depth
+    // A244e PASS 3: the reveal cells invert through the local far depth, and pass 1's far depth is the fronts'
+    // row-wise plate (its teeth reappear in the band's outline, item 13c/15). Re-invert through pass 2's
+    // membrane depth (smooth) and rebake with that band — the band's outline then carries the reveal's shape.
+    window._geoRef = { band: window._qbDisocc.slice(), plate: window._qbPlateF.slice() };
+    const s2a = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
+    const band3 = new Uint8Array(N); let nB3 = 0, nRev3 = 0;
+    if (s2a) {
+        const dist3 = new Int32Array(N).fill(INF);
+        for (let i = 0; i < N; i++) if (s2a.revealTex[i]) { dist3[i] = 0; nRev3++; }
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist3[i];
+            if (x > 0 && dist3[i - 1] + 5 < v) v = dist3[i - 1] + 5;
+            if (y > 0) { if (dist3[i - pw] + 5 < v) v = dist3[i - pw] + 5; if (x > 0 && dist3[i - pw - 1] + 7 < v) v = dist3[i - pw - 1] + 7; if (x < pw - 1 && dist3[i - pw + 1] + 7 < v) v = dist3[i - pw + 1] + 7; }
+            dist3[i] = v; }
+        for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist3[i];
+            if (x < pw - 1 && dist3[i + 1] + 5 < v) v = dist3[i + 1] + 5;
+            if (y < ph - 1) { if (dist3[i + pw] + 5 < v) v = dist3[i + pw] + 5; if (x < pw - 1 && dist3[i + pw + 1] + 7 < v) v = dist3[i + pw + 1] + 7; if (x > 0 && dist3[i + pw - 1] + 7 < v) v = dist3[i + pw - 1] + 7; }
+            dist3[i] = v; }
+        const torn3 = s2a.torn;
+        for (let i = 0; i < N; i++) { const pin = !!(s2a.seen[i] && torn3 && torn3[i]); if (dist3[i] <= PAD * 5 || pin) { band3[i] = 1; nB3++; } }
+        window._bandReplace = band3;
+        bgQuickBake = true; buildBackgroundLayer();                               // pass 3: the band from the membrane-depth inversion
+    }
     const s2 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
     let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
+    console.log('[A244e] pass 3: reveal texels through the membrane depth ' + nRev3 + ' -> band ' + nB3 + ' (pass-2 band ' + nB + ')');
     const stats = { pw, ph, poses: s1.poses, revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin, pad: PAD, stepPad: s1.stepPad,
                     bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, seen1: s1.nSeen, seen2: s2 ? s2.nSeen : -1, reveal2: nRev2, reveal2Outside: nOutside, ms: Date.now() - t0 };
     console.log('[A244] geometric band: ' + s1.poses + ' poses; reveal cells ' + s1.revealIn + ' (outpaint ' + s1.revealOut + ' excluded) -> ' + nRev + ' reveal texels + ' + nPin + ' pinholes, pad ' + PAD +
@@ -14730,7 +14753,12 @@ function bgBuildBackgroundLayerCore() {
                         let mnD = 2, mxD = -1, inScan = false;
                         for (let k = 0; k < 3; k++) { const vi = src2[t + k]; const vx = vi % vw2, vy = (vi / vw2) | 0;
                             const pxT = idMap2 ? vx : Math.round(vx * sx2), pyT = idMap2 ? vy : Math.round(vy * sy2); tx2[k] = pxT; ty2[k] = pyT;
-                            const ti = pyT * pw + pxT; const dlo = winF ? dwMnF[ti] : dQ[ti], dhi = winF ? dwMxF[ti] : dQ[ti]; if (dlo < mnD) mnD = dlo; if (dhi > mxD) mxD = dhi; if (disocc[ti]) inScan = true; }
+                            const ti = pyT * pw + pxT;
+                            // A243b: the window stands in for the cell only where the window holds a CLIFF (its range above the
+                            // tear step, the A44 criterion); on a slope the window's range is the slope times the window, not a
+                            // step, and using it tore 43% of the troll's cells (a243_sheet1_composite_zoom.png, falsified).
+                            const cliffHere = winF && (dwMxF[ti] - dwMnF[ti]) > fgTearStep;
+                            const dlo = cliffHere ? dwMnF[ti] : dQ[ti], dhi = cliffHere ? dwMxF[ti] : dQ[ti]; if (dlo < mnD) mnD = dlo; if (dhi > mxD) mxD = dhi; if (disocc[ti]) inScan = true; }
                         if (!(inScan || window._a212Ungated === true)) continue;
                         if (!((mxD - mnD) > qN2)) { nQuantumSkipped++; continue; }
                         const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
