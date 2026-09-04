@@ -7647,6 +7647,12 @@ window._plugCpuSweep = function (opts) {
         torn = new Uint8Array(N); const a = (tm === 'a160') ? null : window._qbFgTorn, b = (tm === 'a212') ? null : window._qbTorn;
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if ((a && a[i]) || (b && b[(ph - 1 - y) * pw + x])) torn[i] = 1; }
     }
+    // A243: with the per-fragment tear (window._fragTear = 2) the foreground opens PER POSE — a
+    // texel is torn at pose f when its fold point (window._qbFoldTex, the bake's per-texel minimum
+    // over incident cells) is below the pose fraction |f|, the same test the fragment shader runs.
+    const foldTex = (opts.foldTex !== undefined) ? opts.foldTex : ((window._fragTear && window._qbFoldTex && window._qbFoldTex.length === N) ? window._qbFoldTex : null);
+    const tornPose = foldTex ? new Uint8Array(N) : null;
+    let tornAny = null; if (foldTex) { tornAny = new Uint8Array(N); }
     const lut = bgShiftLUTFor(pw, ph);
     const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
     const _cz = (camera && camera.position) ? camera.position.z : 0.2;
@@ -7709,9 +7715,11 @@ window._plugCpuSweep = function (opts) {
         const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; } } };
+    const tornStatic = torn;
     for (const [ex, ey] of poses) {
         const fx = sign * ex / exRim, fy = sign * ey / exRim;
         zb.fill(-1e9); own.fill(-1);
+        if (foldTex) { const pf = Math.hypot(fx, fy); for (let i = 0; i < N; i++) { const t = foldTex[i] < pf ? 1 : 0; tornPose[i] = t; if (t) tornAny[i] = 1; } torn = tornPose; }
         // foreground: untorn quads (all four corners untorn, no edge beyond the cut length); the
         // quad's depth is its nearest corner (the rubber sheet is drawn at the surface, ties to FG)
         for (let y = 0; y < ph; y++) { const r = y * pw;
@@ -7773,7 +7781,7 @@ window._plugCpuSweep = function (opts) {
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     let sMax = 0; for (let i = 0; i < N; i++) { const a = Math.abs(sFG[i]); if (a > sMax) sMax = a; }
     const stepPad = opts.poses ? 0 : Math.ceil(sMax * 2 / Math.max(1, NX - 1));
-    return { seen, torn, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, ms: Date.now() - t0 };
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -14706,12 +14714,23 @@ function bgBuildBackgroundLayerCore() {
                     // shift span above the cell extent and every terrace row tears (the ladder on the
                     // star-watcher figure at sheet1, a241b_sheet1_crop2.png).
                     const qN2 = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 0;
+                    // A243 WINDOWED FOLD POINTS (window._foldWindow): the cell's step is read over the
+                    // a62 smear window (bgSlide2D, radius RWD = 4/1200 of the width — the measured smear
+                    // of painterly silhouettes, Addendum 93) instead of its own three vertices, so a
+                    // silhouette the estimator smeared over RWD texels tears as one unit at the pose
+                    // where the WHOLE step folds, not cell by cell as each becomes edge-on, and the
+                    // fold field is no longer row-wise noisy on a terraced depth (the teeth of
+                    // Addendum 180 item 13c). The quantum gate reads the same windowed range.
+                    const winF = !!window._foldWindow;
+                    const RWDf = Math.max(1, Math.round(4 * pw / 1200));
+                    const dwMxF = winF ? bgSlide2D(dQ, pw, ph, RWDf, false) : null, dwMnF = winF ? bgSlide2D(dQ, pw, ph, RWDf, true) : null;
+                    const foldTex = window._plugSweepCapture ? new Float32Array(pw * ph).fill(2.0) : null;   // A243: per-texel fold point (min over incident cells), source rows, for the CPU sweep
                     let nFold = 0, nQuantumSkipped = 0;
                     for (let t = 0; t < src2.length; t += 3) {
                         let mnD = 2, mxD = -1, inScan = false;
                         for (let k = 0; k < 3; k++) { const vi = src2[t + k]; const vx = vi % vw2, vy = (vi / vw2) | 0;
                             const pxT = idMap2 ? vx : Math.round(vx * sx2), pyT = idMap2 ? vy : Math.round(vy * sy2); tx2[k] = pxT; ty2[k] = pyT;
-                            const d = dQ[pyT * pw + pxT]; if (d < mnD) mnD = d; if (d > mxD) mxD = d; if (disocc[pyT * pw + pxT]) inScan = true; }
+                            const ti = pyT * pw + pxT; const dlo = winF ? dwMnF[ti] : dQ[ti], dhi = winF ? dwMxF[ti] : dQ[ti]; if (dlo < mnD) mnD = dlo; if (dhi > mxD) mxD = dhi; if (disocc[ti]) inScan = true; }
                         if (!(inScan || window._a212Ungated === true)) continue;
                         if (!((mxD - mnD) > qN2)) { nQuantumSkipped++; continue; }
                         const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
@@ -14719,10 +14738,11 @@ function bgBuildBackgroundLayerCore() {
                         if (span <= 0) continue;
                         const f = ext / span;                       // pose fraction (of the rim offset) at which this cell folds
                         if (f < 1) nFold++;
-                        for (let k = 0; k < 3; k++) { const vi = src2[t + k]; if (f < foldAt[vi]) foldAt[vi] = f; }
+                        for (let k = 0; k < 3; k++) { const vi = src2[t + k]; if (f < foldAt[vi]) foldAt[vi] = f; if (foldTex) { const ti = ty2[k] * pw + tx2[k]; if (f < foldTex[ti]) foldTex[ti] = f; } }
                     }
                     g2.setAttribute('aFoldAt', new THREE.BufferAttribute(foldAt, 1));
-                    console.log('[QUICK-BAKE] A241b vertex fold points: ' + nFold + ' cells fold inside the cone (' + (100 * nFold / (src2.length / 3)).toFixed(1) + '%), ' + nQuantumSkipped + ' scan cells skipped by the source-quantum gate (A241c); pose fraction drives the cut per frame');
+                    if (foldTex) window._qbFoldTex = foldTex;
+                    console.log('[QUICK-BAKE] A241b vertex fold points' + (winF ? ' (A243 windowed, RWD ' + RWDf + ')' : '') + ': ' + nFold + ' cells fold inside the cone (' + (100 * nFold / (src2.length / 3)).toFixed(1) + '%), ' + nQuantumSkipped + ' scan cells skipped by the source-quantum gate (A241c); pose fraction drives the cut per frame');
                 }
                 fu.u_fragTearGate.value = (window._fragTearUngated === true) ? 0.0 : 1.0;
                 fu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
