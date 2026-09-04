@@ -7839,30 +7839,10 @@ window._plugGeoBand = function (opts) {
     for (let i = 0; i < N; i++) { const u = uIdx[i]; farField[i] = u < 0 ? dQ[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
     // never in front of the source: the far field is a continuation BEHIND the surface (a135's ordering, per texel)
     let nClampF = 0; for (let i = 0; i < N; i++) if (farField[i] > dQ[i]) { farField[i] = dQ[i]; nClampF++; }
-    // A244h REFINED FAR FIELD (window._farFieldRefine, measured arm). With only the silhouette rims as
-    // boundary the field drifts toward distant rims (behind the star-watcher figure it came out at the
-    // dark far rock's depth where the bright rock stands, Addendum 180 item 22). A source texel that is
-    // not in front of the far continuation IS the far surface there: every texel with source depth
-    // at or behind the field (within the tear step) joins the boundary at its own depth, and the field
-    // is solved once more over what remains (the occluders). No new constant.
-    let nRefine = 0;
-    if (!!window._farFieldRefine) {
-        const dir2 = new Uint8Array(N); for (let i = 0; i < N; i++) if (rim[i] || dQ[i] <= farField[i] + TOLB) { dir2[i] = 1; nRefine++; }
-        const uIdx2 = new Int32Array(N).fill(-1); let nU2 = 0; for (let i = 0; i < N; i++) if (!dir2[i]) uIdx2[i] = nU2++;
-        if (nU2 > 0) {
-            const lv2 = { n: nU2, x: new Int32Array(nU2), y: new Int32Array(nU2), nb: new Int32Array(nU2 * 4).fill(-1),
-                          dR: new Float32Array(nU2), dG: new Float32Array(nU2), dB: new Float32Array(nU2), dW: new Float32Array(nU2),
-                          vR: new Float32Array(nU2), vG: new Float32Array(nU2), vB: new Float32Array(nU2), L: 0 };
-            for (let i = 0; i < N; i++) { const u = uIdx2[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv2.x[u] = x; lv2.y[u] = y;
-                lv2.vR[u] = lv2.vG[u] = lv2.vB[u] = farField[i] * 255;
-                const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
-                for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue; if (dir2[j]) { const v = dQ[j] * 255; lv2.dR[u] += v; lv2.dG[u] += v; lv2.dB[u] += v; lv2.dW[u]++; } else lv2.nb[u * 4 + s2] = uIdx2[j]; } }
-            const mg2 = bgMembraneSolve(lv2, 0.5, 60);
-            for (let i = 0; i < N; i++) { const u = uIdx2[i]; if (u >= 0) farField[i] = Math.max(0, Math.min(1, lv2.vR[u] / 255)); else if (!rim[i]) farField[i] = dQ[i]; }
-            for (let i = 0; i < N; i++) if (farField[i] > dQ[i]) farField[i] = dQ[i];
-            console.log('[A244h] refined far field: ' + nRefine + ' texels at or behind the field became boundary, ' + nU2 + ' occluder texels re-solved (' + mg2.sweeps[0][1] + ' cycles, err ' + (mg2.residual / 255).toFixed(4) + ')');
-        }
-    }
+    // A244h (refined far field: source texels at or behind the field join its boundary) was built, measured
+    // and REMOVED (rule 7): against the gate fix alone it changed nothing the instruments or the screen
+    // resolve (troll far distance 36.7 vs 38.7, star watcher seam 24.0 vs 24.5) and did not save the
+    // foliage case. Addendum 180 items 23-25.
     window._geoFarField = farField;
     const msF = Date.now() - tF;
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
