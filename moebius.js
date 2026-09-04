@@ -2394,6 +2394,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_fragTearFactor: { value: 2.0 },    // stretch beyond which a cell has folded: shift span > its own extent (A212/a102)
         u_texelsPerPxRest: { value: 0.0 },
         u_poseFrac: { value: 0.0 },          // A241b: |eye offset| / rim offset, updated every frame
+        u_restClip: { value: new THREE.Vector2(0, 0) },   // A245: the frame's rest footprint in NDC half-extents; the plug is not drawn outside it (0 = off)
         // A189 THE BAND CUT MEASURES PER RENDERED PIXEL AND ITS THRESHOLDS NAME
         // THE CANVAS. dFdx(vUv) and fwidth() are per-fragment-quad, so every
         // quantity in the cut is "per pixel of whatever we are rasterising
@@ -2426,6 +2427,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
     const commonVertexVaryings = `
         varying vec2 vUv;
         varying float vFoldAt;   // A241b: pose fraction at which this vertex's cells fold (>= 2 = never)
+        varying vec4 vClip;      // A245: clip-space position for the rest-footprint clip
         varying float vNormalizedDepth;
         varying float vClipW;
         varying vec3 vViewPosition;
@@ -2472,6 +2474,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
 
         varying vec2 vUv;
         varying float vFoldAt;
+        varying vec4 vClip; uniform vec2 u_restClip;   // A245
         varying float vNormalizedDepth;
         varying float vClipW;
         varying vec3 vViewPosition;
@@ -2526,6 +2529,10 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // predicate: a texel incident to any folding cell). The fragment
         // compares the interpolated fold point with the current pose fraction —
         // a continuous field, no per-quad derivative noise, no speckle.
+        // A245: the plug's margin exists to cover what the foreground vacates INSIDE the frame's rest
+        // footprint; outside that footprint there is nothing to cover at any pose (the outpaint class
+        // is the SD stage's), so the plug is not drawn there — rest stays pixel-faithful to the frame.
+        if (u_isBackgroundLayer && u_restClip.x > 0.0) { vec2 ndc = vClip.xy / max(vClip.w, 1e-6); if (abs(ndc.x) > u_restClip.x || abs(ndc.y) > u_restClip.y) discard; }
         if (u_fragTear > 1.5 && !u_isBackgroundLayer && !isGap) {
             if (u_poseFrac > vFoldAt) isGap = true;
         } else if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
@@ -2989,7 +2996,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         specificUniforms = { map: { value: mainTexture }, displacementMap: { value: depthTextureForMode } };
         vertexShaderSource = `
             ${baseVertexShaderPrefix} uniform sampler2D displacementMap;
-            void main() { vUv = uv; vFoldAt = aFoldAt; vNormalizedDepth = texture2D(displacementMap, vUv).r; ${viewSpaceDisplacementLogic} }`;
+            void main() { vUv = uv; vFoldAt = aFoldAt; vNormalizedDepth = texture2D(displacementMap, vUv).r; ${viewSpaceDisplacementLogic} vClip = gl_Position; }`;
 
         fragmentShaderSource = `
             ${fragmentShaderHead} uniform sampler2D map; uniform sampler2D displacementMap;
@@ -14700,6 +14707,7 @@ function bgBuildBackgroundLayerCore() {
                     for (let k = 0; k < uv.count; k++) { uv.setXY(k, uv.getX(k) * su - ou, uv.getY(k) * sv - ov); }
                     uv.needsUpdate = true;
                     gQ = gM;
+                    if (matQ.uniforms.u_restClip) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight);   // the frame's rest footprint in NDC (the window projection maps the portal to [-1,1] at every pose)
                     console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest rim shift ' + sMaxM.toFixed(1) + ') = ' + mx + 'x' + my + ' mesh cells on every side; geometry ' + (segW + 2 * mx) + 'x' + (segH + 2 * my) + ' cells, UVs past [0,1] clamp to the edge');
                 } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); }
             }
