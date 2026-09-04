@@ -7672,8 +7672,11 @@ window._plugCpuSweep = function (opts) {
     // farAt = the nearest demand texel's plate depth (BFS from the demand set, source rows); a
     // hole cell at pose f is covered by the texel that lands there when displaced by the far
     // shift: t = cell - s(farAt(t)) * f, two fixed-point steps. holeTex is in source rows.
-    const wantHoles = !!opts.holeDemand && window._qbDisocc;
+    const wantReveal = !!opts.revealDemand && window._qbDisocc;
+    const wantHoles = (!!opts.holeDemand || wantReveal) && window._qbDisocc;
     const holeTex = wantHoles ? new Uint8Array(N) : null; let holeIn = 0, holeOut = 0;
+    const revealTex = wantReveal ? new Uint8Array(N) : null; let revealIn = 0, revealOut = 0;
+    const outp = wantReveal ? new Uint8Array(G) : null, stk = wantReveal ? new Int32Array(G) : null;
     let farAt = null;
     if (wantHoles) {
         farAt = new Float32Array(N).fill(-1); const qb = new Int32Array(N); let qh = 0, qt = 0; const dis = window._qbDisocc;
@@ -7695,24 +7698,58 @@ window._plugCpuSweep = function (opts) {
         const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / sc; const steps = Math.ceil(n);
         if (steps <= 1) return;
         for (let k = 1; k < steps; k++) { const t = k / steps; splat(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, d0 + (d1 - d0) * t, id); } };
+    // A244: QUAD FILL. Edge spans alone leave the interior of a quad stretched in both axes
+    // uncovered (measured: 8.3M "hole" cells over 85 poses on the troll, 11% of all cells —
+    // the plate's ramps and the diagonal poses), which made the hole inversion flood the
+    // band. Each quad (texel, right, down, diagonal) now fills the cells of its warped
+    // bounding box — conservative for coverage, which is what holes and reveals need; quads
+    // are one texel, so the box and the quad differ by at most the stretch's skew.
+    const quad = (x0, y0, x1, y1, x2, y2, x3, y3, d, id) => {
+        const mnx = Math.max(0, Math.floor(Math.min(x0, x1, x2, x3) / sc)), mxx = Math.min(GW - 1, Math.floor(Math.max(x0, x1, x2, x3) / sc));
+        const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
+        for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
+            if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; } } };
     for (const [ex, ey] of poses) {
         const fx = sign * ex / exRim, fy = sign * ey / exRim;
         zb.fill(-1e9); own.fill(-1);
-        // foreground: untorn texels + spans to right/down neighbours (the two edges of each quad)
+        // foreground: untorn quads (all four corners untorn, no edge beyond the cut length); the
+        // quad's depth is its nearest corner (the rubber sheet is drawn at the surface, ties to FG)
         for (let y = 0; y < ph; y++) { const r = y * pw;
             for (let x = 0; x < pw; x++) { const i = r + x; if (torn && torn[i]) continue;
                 const xs = x + sFG[i] * fx, ys = y + sFG[i] * fy, d = dQ[i];
+                if (x + 1 < pw && y + 1 < ph && !(torn && (torn[i + 1] || torn[i + pw] || torn[i + pw + 1]))) {
+                    const xa = x + 1 + sFG[i + 1] * fx, ya = y + sFG[i + 1] * fy, xb = x + sFG[i + pw] * fx, yb = y + 1 + sFG[i + pw] * fy, xc = x + 1 + sFG[i + pw + 1] * fx, yc = y + 1 + sFG[i + pw + 1] * fy;
+                    if (Math.hypot(xa - xs, ya - ys) <= cutLen && Math.hypot(xb - xs, yb - ys) <= cutLen) { quad(xs, ys, xa, ya, xb, yb, xc, yc, Math.max(d, dQ[i + 1], dQ[i + pw], dQ[i + pw + 1]), -2); continue; }
+                }
                 splat(xs, ys, d, -2);
-                if (x + 1 < pw && !(torn && torn[i + 1])) { const x1 = x + 1 + sFG[i + 1] * fx, y1 = y + sFG[i + 1] * fy; if (Math.hypot(x1 - xs, y1 - ys) <= cutLen) span(xs, ys, d, x1, y1, dQ[i + 1], -2); }
-                if (y + 1 < ph && !(torn && torn[i + pw])) { const x1 = x + sFG[i + pw] * fx, y1 = y + 1 + sFG[i + pw] * fy; if (Math.hypot(x1 - xs, y1 - ys) <= cutLen) span(xs, ys, d, x1, y1, dQ[i + pw], -2); }
             } }
-        // plate: continuous mesh (or the carved subset), behind the foreground on ties
+        // A244 REVEAL DEMAND: after the foreground pass, every in-frame cell the foreground does
+        // not cover is a reveal (the frame-edge bands — cells connected to the border through
+        // uncovered cells — are the outpaint class, not reveals). Each reveal cell is inverted
+        // through the far shift to the plate texel that must cover it: that texel needs the far
+        // fill, whether or not a front reached it. This is the band's outline from geometry.
+        if (revealTex) {
+            outp.fill(0); let sh = 0, st2 = 0;
+            const pushB = (c) => { if (own[c] !== -2 && !outp[c]) { outp[c] = 1; stk[st2++] = c; } };
+            for (let cx = 0; cx < GW; cx++) { pushB(cx); pushB((GH - 1) * GW + cx); } for (let cy = 0; cy < GH; cy++) { pushB(cy * GW); pushB(cy * GW + GW - 1); }
+            while (sh < st2) { const c = stk[sh++]; const cx = c % GW, cy = (c / GW) | 0; if (cx > 0) pushB(c - 1); if (cx < GW - 1) pushB(c + 1); if (cy > 0) pushB(c - GW); if (cy < GH - 1) pushB(c + GW); }
+            for (let c = 0; c < G; c++) { if (own[c] === -2 || outp[c]) continue;
+                const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc; let tx = cx0, ty = cy0;
+                for (let it = 0; it < 2; it++) { const txi = Math.max(0, Math.min(pw - 1, Math.round(tx))), tyi = Math.max(0, Math.min(ph - 1, Math.round(ty)));
+                    const d = farAt[tyi * pw + txi]; if (d < 0) break; const sT = bgShiftPxAt(lut, d); tx = cx0 - sT * fx; ty = cy0 - sT * fy; }
+                const txr = Math.round(tx), tyr = Math.round(ty);
+                if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) revealOut++; else { revealTex[tyr * pw + txr] = 1; revealIn++; } }
+        }
+        // plate: continuous mesh (or the carved subset), behind the foreground on ties; a quad
+        // takes its FARTHEST corner (a ramp quad must not claim a cell in front of the surface)
         for (let y = 0; y < ph; y++) { const r = y * pw;
             for (let x = 0; x < pw; x++) { const i = r + x; const f = (ph - 1 - y) * pw + x; if (plateIdx && !plateIdx[f]) continue;
                 const xs = x + sPL[i] * fx, ys = y + sPL[i] * fy, d = pFs[i];
+                if (x + 1 < pw && y + 1 < ph && !(plateIdx && (!plateIdx[f + 1] || !plateIdx[f - pw] || !plateIdx[f - pw + 1]))) {
+                    quad(xs, ys, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, x + 1 + sPL[i + pw + 1] * fx, y + 1 + sPL[i + pw + 1] * fy,
+                         Math.min(d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]), i); continue;
+                }
                 splat(xs, ys, d, i);
-                if (x + 1 < pw && !(plateIdx && !plateIdx[f + 1])) span(xs, ys, d, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, pFs[i + 1], i);
-                if (y + 1 < ph && !(plateIdx && !plateIdx[f - pw])) span(xs, ys, d, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, pFs[i + pw], i);
             } }
         for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
             if (wantHoles) {
@@ -7725,7 +7762,18 @@ window._plugCpuSweep = function (opts) {
             } } }
     }
     let nSeen = 0; for (let i = 0; i < N; i++) nSeen += seen[i];
-    return { seen, torn, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, ms: Date.now() - t0 };
+    let classMap = null;
+    if (opts.classMap) {   // A244 probe: the LAST pose's cell classes as a PNG (grey FG, green plate, red hole, black outside)
+        const cv = document.createElement('canvas'); cv.width = GW; cv.height = GH; const cx = cv.getContext('2d'); const im = cx.createImageData(GW, GH);
+        for (let c = 0; c < G; c++) { const o4 = c * 4; const v = own[c]; let r = 0, g = 0, b = 0;
+            if (v === -2) { r = g = b = 110; } else if (v >= 0) { r = 40; g = 160; b = 70; } else { r = 230; g = 40; b = 40; }
+            im.data[o4] = r; im.data[o4 + 1] = g; im.data[o4 + 2] = b; im.data[o4 + 3] = 255; }
+        cx.putImageData(im, 0, 0); classMap = cv.toDataURL('image/png');
+    }
+    // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
+    let sMax = 0; for (let i = 0; i < N; i++) { const a = Math.abs(sFG[i]); if (a > sMax) sMax = a; }
+    const stepPad = opts.poses ? 0 : Math.ceil(sMax * 2 / Math.max(1, NX - 1));
+    return { seen, torn, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -7742,22 +7790,15 @@ window._plugGeoBand = function (opts) {
     const t0 = Date.now();
     window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._extraDemand = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
-    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band
-    const s1 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
+    const NXg = opts.nx || 17, NYg = opts.ny || 5;
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band (its plate depths seed the inversion)
+    const s1 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
-    const { pw, ph, N } = s1;
-    const extra = new Uint8Array(N); let nE = 0;
-    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.holeTex[i]) continue;
-        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= pw || yy >= ph) continue; const j = yy * pw + xx; if (!extra[j]) { extra[j] = 1; nE++; } } }
-    window._extraDemand = extra;
-    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1b: holes covered
-    const s2 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
-    window._extraDemand = null;
-    const torn = s2.torn; const disBefore = window._qbDisocc;
-    // band := reveals (seen, not torn) padded by the a62 pad (6 texels: between-pose coverage, Addendum 172/175) + pinholes as they are
-    const PAD = 6;
+    const { pw, ph, N } = s1; const torn = s1.torn; const disBefore = window._qbDisocc;
+    // band := reveal texels dilated by the between-pose step (+1 for rounding), plus the pinholes (plate seen through the foreground's own tears)
+    const PAD = s1.stepPad + 1;
     const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
-    for (let i = 0; i < N; i++) if (s2.seen[i] && !(torn && torn[i])) dist[i] = 0;
+    for (let i = 0; i < N; i++) if (s1.revealTex[i]) dist[i] = 0;
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
         if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
         if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
@@ -7766,16 +7807,17 @@ window._plugGeoBand = function (opts) {
         if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
         if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
         dist[i] = v; }
-    const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0;
-    for (let i = 0; i < N; i++) { const b = (dist[i] <= PAD * 5) || (s2.seen[i] && torn && torn[i]); if (b) { band[i] = 1; nB++; }
-        if (b && disBefore[i]) nKeep++; else if (b) nAdd++; else if (disBefore[i]) nDrop++; }
+    const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0, nRev = 0, nPin = 0;
+    for (let i = 0; i < N; i++) { const pin = !!(s1.seen[i] && torn && torn[i]); const b = (dist[i] <= PAD * 5) || pin; if (s1.revealTex[i]) nRev++; if (pin) nPin++;
+        if (b) { band[i] = 1; nB++; } if (b && disBefore[i]) nKeep++; else if (b) nAdd++; else if (disBefore[i]) nDrop++; }
     window._bandReplace = band;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the geometric band
-    const s3 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
-    const stats = { pw, ph, poses: s1.poses, holes1: s1.holeCells, holes1b: s2.holeCells, holes2: s3 ? s3.holeCells : -1, extra: nE, seen1: s1.nSeen, seen2: s2.nSeen, seen3: s3 ? s3.nSeen : -1,
-                    bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, ms: Date.now() - t0 };
-    console.log('[A244] geometric band: pass-1 hole cells ' + s1.holeCells + ' -> ' + nE + ' texels to the demand -> pass-1b hole cells ' + s2.holeCells + '; seen ' + s1.nSeen + ' -> ' + s2.nSeen +
-        '; band ' + stats.bandBefore + ' -> ' + nB + ' texels (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); pass-2 hole cells ' + stats.holes2 + ', seen ' + stats.seen3 + '; ' + stats.ms + 'ms');
+    const s2 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
+    let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
+    const stats = { pw, ph, poses: s1.poses, revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin, pad: PAD, stepPad: s1.stepPad,
+                    bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, seen1: s1.nSeen, seen2: s2 ? s2.nSeen : -1, reveal2: nRev2, reveal2Outside: nOutside, ms: Date.now() - t0 };
+    console.log('[A244] geometric band: ' + s1.poses + ' poses; reveal cells ' + s1.revealIn + ' (outpaint ' + s1.revealOut + ' excluded) -> ' + nRev + ' reveal texels + ' + nPin + ' pinholes, pad ' + PAD +
+        ' texels (between-pose step ' + s1.stepPad + ' + 1); band ' + stats.bandBefore + ' -> ' + nB + ' (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); after rebake: reveal texels ' + nRev2 + ', of which outside the band ' + nOutside + '; seen ' + s1.nSeen + ' -> ' + stats.seen2 + '; ' + stats.ms + 'ms');
     window._plugGeoStats = stats;
     return stats;
 };
