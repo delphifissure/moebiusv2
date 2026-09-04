@@ -7684,7 +7684,8 @@ window._plugCpuSweep = function (opts) {
     const revealTex = wantReveal ? new Uint8Array(N) : null; let revealIn = 0, revealOut = 0;
     const outp = wantReveal ? new Uint8Array(G) : null, stk = wantReveal ? new Int32Array(G) : null;
     let farAt = null;
-    if (wantHoles) {
+    if (wantHoles && opts.farField && opts.farField.length === N) { farAt = opts.farField; }   // A244f: the a-priori far field (source rows)
+    else if (wantHoles) {
         farAt = new Float32Array(N).fill(-1); const qb = new Int32Array(N); let qh = 0, qt = 0; const dis = window._qbDisocc;
         for (let i = 0; i < N; i++) if (dis[i]) { farAt[i] = pFs[i]; qb[qt++] = i; }
         while (qh < qt) { const i = qb[qh++]; const x = i % pw, y = (i / pw) | 0; const v = farAt[i];
@@ -7794,66 +7795,65 @@ window._plugCpuSweep = function (opts) {
 // flagged join it and take the far fill. Depth inside the band is still the fronts' plate
 // where they reached and the a58c continuation elsewhere. Colour: the membrane if flagged.
 window._plugGeoBand = function (opts) {
+    // A244f THE A-PRIORI FAR FIELD. Inverting reveal cells through a depth that is itself
+    // defined by the band is not a fixed point (pass 1 -> 2 -> 3 on the troll: 318k -> 307k
+    // -> 506k reveal texels, 222k outside the band; Addendum 173's divergence again). The
+    // far depth behind an occluder does not depend on the band: it is the far surface's
+    // continuation, the membrane over the whole plate whose boundary values are the FAR-RIM
+    // texels (source texels next to the fronts' band whose depth agrees with the band's
+    // plate — the far side of every silhouette). Reveal cells invert through THAT field,
+    // the band is their union (+ pinholes), and the band's depth IS that field. One step.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._extraDemand = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
-    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band (its plate depths seed the inversion)
-    const s1 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band names the far rims
+    const sz = window._qbSize, dQ = window._qbDQ, dis1 = window._qbDisocc, pF1 = window._qbPlateF;
+    if (!sz || !dQ || !dis1 || !pF1) { console.warn('[A244] capture missing'); return null; }
+    const pw = sz.pw, ph = sz.ph, N = pw * ph; const TOLB = fgTearStep;
+    const pS1 = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS1[y * pw + x] = pF1[(ph - 1 - y) * pw + x];
+    // far rims: non-band texels 4-adjacent to a band texel whose source depth agrees with that band texel's plate
+    const rim = new Uint8Array(N); let nRim = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (dis1[i]) continue;
+        const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+        for (const j of cN) { if (j >= 0 && dis1[j] && Math.abs(pS1[j] - dQ[i]) <= TOLB) { rim[i] = 1; nRim++; break; } } }
+    // the far field: membrane over every non-rim texel, Dirichlet at the rims (source depth)
+    const tF = Date.now();
+    const uIdx = new Int32Array(N).fill(-1); let nU = 0; for (let i = 0; i < N; i++) if (!rim[i]) uIdx[i] = nU++;
+    const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
+                 dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
+                 vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
+    for (let i = 0; i < N; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y;
+        const init = (dis1[i] ? pS1[i] : dQ[i]) * 255; lv.vR[u] = lv.vG[u] = lv.vB[u] = init;
+        const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+        for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue; if (rim[j]) { const v = dQ[j] * 255; lv.dR[u] += v; lv.dG[u] += v; lv.dB[u] += v; lv.dW[u]++; } else lv.nb[u * 4 + s2] = uIdx[j]; } }
+    const mgF = bgMembraneSolve(lv, 0.5, 60);
+    const farField = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const u = uIdx[i]; farField[i] = u < 0 ? dQ[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
+    // never in front of the source: the far field is a continuation BEHIND the surface (a135's ordering, per texel)
+    let nClampF = 0; for (let i = 0; i < N; i++) if (farField[i] > dQ[i]) { farField[i] = dQ[i]; nClampF++; }
+    window._geoFarField = farField;
+    const msF = Date.now() - tF;
+    const s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
-    const { pw, ph, N } = s1; const torn = s1.torn; const disBefore = window._qbDisocc;
-    window._geoRef = { band: disBefore.slice(), plate: window._qbPlateF.slice() };   // A244d: the pass-1 band and plate = the reference far depth for the rim gate
-    // band := reveal texels (+1 texel for rounding), plus the pinholes (plate seen through the foreground's own tears).
-    // No between-pose pad: along any direction the reveal at a smaller eye offset is contained in the reveal at a
-    // larger one (the shift law is linear in the offset), so the union over the grid's outer poses covers every
-    // interior pose; the measured alternative (pad = the NEAR texel's step between poses, 72 texels on the troll)
-    // widened the band to 80% of the plate for nothing.
-    const PAD = 1;
-    const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
-    for (let i = 0; i < N; i++) if (s1.revealTex[i]) dist[i] = 0;
-    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
-        if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
-        if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
-        dist[i] = v; }
-    for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist[i];
-        if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
-        if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
-        dist[i] = v; }
+    const torn = s1.torn;
     const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0, nRev = 0, nPin = 0;
-    for (let i = 0; i < N; i++) { const pin = !!(s1.seen[i] && torn && torn[i]); const b = (dist[i] <= PAD * 5) || pin; if (s1.revealTex[i]) nRev++; if (pin) nPin++;
-        if (b) { band[i] = 1; nB++; } if (b && disBefore[i]) nKeep++; else if (b) nAdd++; else if (disBefore[i]) nDrop++; }
+    // +1 texel of rounding around the reveal texels
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const pin = !!(s1.seen[i] && torn && torn[i]); if (s1.revealTex[i]) nRev++; if (pin) nPin++;
+        let b = pin || s1.revealTex[i];
+        if (!b) { const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && s1.revealTex[j]) { b = true; break; } }
+        if (b) { band[i] = 1; nB++; } if (b && dis1[i]) nKeep++; else if (b) nAdd++; else if (dis1[i]) nDrop++; }
     window._bandReplace = band;
-    bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the geometric band, membrane depth
-    // A244e PASS 3: the reveal cells invert through the local far depth, and pass 1's far depth is the fronts'
-    // row-wise plate (its teeth reappear in the band's outline, item 13c/15). Re-invert through pass 2's
-    // membrane depth (smooth) and rebake with that band — the band's outline then carries the reveal's shape.
-    window._geoRef = { band: window._qbDisocc.slice(), plate: window._qbPlateF.slice() };
-    const s2a = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
-    const band3 = new Uint8Array(N); let nB3 = 0, nRev3 = 0;
-    if (s2a) {
-        const dist3 = new Int32Array(N).fill(INF);
-        for (let i = 0; i < N; i++) if (s2a.revealTex[i]) { dist3[i] = 0; nRev3++; }
-        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist3[i];
-            if (x > 0 && dist3[i - 1] + 5 < v) v = dist3[i - 1] + 5;
-            if (y > 0) { if (dist3[i - pw] + 5 < v) v = dist3[i - pw] + 5; if (x > 0 && dist3[i - pw - 1] + 7 < v) v = dist3[i - pw - 1] + 7; if (x < pw - 1 && dist3[i - pw + 1] + 7 < v) v = dist3[i - pw + 1] + 7; }
-            dist3[i] = v; }
-        for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist3[i];
-            if (x < pw - 1 && dist3[i + 1] + 5 < v) v = dist3[i + 1] + 5;
-            if (y < ph - 1) { if (dist3[i + pw] + 5 < v) v = dist3[i + pw] + 5; if (x < pw - 1 && dist3[i + pw + 1] + 7 < v) v = dist3[i + pw + 1] + 7; if (x > 0 && dist3[i + pw - 1] + 7 < v) v = dist3[i + pw - 1] + 7; }
-            dist3[i] = v; }
-        const torn3 = s2a.torn;
-        for (let i = 0; i < N; i++) { const pin = !!(s2a.seen[i] && torn3 && torn3[i]); if (dist3[i] <= PAD * 5 || pin) { band3[i] = 1; nB3++; } }
-        window._bandReplace = band3;
-        bgQuickBake = true; buildBackgroundLayer();                               // pass 3: the band from the membrane-depth inversion
-    }
-    const s2 = window._plugCpuSweep({ revealDemand: true, nx: NXg, ny: NYg });
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the band from the far field, depth = the far field
+    const s2 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg });
     let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
-    console.log('[A244e] pass 3: reveal texels through the membrane depth ' + nRev3 + ' -> band ' + nB3 + ' (pass-2 band ' + nB + ')');
-    const stats = { pw, ph, poses: s1.poses, revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin, pad: PAD, stepPad: s1.stepPad,
-                    bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, seen1: s1.nSeen, seen2: s2 ? s2.nSeen : -1, reveal2: nRev2, reveal2Outside: nOutside, ms: Date.now() - t0 };
-    console.log('[A244] geometric band: ' + s1.poses + ' poses; reveal cells ' + s1.revealIn + ' (outpaint ' + s1.revealOut + ' excluded) -> ' + nRev + ' reveal texels + ' + nPin + ' pinholes, pad ' + PAD +
-        ' texel; band ' + stats.bandBefore + ' -> ' + nB + ' (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); after rebake: reveal texels ' + nRev2 + ', of which outside the band ' + nOutside + '; seen ' + s1.nSeen + ' -> ' + stats.seen2 + '; ' + stats.ms + 'ms');
+    const stats = { pw, ph, poses: s1.poses, rims: nRim, farFieldCycles: mgF.sweeps[0][1], farFieldErr: mgF.residual / 255, farFieldClamped: nClampF, farFieldMs: msF,
+                    revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin,
+                    bandBefore: dis1.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, seen1: s1.nSeen, seen2: s2 ? s2.nSeen : -1, reveal2: nRev2, reveal2Outside: nOutside, ms: Date.now() - t0 };
+    console.log('[A244f] geometric band: ' + nRim + ' far-rim texels -> far field over ' + nU + ' texels (' + mgF.sweeps[0][1] + ' cycles, err ' + (mgF.residual / 255).toFixed(4) + ', ' + nClampF + ' clamped behind the source, ' + msF + 'ms); ' +
+        s1.poses + ' poses, reveal cells ' + s1.revealIn + ' (outpaint ' + s1.revealOut + ' excluded) -> ' + nRev + ' reveal texels + ' + nPin + ' pinholes; band ' + stats.bandBefore + ' -> ' + nB +
+        ' (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); after rebake: reveal texels ' + nRev2 + ', outside the band ' + nOutside + '; seen ' + s1.nSeen + ' -> ' + stats.seen2 + '; ' + stats.ms + 'ms');
     window._plugGeoStats = stats;
     return stats;
 };
@@ -13199,7 +13199,12 @@ function bgBuildBackgroundLayerCore() {
             // value when its source depth agrees with the local reference far depth (the pass-1
             // plate nearest to the texel) within the tear step; the core, a cliff nearer, is not.
             // Same solver, same gate, as the colour.
-            if (window._bandReplace && window._geoRef && window._geoRef.band && window._geoRef.band.length === PNq && window._geoDepth !== false) {
+            if (window._bandReplace && window._geoFarField && window._geoFarField.length === PNq && window._geoDepth !== false) {
+                // A244f: the band's depth IS the a-priori far field (the far-rim membrane over the whole plate)
+                const ff = window._geoFarField; let nFF = 0;
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (disocc[i]) { plateF[(ph-1-y)*pw+x] = ff[i]; nFF++; } }
+                console.log('[QUICK-BAKE] A244f band depth = the far field on ' + nFF + ' band texels');
+            } else if (window._bandReplace && window._geoRef && window._geoRef.band && window._geoRef.band.length === PNq && window._geoDepth !== false) {
                 const tGD = Date.now(); const ref = window._geoRef; const TOLD2 = fgTearStep;
                 // reference far depth: BFS from the pass-1 band with its plate depth (source rows)
                 const farAt = new Float32Array(PNq).fill(-1); const qb = new Int32Array(PNq); let qh = 0, qt = 0;
