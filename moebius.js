@@ -14717,7 +14717,12 @@ function bgBuildBackgroundLayerCore() {
                         strip(w0, mh, segW, 1, 0,  h0 / 2 + mh / 2, 0, 1, 1, 1 + vM),                       // top
                         strip(w0, mh, segW, 1, 0, -h0 / 2 - mh / 2, 0, 1, -vM, 0)                           // bottom
                     ];
-                    if (matQ.uniforms.u_restClip) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight);   // the frame's rest footprint in NDC (the window projection maps the portal to [-1,1] at every pose)
+                    // clip: window._plugMargin = 1 -> the whole portal window (NDC [-1,1]: no uncovered pixel anywhere in the
+                    // window, the bars beside a non-matching aspect included); = 2 -> the source frame's rest footprint only
+                    // (w0/terrariumWidth, h0/terrariumHeight in NDC — the window projection maps the portal to [-1,1] at
+                    // every pose), which leaves the bars as they are at rest and lets torn foreground drifting into them open
+                    // onto nothing off-axis. The screen prices this trade.
+                    if (matQ.uniforms.u_restClip) { if (window._plugMargin === 2) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight); else matQ.uniforms.u_restClip.value.set(1, 1); }
                     console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border foreground rim shift ' + sMaxM.toFixed(1) + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; drawn inside the rest footprint only');
                 } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); plugRing = null; }
             }
