@@ -11247,6 +11247,79 @@ function bgBackstopSweep() {
 // crosses the estimator's undershot silhouette skin. Full derivation and the
 // measured failure of each simpler variant: REVIEW.md Addendum 62.
 // Returns { plate, ground, cells, guardHit } or null (no depth).
+// A242c MEMBRANE SOLVER. Laplace's equation with Dirichlet rim values on an irregular
+// domain: unknowns k with up to 4 coupled unknowns nb[4k+s] (-1 = none) and a Dirichlet
+// accumulator (dR,dG,dB = summed rim colours reached through compatible edges, dW their
+// count): (deg_k + dW_k) v_k - sum_j v_j = d_k. Solved by a V-cycle aggregation multigrid:
+// 2x2 block aggregates with piecewise-constant prolongation and Galerkin coarse operators
+// (Vanek, Mandel & Brezina 1996), Gauss-Seidel smoothing (no omega), the coarse correction
+// over-relaxed by tau = 1.6 (Braess 1995: constant aggregation under-corrects by about 2 in
+// 2D; measured on a disc and a thin ring + bulge: tau 1.0 error 55, 1.5 -> 2.8, 1.6 -> 0.11
+// in 7-9 cycles, 2.0 diverges). Stop on the EXTRAPOLATED error from the cycle-to-cycle
+// contraction (a small residual is not a small error for Laplace). Returns { sweeps:
+// [[n, cycles, est]] , residual: est, levels }. Mutates lv.vR/vG/vB in place.
+function bgMembraneSolve(lvl, tol, maxCycles) {
+    const TAU = 1.6;
+    // fine CSR from the 4-slot table
+    const n0 = lvl.n; const ptr0 = new Int32Array(n0 + 1); let nnz0 = 0;
+    for (let k = 0; k < n0; k++) { ptr0[k] = nnz0; for (let s = 0; s < 4; s++) if (lvl.nb[k * 4 + s] >= 0) nnz0++; } ptr0[n0] = nnz0;
+    const col0 = new Int32Array(nnz0), w0 = new Float32Array(nnz0).fill(1); const diag0 = new Float32Array(n0);
+    { let p = 0; for (let k = 0; k < n0; k++) { let deg = 0; for (let s = 0; s < 4; s++) { const j = lvl.nb[k * 4 + s]; if (j >= 0) { col0[p++] = j; deg++; } } diag0[k] = deg + lvl.dW[k]; } }
+    const fine = { n: n0, x: lvl.x, y: lvl.y, ptr: ptr0, col: col0, w: w0, diag: diag0, bR: lvl.dR, bG: lvl.dG, bB: lvl.dB, vR: lvl.vR, vG: lvl.vG, vB: lvl.vB };
+    const levels = [fine]; let lv = fine;
+    while (lv.n > 256 && levels.length < 12) {
+        const key = new Map(); const agg = new Int32Array(lv.n); let m = 0; const cx = [], cy = [];
+        for (let k = 0; k < lv.n; k++) { const X = lv.x[k] >> 1, Y = lv.y[k] >> 1; const kk = Y * 1048576 + X; let a = key.get(kk); if (a === undefined) { a = m++; key.set(kk, a); cx.push(X); cy.push(Y); } agg[k] = a; }
+        if (m === lv.n) break;
+        lv.agg = agg;
+        const diag = new Float64Array(m); const off = new Array(m); for (let a = 0; a < m; a++) off[a] = new Map();
+        for (let k = 0; k < lv.n; k++) { const a = agg[k]; diag[a] += lv.diag[k];
+            for (let p = lv.ptr[k]; p < lv.ptr[k + 1]; p++) { const j = lv.col[p], b = agg[j], w = lv.w[p]; if (b === a) diag[a] -= w; else off[a].set(b, (off[a].get(b) || 0) + w); } }
+        let nnz = 0; for (let a = 0; a < m; a++) nnz += off[a].size;
+        const ptr = new Int32Array(m + 1), col = new Int32Array(nnz), w = new Float32Array(nnz); let p = 0;
+        for (let a = 0; a < m; a++) { ptr[a] = p; for (const [b, ww] of off[a]) { col[p] = b; w[p] = ww; p++; } } ptr[m] = p;
+        lv = { n: m, x: Int32Array.from(cx), y: Int32Array.from(cy), ptr, col, w, diag: Float32Array.from(diag),
+               bR: new Float32Array(m), bG: new Float32Array(m), bB: new Float32Array(m), vR: new Float32Array(m), vG: new Float32Array(m), vB: new Float32Array(m) };
+        levels.push(lv);
+    }
+    const gs = (L, sweeps, tl) => {
+        const n = L.n, ptr = L.ptr, col = L.col, w = L.w, diag = L.diag, vR = L.vR, vG = L.vG, vB = L.vB, bR = L.bR, bG = L.bG, bB = L.bB;
+        let maxD = 1e9, s = 0;
+        while (s < sweeps && maxD > tl) { maxD = 0; const fwd = (s & 1) === 0;
+            for (let kk = 0; kk < n; kk++) { const k = fwd ? kk : n - 1 - kk; const dk = diag[k]; if (dk <= 0) continue;
+                let sr = bR[k], sg = bG[k], sb = bB[k];
+                for (let p = ptr[k]; p < ptr[k + 1]; p++) { const j = col[p], ww = w[p]; sr += ww * vR[j]; sg += ww * vG[j]; sb += ww * vB[j]; }
+                const nr = sr / dk, ng = sg / dk, nbv = sb / dk;
+                const dm = Math.max(Math.abs(nr - vR[k]), Math.abs(ng - vG[k]), Math.abs(nbv - vB[k])); if (dm > maxD) maxD = dm;
+                vR[k] = nr; vG[k] = ng; vB[k] = nbv; }
+            s++; }
+        return maxD;
+    };
+    const vcycle = (li) => {
+        const L = levels[li];
+        if (li === levels.length - 1) { gs(L, 2000, 1e-3); return; }
+        gs(L, 2, 0);
+        const c = levels[li + 1]; const n = L.n, agg = L.agg;
+        c.bR.fill(0); c.bG.fill(0); c.bB.fill(0); c.vR.fill(0); c.vG.fill(0); c.vB.fill(0);
+        for (let k = 0; k < n; k++) { let rr = L.bR[k] - L.diag[k] * L.vR[k], rg = L.bG[k] - L.diag[k] * L.vG[k], rb = L.bB[k] - L.diag[k] * L.vB[k];
+            for (let p = L.ptr[k]; p < L.ptr[k + 1]; p++) { const j = L.col[p], ww = L.w[p]; rr += ww * L.vR[j]; rg += ww * L.vG[j]; rb += ww * L.vB[j]; }
+            const a = agg[k]; c.bR[a] += rr; c.bG[a] += rg; c.bB[a] += rb; }
+        vcycle(li + 1);
+        for (let k = 0; k < n; k++) { const a = agg[k]; L.vR[k] += TAU * c.vR[a]; L.vG[k] += TAU * c.vG[a]; L.vB[k] += TAU * c.vB[a]; }
+        gs(L, 2, 0);
+    };
+    let cycles = 0, maxD = 1e9, prevD = 0, est = 1e9;
+    const pR = new Float32Array(n0), pG = new Float32Array(n0), pB = new Float32Array(n0);
+    while (cycles < maxCycles && est > tol) {
+        pR.set(fine.vR); pG.set(fine.vG); pB.set(fine.vB);
+        vcycle(0); cycles++;
+        prevD = maxD; maxD = 0;
+        for (let k = 0; k < n0; k++) { const d = Math.max(Math.abs(fine.vR[k] - pR[k]), Math.abs(fine.vG[k] - pG[k]), Math.abs(fine.vB[k] - pB[k])); if (d > maxD) maxD = d; }
+        if (cycles >= 2 && prevD > 0) { const rho = Math.min(0.99, maxD / prevD); est = maxD * rho / (1 - rho); }
+    }
+    return { sweeps: [[n0, cycles, +est.toFixed(3)]], residual: est, levels: levels.map(L => L.n), lastChange: maxD };
+}
+
 function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     if (!dQ || !pw || !ph) return null;
     // A102: one exact envelope for this whole pass (LUT built once, cached).
@@ -13631,30 +13704,24 @@ function bgBuildBackgroundLayerCore() {
                         let maxDist = 0; for (let k = 0; k < qt2; k++) { if (dRim[k] > maxDist) maxDist = dRim[k]; if (dRim[k] >= 0) nCoupled++; }
                         sorL = 2 * maxDist + 2;
                         sorOmega = 2 / (1 + Math.sin(Math.PI / sorL));
-                        const fr = new Float32Array(qt2), fg2 = new Float32Array(qt2), fb2 = new Float32Array(qt2);
-                        for (let k = 0; k < qt2; k++) { const i = q2[k]; fr[k] = cd[i*4]; fg2[k] = cd[i*4+1]; fb2[k] = cd[i*4+2]; }   // BFS colours as the start
+                        // A242b: the unknowns are the rim-coupled domain texels; pockets with no path to
+                        // the rim keep their BFS colour. Solved by cascadic aggregation multigrid
+                        // (bgMembraneSolve): synthetic disc test 35 fine sweeps / 296 ms against 486
+                        // sweeps of plain SOR, and a smaller error.
+                        const uOf = new Int32Array(qt2).fill(-1); let nU = 0;
+                        for (let k = 0; k < qt2; k++) if (dRim[k] >= 0) uOf[k] = nU++;
+                        const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
+                                     dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
+                                     vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: sorL };
+                        for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k];
+                            lv.x[u] = i % pw; lv.y[u] = (i / pw) | 0; lv.vR[u] = cd[i*4]; lv.vG[u] = cd[i*4+1]; lv.vB[u] = cd[i*4+2];   // BFS colours as the start
+                            for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0) continue;
+                                if (nbSrc[k*4+s]) { lv.dR[u] += cd[j*4]; lv.dG[u] += cd[j*4+1]; lv.dB[u] += cd[j*4+2]; lv.dW[u]++; }
+                                else { const uj = uOf[domK[j]]; if (uj >= 0) lv.nb[u*4+s] = uj; } } }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
-                        const MAXS = 3000;
-                        let maxD = 1e9;
-                        while (nSor < MAXS && maxD > TOLC) {
-                            maxD = 0;
-                            const fwd = (nSor & 1) === 0;   // alternate sweep direction (symmetric SOR)
-                            for (let kk = 0; kk < qt2; kk++) { const k = fwd ? kk : (qt2 - 1 - kk);
-                                if (dRim[k] < 0) continue;   // a pocket with no path to the rim keeps its BFS colour
-                                let sr = 0, sg = 0, sb = 0, n = 0;
-                                for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0) continue;
-                                    if (nbSrc[k*4+s]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; }
-                                    else { const kj = domK[j]; sr += fr[kj]; sg += fg2[kj]; sb += fb2[kj]; }
-                                    n++; }
-                                if (n === 0) continue;
-                                const nr = fr[k] + sorOmega * (sr / n - fr[k]), ng = fg2[k] + sorOmega * (sg / n - fg2[k]), nbv = fb2[k] + sorOmega * (sb / n - fb2[k]);
-                                const dm = Math.max(Math.abs(nr - fr[k]), Math.abs(ng - fg2[k]), Math.abs(nbv - fb2[k])); if (dm > maxD) maxD = dm;
-                                fr[k] = nr; fg2[k] = ng; fb2[k] = nbv;
-                            }
-                            nSor++;
-                        }
-                        sorRes = maxD;
-                        for (let k = 0; k < qt2; k++) { const i = q2[k]; cd[i*4] = fr[k]; cd[i*4+1] = fg2[k]; cd[i*4+2] = fb2[k]; }
+                        const mg = bgMembraneSolve(lv, TOLC, 60);
+                        nSor = mg.sweeps[0][1]; sorRes = mg.residual; window._qbMembraneLevels = mg.sweeps; window._qbMembraneLevelSizes = mg.levels;
+                        for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = lv.vR[u]; cd[i*4+1] = lv.vG[u]; cd[i*4+2] = lv.vB[u]; }
                     } else {
                     {
                         const wr2 = new Float32Array(PNq), wg2 = new Float32Array(PNq),
@@ -13711,7 +13778,7 @@ function bgBuildBackgroundLayerCore() {
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
                     if (!!window._plugMembrane)
                         console.log('[QUICK-BAKE] A242 membrane band fill: ' + nGated + ' gated / ' + nPocket + ' pocket of ' + nD + ' band px, ' + nCoupled +
-                            ' coupled to the rim; SOR L=' + sorL + ' omega=' + sorOmega.toFixed(3) + ', ' + nSor + ' sweeps, residual ' + sorRes.toFixed(3) +
+                            ' coupled to the rim; V-cycle multigrid levels ' + JSON.stringify(window._qbMembraneLevelSizes || []) + ', ' + nSor + ' cycles, extrapolated error ' + sorRes.toFixed(3) +
                             '/255 (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
                     else
                     console.log('[QUICK-BAKE] A215 two-sided band fill: ' + nGated + ' gated / ' + nPocket +

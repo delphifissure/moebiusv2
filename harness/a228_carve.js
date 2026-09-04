@@ -100,6 +100,15 @@ const Z = 0.199;
                 updateCameraAndProjection(); render(); render();
                 // holes: nothing covers (all visible)
                 const holes = countAlpha(true);
+                // A242/Addendum 179 item 4: INTERIOR holes — uncovered pixels not connected to the frame
+                // border through other uncovered pixels (the outside-portal black is border-connected;
+                // a true gap is enclosed by content). Expected 0 at every pose (rule R1).
+                let holesIn = 0;
+                { const W = holes.W, Hh = holes.Hh, m = holes.mask, seen = new Uint8Array(W * Hh); const st = [];
+                  const push = (i) => { if (m[i] && !seen[i]) { seen[i] = 1; st.push(i); } };
+                  for (let x = 0; x < W; x++) { push(x); push((Hh - 1) * W + x); } for (let y = 0; y < Hh; y++) { push(y * W); push(y * W + W - 1); }
+                  while (st.length) { const i = st.pop(); const x = i % W, y = (i / W) | 0; if (x > 0) push(i - 1); if (x < W - 1) push(i + 1); if (y > 0) push(i - W); if (y < Hh - 1) push(i + W); }
+                  for (let i = 0; i < W * Hh; i++) if (m[i] && !seen[i]) holesIn++; }
                 // plug-only footprint: FG hidden
                 const hidF = setVis(isFG, false);
                 const plugOnly = countAlpha(false);
@@ -113,14 +122,14 @@ const Z = 0.199;
                 const el = renderer.domElement;
                 const cv = document.createElement('canvas'); cv.width = el.width; cv.height = el.height;
                 cv.getContext('2d').drawImage(el, 0, 0);
-                out.push({ name, holes: holes.n, plugOnly: plugOnly.n, plugSeen: noPlug.n - holes.n,
+                out.push({ name, holes: holes.n, holesIn, plugOnly: plugOnly.n, plugSeen: noPlug.n - holes.n,
                            total: holes.W * holes.Hh, png: cv.toDataURL('image/png') });
             }
             return out;
         }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
         for (const r of res) {
             fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.FLAGS ? '_' + process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
-            console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) +
+            console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) + ' interior=' + String(r.holesIn).padStart(5) +
                 '  plugOnly=' + String(r.plugOnly).padStart(7) + ' (' + (100 * r.plugOnly / r.total).toFixed(1) + '% of frame)' +
                 '  plugSeen=' + String(r.plugSeen).padStart(6));
         }
