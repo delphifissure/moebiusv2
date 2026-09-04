@@ -14797,7 +14797,7 @@ function bgBuildBackgroundLayerCore() {
                             // A244g: with the a-priori far field the scan gate is band-independent — a cell may tear where
                             // something lies behind it (source deeper than the far field by more than the tear's noise floor),
                             // so the tear no longer depends on the band that depends on the tear (item 17)
-                            if (disocc[ti] || (ffGate && dQ[ti] - ffGate[ti] > 2 * qN2)) inScan = true; }
+                            if (ffGate ? (dQ[ti] - ffGate[ti] > 2 * qN2) : disocc[ti]) inScan = true; }
                         if (!(inScan || window._a212Ungated === true)) continue;
                         if (!((mxD - mnD) > qN2)) { nQuantumSkipped++; continue; }
                         const ext = Math.max(1, Math.abs(tx2[0]-tx2[1]), Math.abs(tx2[0]-tx2[2]), Math.abs(tx2[1]-tx2[2]), Math.abs(ty2[0]-ty2[1]), Math.abs(ty2[0]-ty2[2]), Math.abs(ty2[1]-ty2[2]));
