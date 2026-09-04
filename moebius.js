@@ -7745,11 +7745,10 @@ window._plugCpuSweep = function (opts) {
         // through the far shift to the plate texel that must cover it: that texel needs the far
         // fill, whether or not a front reached it. This is the band's outline from geometry.
         if (revealTex) {
-            outp.fill(0); let sh = 0, st2 = 0;
-            const pushB = (c) => { if (own[c] !== -2 && !outp[c]) { outp[c] = 1; stk[st2++] = c; } };
-            for (let cx = 0; cx < GW; cx++) { pushB(cx); pushB((GH - 1) * GW + cx); } for (let cy = 0; cy < GH; cy++) { pushB(cy * GW); pushB(cy * GW + GW - 1); }
-            while (sh < st2) { const c = stk[sh++]; const cx = c % GW, cy = (c / GW) | 0; if (cx > 0) pushB(c - 1); if (cx < GW - 1) pushB(c + 1); if (cy > 0) pushB(c - GW); if (cy < GH - 1) pushB(c + GW); }
-            for (let c = 0; c < G; c++) { if (own[c] === -2 || outp[c]) continue;
+            // A245f: a border-connected uncovered cell is NOT thereby outpaint — the corner the troll's feet
+            // vacate at the mirror pose is border-connected and is a reveal of in-frame far content (its
+            // inversion lands inside the plate). Outpaint is what inverts OUTSIDE the plate; that is the test.
+            for (let c = 0; c < G; c++) { if (own[c] === -2) continue;
                 const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc; let tx = cx0, ty = cy0;
                 for (let it = 0; it < 2; it++) { const txi = Math.max(0, Math.min(pw - 1, Math.round(tx))), tyi = Math.max(0, Math.min(ph - 1, Math.round(ty)));
                     const d = farAt[tyi * pw + txi]; if (d < 0) break; const sT = bgShiftPxAt(lut, d); tx = cx0 - sT * fx; ty = cy0 - sT * fy; }
@@ -14765,14 +14764,11 @@ function bgBuildBackgroundLayerCore() {
                 // border (the troll's feet) the plate's edge texel is near, so a ring replicating it moved with
                 // the foreground and left the vacated corner black (mirror pose, 2,660 px). What the vacated
                 // border shows is what lies behind the near content: the far field's border value.
-                let matR = matQ;
-                if (window._geoFarField && window._geoFarField.length === PNq) {
-                    const ffF = new Float32Array(PNq); const ff = window._geoFarField;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) ffF[(ph - 1 - y) * pw + x] = ff[y * pw + x];
-                    const farDT = new THREE.DataTexture(ffF, pw, ph, THREE.RedFormat, THREE.FloatType); farDT.needsUpdate = true; farDT.flipY = false;
-                    farDT.minFilter = THREE.LinearFilter; farDT.magFilter = THREE.LinearFilter;
-                    matR = matQ.clone(); matR.uniforms.displacementMap.value = farDT;
-                }
+                // A245f: the ring shares the plug's displacement (continuous with its edge). A245e displaced it by
+                // the far field and opened a gap between the two meshes wherever the field and the plate's edge
+                // differ (eight poses: uncovered 1,600–4,874 px, interior up to 4,293 — worse than before). The
+                // vacated corner is covered by putting the border reveals into the band instead (above).
+                const matR = matQ;
                 bgLayerMesh.userData.ring = plugRing.map((g) => { const m = new THREE.Mesh(g, matR); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; return m; });
             }
 
