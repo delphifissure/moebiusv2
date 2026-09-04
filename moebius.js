@@ -7668,6 +7668,20 @@ window._plugCpuSweep = function (opts) {
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
+    // A244: hole -> covering texel (A234's inversion, exact here: the CPU warp IS the shift law).
+    // farAt = the nearest demand texel's plate depth (BFS from the demand set, source rows); a
+    // hole cell at pose f is covered by the texel that lands there when displaced by the far
+    // shift: t = cell - s(farAt(t)) * f, two fixed-point steps. holeTex is in source rows.
+    const wantHoles = !!opts.holeDemand && window._qbDisocc;
+    const holeTex = wantHoles ? new Uint8Array(N) : null; let holeIn = 0, holeOut = 0;
+    let farAt = null;
+    if (wantHoles) {
+        farAt = new Float32Array(N).fill(-1); const qb = new Int32Array(N); let qh = 0, qt = 0; const dis = window._qbDisocc;
+        for (let i = 0; i < N; i++) if (dis[i]) { farAt[i] = pFs[i]; qb[qt++] = i; }
+        while (qh < qt) { const i = qb[qh++]; const x = i % pw, y = (i / pw) | 0; const v = farAt[i];
+            if (x > 0 && farAt[i - 1] < 0) { farAt[i - 1] = v; qb[qt++] = i - 1; } if (x < pw - 1 && farAt[i + 1] < 0) { farAt[i + 1] = v; qb[qt++] = i + 1; }
+            if (y > 0 && farAt[i - pw] < 0) { farAt[i - pw] = v; qb[qt++] = i - pw; } if (y < ph - 1 && farAt[i + pw] < 0) { farAt[i + pw] = v; qb[qt++] = i + pw; } }
+    }
     // The foreground's fragment shader cuts STRETCHED fragments (uvRate below
     // bgBandCutStretchFrac of the expected rate, armed for the FG at bake, line
     // ~13685): a mesh edge stretched beyond 1/bgBandCutStretchFrac texels of
@@ -7700,10 +7714,70 @@ window._plugCpuSweep = function (opts) {
                 if (x + 1 < pw && !(plateIdx && !plateIdx[f + 1])) span(xs, ys, d, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, pFs[i + 1], i);
                 if (y + 1 < ph && !(plateIdx && !plateIdx[f - pw])) span(xs, ys, d, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, pFs[i + pw], i);
             } }
-        for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) holeCells++; }
+        for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
+            if (wantHoles) {
+                const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc;
+                let tx = cx0, ty = cy0;
+                for (let it = 0; it < 2; it++) { const txi = Math.max(0, Math.min(pw - 1, Math.round(tx))), tyi = Math.max(0, Math.min(ph - 1, Math.round(ty)));
+                    const d = farAt[tyi * pw + txi]; if (d < 0) break; const sT = bgShiftPxAt(lut, d); tx = cx0 - sT * fx; ty = cy0 - sT * fy; }
+                const txr = Math.round(tx), tyr = Math.round(ty);
+                if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) holeOut++; else { holeTex[tyr * pw + txr] = 1; holeIn++; }
+            } } }
     }
     let nSeen = 0; for (let i = 0; i < N; i++) nSeen += seen[i];
-    return { seen, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, ms: Date.now() - t0 };
+    return { seen, torn, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, ms: Date.now() - t0 };
+};
+// A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
+// outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
+// bakes the fronts' plate; the CPU sweep (exact shift law, dense poses) finds the cells no
+// layer covers and names the texel that covers each at the far depth (A234's inversion);
+// pass 1b bakes with those in the demand; a second sweep gives the seen set, whose reveal
+// part (not through the foreground's own tears) padded by the a62 pad, plus the pinholes,
+// REPLACES the band: texels the fronts flagged but no pose ever reveals leave the band and
+// return to their source depth (never seen, so never a clone); texels revealed but never
+// flagged join it and take the far fill. Depth inside the band is still the fronts' plate
+// where they reached and the a58c continuation elsewhere. Colour: the membrane if flagged.
+window._plugGeoBand = function (opts) {
+    opts = opts || {};
+    const t0 = Date.now();
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._extraDemand = null; window._plugSweepCapture = true;
+    if (opts.flush) window._plateFlushExempt = true;
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band
+    const s1 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
+    if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
+    const { pw, ph, N } = s1;
+    const extra = new Uint8Array(N); let nE = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!s1.holeTex[i]) continue;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= pw || yy >= ph) continue; const j = yy * pw + xx; if (!extra[j]) { extra[j] = 1; nE++; } } }
+    window._extraDemand = extra;
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 1b: holes covered
+    const s2 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
+    window._extraDemand = null;
+    const torn = s2.torn; const disBefore = window._qbDisocc;
+    // band := reveals (seen, not torn) padded by the a62 pad (6 texels: between-pose coverage, Addendum 172/175) + pinholes as they are
+    const PAD = 6;
+    const INF = 0x3fffffff, dist = new Int32Array(N).fill(INF);
+    for (let i = 0; i < N; i++) if (s2.seen[i] && !(torn && torn[i])) dist[i] = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let v = dist[i];
+        if (x > 0 && dist[i - 1] + 5 < v) v = dist[i - 1] + 5;
+        if (y > 0) { if (dist[i - pw] + 5 < v) v = dist[i - pw] + 5; if (x > 0 && dist[i - pw - 1] + 7 < v) v = dist[i - pw - 1] + 7; if (x < pw - 1 && dist[i - pw + 1] + 7 < v) v = dist[i - pw + 1] + 7; }
+        dist[i] = v; }
+    for (let y = ph - 1; y >= 0; y--) for (let x = pw - 1; x >= 0; x--) { const i = y * pw + x; let v = dist[i];
+        if (x < pw - 1 && dist[i + 1] + 5 < v) v = dist[i + 1] + 5;
+        if (y < ph - 1) { if (dist[i + pw] + 5 < v) v = dist[i + pw] + 5; if (x < pw - 1 && dist[i + pw + 1] + 7 < v) v = dist[i + pw + 1] + 7; if (x > 0 && dist[i + pw - 1] + 7 < v) v = dist[i + pw - 1] + 7; }
+        dist[i] = v; }
+    const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0;
+    for (let i = 0; i < N; i++) { const b = (dist[i] <= PAD * 5) || (s2.seen[i] && torn && torn[i]); if (b) { band[i] = 1; nB++; }
+        if (b && disBefore[i]) nKeep++; else if (b) nAdd++; else if (disBefore[i]) nDrop++; }
+    window._bandReplace = band;
+    bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the geometric band
+    const s3 = window._plugCpuSweep({ holeDemand: true, nx: opts.nx || 17, ny: opts.ny || 5 });
+    const stats = { pw, ph, poses: s1.poses, holes1: s1.holeCells, holes1b: s2.holeCells, holes2: s3 ? s3.holeCells : -1, extra: nE, seen1: s1.nSeen, seen2: s2.nSeen, seen3: s3 ? s3.nSeen : -1,
+                    bandBefore: disBefore.reduce((a, v) => a + v, 0), band: nB, kept: nKeep, added: nAdd, dropped: nDrop, ms: Date.now() - t0 };
+    console.log('[A244] geometric band: pass-1 hole cells ' + s1.holeCells + ' -> ' + nE + ' texels to the demand -> pass-1b hole cells ' + s2.holeCells + '; seen ' + s1.nSeen + ' -> ' + s2.nSeen +
+        '; band ' + stats.bandBefore + ' -> ' + nB + ' texels (kept ' + nKeep + ', added ' + nAdd + ', DROPPED ' + nDrop + ' never-revealed front texels); pass-2 hole cells ' + stats.holes2 + ', seen ' + stats.seen3 + '; ' + stats.ms + 'ms');
+    window._plugGeoStats = stats;
+    return stats;
 };
 // MacBook / any-browser recipe (Addendum 176): load a scene in moebius.html,
 // open the console, then:  window._plugSweepReport({ nx: 33 })
@@ -12913,6 +12987,17 @@ function bgBuildBackgroundLayerCore() {
                 let nX = 0; const ex = window._extraDemand;
                 for (let i = 0; i < PNq; i++) if (ex[i] && !disocc[i]) { disocc[i] = 1; nD++; nX++; }
                 console.log('[QUICK-BAKE] A234 hole-driven demand: +' + nX + ' texels that cover measured holes at the far depth joined the demand (' + (100 * nX / PNq).toFixed(2) + '% of plate)');
+            }
+            // A244 GEOMETRIC BAND (window._bandReplace, source rows; set by window._plugGeoBand).
+            // The band becomes the reveal set: texels the fronts flagged but no pose reveals
+            // leave it and return to their source depth; revealed texels join it (far fill).
+            if (window._bandReplace && window._bandReplace.length === PNq) {
+                const rep = window._bandReplace; let nAdd = 0, nDrop = 0;
+                for (let i = 0; i < PNq; i++) {
+                    if (rep[i] && !disocc[i]) { disocc[i] = 1; nD++; nAdd++; }
+                    else if (!rep[i] && disocc[i]) { disocc[i] = 0; nD--; nDrop++; plateQ[i] = dQ[i]; }
+                }
+                console.log('[QUICK-BAKE] A244 geometric band: +' + nAdd + ' revealed texels joined, -' + nDrop + ' never-revealed front texels left the band (restored to source depth); band now ' + nD);
             }
             if (window._plugSweepCapture) window._qbDisocc = disocc.slice();
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);

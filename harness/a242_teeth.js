@@ -32,7 +32,8 @@ const OUT = path.join(__dirname, 'shots', 'a242', TAG);
         window._rayReproject = true; window._plugSweepCapture = true; window._foldProbe = true; window._plugCarve = false;
         if (o.flush) window._plateFlushExempt = true;
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
-        bgQuickBake = true; buildBackgroundLayer(); isSweeping = true;
+        if (o.geo) window._plugGeoBand({ flush: !!o.flush }); else { bgQuickBake = true; buildBackgroundLayer(); }
+        isSweeping = true;
         const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, torn = window._qbFgTorn, fp = window._fpData || {};
         if (!sz || !dQ || !dis) return { err: 'missing capture' };
         const pw = sz.pw, ph = sz.ph, N = pw * ph;
@@ -78,12 +79,12 @@ const OUT = path.join(__dirname, 'shots', 'a242', TAG);
         // per-row band width along the cluster's rows (right end), for the log
         const widths = []; for (let yy = by; yy < Math.min(ph, by + BS); yy++) { let r = -1; for (const [l, rr] of ends[yy]) if (l >= x0 && l < x0 + CW) r = Math.max(r, rr); widths.push(r); }
         return { pw, ph, RWD, nEnds, nTeeth, med, p90, attrib, cluster: [bx, by, blk[best]], crop: [x0, y0, CW, CH], png: zc.toDataURL('image/png'), rightEnds: widths, hasFp: !!fp.claimedF, hasTorn: !!torn };
-    }, { flush: !!process.env.FLUSH, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { flush: !!process.env.FLUSH, geo: !!process.env.GEO, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
-    fs.writeFileSync(path.join(OUT, 'teeth_crop.png'), Buffer.from(res.png.split(',')[1], 'base64'));
+    fs.writeFileSync(path.join(OUT, 'teeth_crop' + (process.env.GEO ? '_geo' : '') + '.png'), Buffer.from(res.png.split(',')[1], 'base64'));
     console.log(`${TAG} teeth: plate ${res.pw}x${res.ph}, RWD ${res.RWD}; band run ends ${res.nEnds}, teeth (excess > RWD over the ±2-row median) ${res.nTeeth} (${(100 * res.nTeeth / Math.max(1, res.nEnds)).toFixed(1)}%), excess median ${res.med} p90 ${res.p90} texels`);
     console.log(`   tooth rows by content: front-claimed ${res.attrib.claimedRows}, torn-FG ${res.attrib.tornRows}, plain ${res.attrib.plainRows} (fold probe ${res.hasFp ? 'on' : 'OFF'}, torn capture ${res.hasTorn ? 'on' : 'OFF'})`);
-    console.log(`   densest 48x48 block at (${res.cluster[0]},${res.cluster[1]}) with ${res.cluster[2]} tooth texels; crop ${JSON.stringify(res.crop)} -> ${path.join(OUT, 'teeth_crop.png')}`);
+    console.log(`   densest 48x48 block at (${res.cluster[0]},${res.cluster[1]}) with ${res.cluster[2]} tooth texels; crop ${JSON.stringify(res.crop)} -> ${path.join(OUT, 'teeth_crop' + (process.env.GEO ? '_geo' : '') + '.png')}`);
     console.log(`   right ends of the band per row in that block: ${res.rightEnds.join(' ')}`);
     await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
