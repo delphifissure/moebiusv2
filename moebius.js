@@ -7702,7 +7702,7 @@ window._plugCpuSweep = function (opts) {
     let curTi = -1, curFar = 0;
     const qN = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
     let obsHead = null, obsNext = null, obsVal = null, obsCnt = null, obsCap = 0, obsN = 0;
-    let obsSamples = 0, obsGeo = 0, obsSelf = 0, obsAmbig = 0, obsOut = 0, obsRamp = 0;
+    let obsSamples = 0, obsGeo = 0, obsSelf = 0, obsAmbig = 0, obsOut = 0, obsRamp = 0, obsTwoLip = 0;
     if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N);
         obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap); }
     const obsPush = (t, d) => { if (obsN === obsCap) { obsCap *= 2; const n2 = new Int32Array(obsCap); n2.set(obsNext); obsNext = n2; const v2 = new Float32Array(obsCap); v2.set(obsVal); obsVal = v2; }
@@ -7820,9 +7820,22 @@ window._plugCpuSweep = function (opts) {
                         if (cur !== cFar) obsRamp++; cFar = cur;
                         wx = (c % GW) + 0.5; wy = ((c / GW) | 0) + 0.5;
                         for (let k = 0; k < maxWalk; k++) { wx -= stxO; wy -= styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cNear = cc; break; } }
-                        const dFar = fgFar[cFar], dNear = cNear >= 0 ? zb[cNear] : 2;
-                        if (dNear - dFar < qN) { obsAmbig++; obsGeo--; }   // no depth step across the gap (two fronts, or a frame-edge sliver): the far-field inversion decides, counted apart
+                        // A246g TWO LIPS (the pole row probe, Addendum 185): the zero-parallax plane lies inside the
+                        // scene, so the far surface and the occluder move in OPPOSITE directions and the gap is the
+                        // landing zone of the hidden texels — behind a WIDE occluder one lip is the far surface and
+                        // the other the occluder; behind a THIN one the far surface passes under and BOTH lips are
+                        // far (the pole landed 40 cells away). The far lip is the farther of the two; when the two
+                        // lips are the same surface (within the A44 cliff step, fgTearStep) the hidden depth is
+                        // their position-weighted interpolation (the surface continues under the occluder); when
+                        // the walked-to lip is NEARER than the other by a cliff, the walk met another front.
+                        const dA = fgFar[cFar], dB = cNear >= 0 ? fgFar[cNear] : -1;
+                        let dFar = dA;
+                        if (cNear >= 0 && dA - dB > fgTearStep) { obsAmbig++; obsGeo--; }
                         else {
+                            if (cNear >= 0 && Math.abs(dA - dB) <= fgTearStep) {
+                                const kA = Math.max(1, Math.abs(((cFar % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cFar / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5)));
+                                const kB = Math.max(1, Math.abs(((cNear % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cNear / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5)));
+                                dFar = (dA * kB + dB * kA) / (kA + kB); obsTwoLip++; }
                             const sT = bgShiftPxAt(lut, dFar); const txr = Math.round(cx0 - sT * fx), tyr = Math.round(cy0 - sT * fy);
                             if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) { obsOut++; revealOut++; continue; }
                             const t = tyr * pw + txr;
@@ -7870,7 +7883,7 @@ window._plugCpuSweep = function (opts) {
     }
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
-    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp } : null;
+    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip } : null;
     return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
@@ -7958,8 +7971,8 @@ window._plugGeoBand = function (opts) {
         // membrane painted the band as a directional wallpaper on the troll (ghost index +11 points, anisotropy
         // 0.78) and scored worse than the membrane on the screen truth scene; the membrane's wash stays. Addendum 185.
         window._geoObsDepth = obsDepth; window._geoObsCount = ob.cnt;
-        obsStats = { samples: ob.samples, rampWalked: ob.ramp, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
-        console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
+        obsStats = { samples: ob.samples, rampWalked: ob.ramp, twoLip: ob.twoLip, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
+        console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp, ' + ob.twoLip + ' between two far lips) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
             '; hidden depth field: rims + observed texels fixed, ' + merged.cycles + ' cycles, err ' + merged.err.toFixed(4) + ', ' + merged.nClamp + ' clamped; ' + obsStats.ms + 'ms');
         if (opts.regate !== false && !opts.gateAPriori && window._fragTear) {
             // the tear gate now reads the observed field: re-bake the fold field under it and re-observe once,
