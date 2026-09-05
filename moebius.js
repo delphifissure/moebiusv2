@@ -14072,7 +14072,7 @@ function bgBuildBackgroundLayerCore() {
                                 if (nbSrc[k*4+s]) { lv.dR[u] += cd[j*4]; lv.dG[u] += cd[j*4+1]; lv.dB[u] += cd[j*4+2]; lv.dW[u]++; }
                                 else { const uj = uOf[domK[j]]; if (uj >= 0) lv.nb[u*4+s] = uj; } } }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
-                        const mg = bgMembraneSolve(lv, TOLC, 60);
+                        const mg = bgMembraneSolve(lv, TOLC, (typeof window._membraneCycles === "number" && window._membraneCycles > 0) ? window._membraneCycles : 60);   // A246f: cycle cap override for the convergence A/B (the observed-depth domains hit the 60-cycle cap at 13-21/255)
                         nSor = mg.sweeps[0][1]; sorRes = mg.residual; window._qbMembraneLevels = mg.sweeps; window._qbMembraneLevelSizes = mg.levels;
                         for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = lv.vR[u]; cd[i*4+1] = lv.vG[u]; cd[i*4+2] = lv.vB[u]; }
                     } else {
