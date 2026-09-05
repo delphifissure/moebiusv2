@@ -15,7 +15,7 @@ const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const TAG = process.env.TAG || 'troll';
-const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.SWEEP ? '_sweep' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '');
+const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.SWEEP ? '_sweep' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.BOUNDARY ? '_bnd' : '');
 const OUT = path.join(__dirname, 'shots', 'a242', TAG);
 const POSES = [['rest', 0, 0], ['sheet1', 0.180, 0.008]];
 const Z = 0.199;
@@ -30,7 +30,7 @@ const Z = 0.199;
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (t.includes('A242') || t.includes('A244') || t.includes('A245') || t.includes('A215') || t.includes('band fill') || t.includes('A241') || t.includes('NOTE') || m.type() === 'warning' || m.type() === 'error') console.log('  [page:' + m.type() + '] ' + t.slice(0, 700)); });
+    page.on('console', m => { const t = m.text(); if (t.includes('A242') || t.includes('A244') || t.includes('A246') || t.includes('A245') || t.includes('A215') || t.includes('band fill') || t.includes('A241') || t.includes('NOTE') || m.type() === 'warning' || m.type() === 'error') console.log('  [page:' + m.type() + '] ' + t.slice(0, 700)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const res = await page.evaluate(async (o) => {
@@ -38,7 +38,7 @@ const Z = 0.199;
         if (o.flush) window._plateFlushExempt = true;
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         const t0 = Date.now();
-        if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined }); }   // A244: geometric band
+        if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary }); }   // A244: geometric band
         else if (o.sweep) { window._plugSweepBake({ flush: !!o.flush, holeDemand: !!o.hole, nx: o.nx || undefined }); }   // A232/A234: sweep-defined region + hole-driven demand (the band = the exact reveal)
         else { bgQuickBake = true; buildBackgroundLayer(); }
         isSweeping = true;
@@ -139,8 +139,15 @@ const Z = 0.199;
         gx.putImageData(gi, 0, 0); shots.ghostmap = gm.toDataURL('image/png');
         return { pw, ph, bakeMs, plugFrom, nBand, nFar, nNear, nBoth, nGhost, meanFar: sFar / Math.max(1, nBoth), meanNear: sNear / Math.max(1, nBoth),
                  seam: sSeam / Math.max(1, nSeam), nSeam, gradBand: (gxB + gyB) / Math.max(1, 2 * nGB), gradOut: gOut / Math.max(1, 2 * nGO), anis: gxB / Math.max(1, gyB), shots };
-    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, sweep: !!process.env.SWEEP, hole: !!process.env.HOLE, geo: !!process.env.GEO, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, sweep: !!process.env.SWEEP, hole: !!process.env.HOLE, geo: !!process.env.GEO, obs: !!process.env.OBS, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
+    // Phase 0 / A246 audit: the band, the plate depth, the observed depth/count and the geo stats as raw files (source rows) for offline comparison
+    try { const raw = await page.evaluate(() => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
+            const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph; const pS = new Float32Array(N); const pF = window._qbPlateF; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+            return { band: b64(window._qbDisocc), dQ: b64(window._qbDQ), plate: b64(pS), field: window._geoFarField ? b64(window._geoFarField) : null, obsDepth: window._geoObsDepth ? b64(window._geoObsDepth) : null, obsCount: window._geoObsCount ? b64(window._geoObsCount) : null, stats: window._plugGeoStats || null }; });
+        for (const k of ['band', 'dQ', 'plate', 'field', 'obsDepth', 'obsCount']) if (raw[k]) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(raw[k], 'base64'));
+        fs.writeFileSync(path.join(OUT, ARM + '_geostats.json'), JSON.stringify(Object.assign({ pw: res.pw, ph: res.ph }, raw.stats || {}), null, 1));
+    } catch (eR) { console.log('  (raw export failed: ' + eR.message + ')'); }
     for (const k of Object.keys(res.shots)) { const f = path.join(OUT, ARM + '_' + k + '.png'); fs.writeFileSync(f, Buffer.from(res.shots[k].split(',')[1], 'base64')); }
     const pct = (a, b) => (100 * a / Math.max(1, b)).toFixed(1) + '%';
     console.log(`${TAG} [${ARM}${process.env.FLUSH ? ',flush' : ''}] plate ${res.pw}x${res.ph}, bake ${res.bakeMs} ms, plug colour from ${res.plugFrom}`);

@@ -52,7 +52,7 @@ const Z = 0.199;
     const newPage = async () => {
         const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
         page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 160)));
-        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A212 FG pre-tear') || t.includes('A232') || t.includes('A234')) console.log('  [page] ' + t.slice(0, 420)); });
+        page.on('console', m => { const t = m.text(); if (t.includes('a217') || t.includes('A212 FG pre-tear') || t.includes('A232') || t.includes('A234') || t.includes('A244') || t.includes('A246')) console.log('  [page] ' + t.slice(0, 420)); });
         await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
         for (let t = 0; t < 45; t++) {
             const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false);
@@ -71,7 +71,7 @@ const Z = 0.199;
             if (o.collar) window._collarSameTexel = true;   // A231b arm (COLLAR=1)
             if (o.flush) window._plateFlushExempt = true;   // A233 arm (FLUSH=1)
             if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }   // FLAGS=name=value,...
-            if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined }); }   // A244 (GEO=1): the geometric band
+            if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary }); }   // A244 (GEO=1): the geometric band
             else if (o.sweep && o.carve) { window._plugSweepBake({ flush: !!o.flush, holeDemand: !!o.hole, nx: o.nx || undefined }); }   // A232 arm (SWEEP=1): the C arm is the sweep-defined plug
             else { bgQuickBake = true; buildBackgroundLayer(); }
             isSweeping = true;
@@ -127,9 +127,9 @@ const Z = 0.199;
                            total: holes.W * holes.Hh, png: cv.toDataURL('image/png') });
             }
             return out;
-        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, geo: !!process.env.GEO, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+        }, { carve, poses: POSES, z: Z, fs: !!process.env.FS, scan: !!process.env.SCAN, collar: !!process.env.COLLAR, sweep: !!process.env.SWEEP, flush: !!process.env.FLUSH, hole: !!process.env.HOLE, geo: !!process.env.GEO, obs: !!process.env.OBS, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
         for (const r of res) {
-            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '') + (process.env.FLAGS ? '_' + process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+            fs.writeFileSync(path.join(OUT, tag + (process.env.FS ? '_fs' : '') + (process.env.SCAN ? '_scan' : '') + (process.env.COLLAR ? '_collar' : '') + (process.env.SWEEP ? '_sweep' : '') + (process.env.FLUSH ? '_flush' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.BOUNDARY ? '_bnd' : '') + (process.env.FLAGS ? '_' + process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : '') + '_' + r.name + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
             console.log(tag + ' ' + r.name.padEnd(7) + ' holes=' + String(r.holes).padStart(6) + ' interior=' + String(r.holesIn).padStart(5) +
                 '  plugOnly=' + String(r.plugOnly).padStart(7) + ' (' + (100 * r.plugOnly / r.total).toFixed(1) + '% of frame)' +
                 '  plugSeen=' + String(r.plugSeen).padStart(6));
