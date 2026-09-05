@@ -1,0 +1,16 @@
+{
+ "name": "pole",
+ "w": 1024,
+ "h": 768,
+ "rwd": 3,
+ "nearTexels": 7290,
+ "notes": "thin pole before a smooth gradient; hidden = a 11-px strip of a smooth surface",
+ "files": {
+  "color": "pole_color.png",
+  "depth16": "pole_depth16.png",
+  "depth8": "pole_depth8.png",
+  "farDepth": "pole_far_depth.f32",
+  "farRGB": "pole_far_rgb.u8",
+  "nearMask": "pole_near_mask.u8"
+ }
+}

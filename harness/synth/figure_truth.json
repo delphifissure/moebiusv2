@@ -1,0 +1,16 @@
+{
+ "name": "figure",
+ "w": 1024,
+ "h": 768,
+ "rwd": 3,
+ "nearTexels": 87957,
+ "notes": "figure on ground before a textured wall; hidden = wall + ground behind the figure; contact at the feet",
+ "files": {
+  "color": "figure_color.png",
+  "depth16": "figure_depth16.png",
+  "depth8": "figure_depth8.png",
+  "farDepth": "figure_far_depth.f32",
+  "farRGB": "figure_far_rgb.u8",
+  "nearMask": "figure_near_mask.u8"
+ }
+}

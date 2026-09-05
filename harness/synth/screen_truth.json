@@ -1,0 +1,16 @@
+{
+ "name": "screen",
+ "w": 1024,
+ "h": 768,
+ "rwd": 3,
+ "nearTexels": 162731,
+ "notes": "porous screen (bars) before a textured wall; many small disocclusions; every bar hides a strip",
+ "files": {
+  "color": "screen_color.png",
+  "depth16": "screen_depth16.png",
+  "depth8": "screen_depth8.png",
+  "farDepth": "screen_far_depth.f32",
+  "farRGB": "screen_far_rgb.u8",
+  "nearMask": "screen_near_mask.u8"
+ }
+}

@@ -1,1 +1,3 @@
 fourd/testdata/
+harness/synth/*.f32
+harness/synth/*.u8
