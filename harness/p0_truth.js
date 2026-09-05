@@ -87,7 +87,8 @@ const POSES = [[0, 0], [0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141,
             renderer.setRenderTarget(rt); renderer.setViewport(0, 0, pw, ph); renderer.clear(); renderer.render(postProcessScene, postProcessCamera);
             const buf = new Uint8Array(N * 4); renderer.readRenderTargetPixels(rt, 0, 0, pw, ph, buf); renderer.setRenderTarget(prev); rt.dispose();
             plug = new Uint8ClampedArray(N * 4); for (let y = 0; y < ph; y++) { const s = (ph - 1 - y) * pw * 4, d = y * pw * 4; plug.set(buf.subarray(s, s + pw * 4), d); } plugFrom = 'bgColorTarget'; }
-        const srcC = window._qbSrcColor;
+        let srcC = null;   // source colour at plate resolution (the clone scale's reference)
+        try { const Lc = mediaLayers[0]; const cImg = (Lc.elements && Lc.elements.color) || Lc.textures.color.image; const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(cImg, 0, 0, pw, ph); srcC = cx.getImageData(0, 0, pw, ph).data; } catch (e) { srcC = null; }
         // metrics
         const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
         let nH = 0, nR = 0, nB = 0, nBR = 0, nRnotB = 0, nBnotH = 0, nBHnotR = 0;
