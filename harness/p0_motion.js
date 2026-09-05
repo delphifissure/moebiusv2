@@ -13,7 +13,7 @@ const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const TAG = process.env.TAG || 'troll';
-const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.GATEA ? '_gateA' : '') + (process.env.BOUNDARY ? '_bnd' : '');
+const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.MODE === 'v2' ? '_v2' : '') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.GATEA ? '_gateA' : '') + (process.env.BOUNDARY ? '_bnd' : '');
 const OUT = path.join(__dirname, 'shots', 'p0motion', TAG);
 const NF = parseInt(process.env.NF || '60'), A = 0.180, B = 0.03, Z = 0.199;
 (async () => {
@@ -35,7 +35,8 @@ const NF = parseInt(process.env.NF || '60'), A = 0.180, B = 0.03, Z = 0.199;
         if (o.flush) window._plateFlushExempt = true;
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         const t0 = Date.now();
-        if (o.geo) window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary, gateAPriori: !!o.gateA });
+        if (o.v2) { bgQuickBake = false; bgMPIFullPlanes = true; bgMPIMode = true; buildBackgroundLayer(); }   // MODE=v2: the app's default build (MPI full planes)
+        else if (o.geo) window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary, gateAPriori: !!o.gateA });
         else { bgQuickBake = true; buildBackgroundLayer(); }
         isSweeping = true;
         const bakeMs = Date.now() - t0;
@@ -72,7 +73,7 @@ const NF = parseInt(process.env.NF || '60'), A = 0.180, B = 0.03, Z = 0.199;
         }
         let nEver = 0; if (everSwitched) for (let i = 0; i < N; i++) nEver += everSwitched[i];
         return { bakeMs, frames, everSwitched: nEver, N, shots, geo: window._plugGeoStats || null };
-    }, { nf: NF, A, B, z: Z, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { nf: NF, A, B, z: Z, flush: !!process.env.FLUSH, geo: !!process.env.GEO, v2: process.env.MODE === 'v2', obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     for (const k of Object.keys(res.shots)) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.png'), Buffer.from(res.shots[k].split(',')[1], 'base64'));
     fs.writeFileSync(path.join(OUT, ARM + '_frames.json'), JSON.stringify(Object.assign({}, res, { shots: undefined }), null, 1));
     const f = res.frames; const mx = (key) => Math.max(...f.map(r => r[key])); const mean = (key) => f.reduce((a, r) => a + r[key], 0) / f.length;
