@@ -7788,7 +7788,7 @@ window._plugCpuSweep = function (opts) {
             const doObs = observe && pfO > 0;
             const stxO = doObs ? -fx / Math.max(Math.abs(fx), Math.abs(fy)) : 0, styO = doObs ? -fy / Math.max(Math.abs(fx), Math.abs(fy)) : 0;   // one cell per step against the parallax
             const maxWalk = doObs ? Math.ceil(sMaxFG * pfO / sc) + 2 : 0;    // the widest gap any texel can open at this pose (its whole shift), plus rounding
-            const rampMax = Math.ceil(4 * Math.max(1, Math.round(4 * pw / 1200)) / sc);   // A246c: the blur ramp's extent in cells
+            const rampMax = window._obsNoRamp ? 0 : Math.ceil(4 * Math.max(1, Math.round(4 * pw / 1200)) / sc);   // A246c: the blur ramp's extent in cells (window._obsNoRamp: A/B arm without the ramp walk)
             for (let c = 0; c < G; c++) { if (own[c] === -2) continue;
                 const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc; let tx = cx0, ty = cy0;
                 if (doObs) {
@@ -7882,7 +7882,7 @@ window._plugGeoBand = function (opts) {
     // the band is their union (+ pinholes), and the band's depth IS that field. One step.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoObsDepth = null; window._geoObsCount = null; window._geoObsColor = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._geoObsColor = null; window._extraDemand = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band names the far rims
@@ -7940,6 +7940,7 @@ window._plugGeoBand = function (opts) {
             const arr = tmp.subarray(0, k).slice().sort(); const med = (k & 1) ? arr[k >> 1] : 0.5 * (arr[(k >> 1) - 1] + arr[k >> 1]);
             obsDepth[i] = Math.min(med, dQ[i]); if (!rim[i]) { fixed2[i] = 1; val2[i] = obsDepth[i]; } nObsTex++; if (c > maxCnt) maxCnt = c; }
         const merged = solveField(fixed2, val2);
+        window._geoGateField = opts.gateAPriori ? farField.slice() : null;   // A246d: the tear gate may keep the a-priori field (A/B: the observed gate tears 24% more texels on the troll)
         for (let i = 0; i < N; i++) farField[i] = merged.field[i];          // the observed hidden depth field replaces the a-priori far field in place (all consumers read window._geoFarField)
         const obsColor = new Float32Array(N * 3);
         for (let i = 0; i < N; i++) { const c = ob.cnt[i]; if (!c) continue; obsColor[i * 3] = ob.sumR[i] / c; obsColor[i * 3 + 1] = ob.sumG[i] / c; obsColor[i * 3 + 2] = ob.sumB[i] / c; }
@@ -7947,7 +7948,7 @@ window._plugGeoBand = function (opts) {
         obsStats = { samples: ob.samples, rampWalked: ob.ramp, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
         console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
             '; hidden depth field: rims + observed texels fixed, ' + merged.cycles + ' cycles, err ' + merged.err.toFixed(4) + ', ' + merged.nClamp + ' clamped; ' + obsStats.ms + 'ms');
-        if (opts.regate !== false && window._fragTear) {
+        if (opts.regate !== false && !opts.gateAPriori && window._fragTear) {
             // the tear gate now reads the observed field: re-bake the fold field under it and re-observe once,
             // so the band is derived under the tear the final bake will use (item: reveal set drift is reported)
             const rev1 = s1.revealTex; bgQuickBake = true; buildBackgroundLayer();
@@ -14943,7 +14944,9 @@ function bgBuildBackgroundLayerCore() {
                     // step over the RWD smear window tore 43% of the troll's cells in its first form and,
                     // restricted to cliffs, measured no change in the band-outline teeth (Addendum 180
                     // item 13c/13d, Addendum 184 phase 0.5). The cell's own three vertices are the step.
-                    const ffGate = (window._geoFarField && window._geoFarField.length === pw * ph) ? window._geoFarField : null;
+                    // A246d: window._geoGateField (the a-priori far field kept for the GATE while the band and depth take the observed field) when set
+                    const ffGateSrc = (window._geoGateField && window._geoGateField.length === pw * ph) ? window._geoGateField : window._geoFarField;
+                    const ffGate = (ffGateSrc && ffGateSrc.length === pw * ph) ? ffGateSrc : null;
                     const foldTex = window._plugSweepCapture ? new Float32Array(pw * ph).fill(2.0) : null;   // A243: per-texel fold point (min over incident cells), source rows, for the CPU sweep
                     let nFold = 0, nQuantumSkipped = 0;
                     for (let t = 0; t < src2.length; t += 3) {

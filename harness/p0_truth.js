@@ -21,7 +21,7 @@ const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const SCENE = process.env.SCENE || 'figure', GRADE = process.env.GRADE || '16';
-const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.BOUNDARY ? '_bnd' : '');
+const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.GATEA ? '_gateA' : '') + (process.env.BOUNDARY ? '_bnd' : '');
 const OUT = path.join(__dirname, 'shots', 'p0', SCENE + '_d' + GRADE);
 const POSES = [[0, 0], [0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141, 0.023], [0.06, 0.012], [-0.09, -0.02], [0.16, -0.03]];   // the eight of a228_carve
 (async () => {
@@ -44,7 +44,7 @@ const POSES = [[0, 0], [0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141,
         if (o.flush) window._plateFlushExempt = true;
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         const t0 = Date.now();
-        if (o.geo) window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary });
+        if (o.geo) window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary, gateAPriori: !!o.gateA });
         else { bgQuickBake = true; buildBackgroundLayer(); }
         const bakeMs = Date.now() - t0;
         const sz = window._qbSize, dQ = window._qbDQ, pF = window._qbPlateF, dis = window._qbDisocc;
@@ -108,8 +108,13 @@ const POSES = [[0, 0], [0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141,
         const colMap = map((i) => { if (!dis[i]) return R[i] ? [120, 0, 120] : [0, 0, 0]; const e = eCol[i]; if (isNaN(e)) return [40, 40, 40]; const t = Math.min(1, e / 96); return [Math.round(255 * t), Math.round(200 * (1 - t)), 40]; });
         return { pw, ph, bakeMs, plugFrom, q, poses: poses.length, Rpose: Rpose.slice(0, 8), nH, nR, nB, nBR, nRnotB, nBnotH, nBHnotR, meanDq: sDq / Math.max(1, nBR), meanAbsDq: sDqAbs / Math.max(1, nBR), meanAbsDs: sDs / Math.max(1, nBR), nFront, nBehind,
                  meanAbsDqR: sDqR / Math.max(1, nR), meanAbsDsR: sDsR / Math.max(1, nR), meanCol: sCol / Math.max(1, nBR), meanColR: sColR / Math.max(1, nColR), cloneScale: sClone / Math.max(1, nBR), geo: window._plugGeoStats || null, depthMap, colMap };
-    }, { scene: SCENE, truth, poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { scene: SCENE, truth, poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
+    try { const raw = await page.evaluate(() => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
+            const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph; const pS = new Float32Array(N); const pF = window._qbPlateF; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+            return { band: b64(window._qbDisocc), dQ: b64(window._qbDQ), plate: b64(pS), field: window._geoFarField ? b64(window._geoFarField) : null, obsDepth: window._geoObsDepth ? b64(window._geoObsDepth) : null, obsCount: window._geoObsCount ? b64(window._geoObsCount) : null }; });
+        for (const k of ['band', 'dQ', 'plate', 'field', 'obsDepth', 'obsCount']) if (raw[k]) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(raw[k], 'base64'));
+    } catch (eR) { console.log('  (raw export failed: ' + eR.message + ')'); }
     fs.writeFileSync(path.join(OUT, ARM + '_deptherr.png'), Buffer.from(res.depthMap.split(',')[1], 'base64'));
     fs.writeFileSync(path.join(OUT, ARM + '_colerr.png'), Buffer.from(res.colMap.split(',')[1], 'base64'));
     fs.writeFileSync(path.join(OUT, ARM + '_metrics.json'), JSON.stringify(Object.assign({}, res, { depthMap: undefined, colMap: undefined }), null, 1));

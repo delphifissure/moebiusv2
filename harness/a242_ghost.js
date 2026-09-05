@@ -15,7 +15,7 @@ const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const TAG = process.env.TAG || 'troll';
-const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.SWEEP ? '_sweep' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.BOUNDARY ? '_bnd' : '');
+const ARM = (process.env.FLAGS ? process.env.FLAGS.replace(/[^A-Za-z0-9]+/g, '') : 'wash') + (process.env.SWEEP ? '_sweep' : '') + (process.env.HOLE ? '_hole' : '') + (process.env.GEO ? '_geo' : '') + (process.env.OBS ? '_obs' : '') + (process.env.GATEA ? '_gateA' : '') + (process.env.BOUNDARY ? '_bnd' : '') + (process.env.NX ? '_nx' + process.env.NX : '');
 const OUT = path.join(__dirname, 'shots', 'a242', TAG);
 const POSES = [['rest', 0, 0], ['sheet1', 0.180, 0.008]];
 const Z = 0.199;
@@ -38,7 +38,7 @@ const Z = 0.199;
         if (o.flush) window._plateFlushExempt = true;
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         const t0 = Date.now();
-        if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, observed: !!o.obs, boundary: !!o.boundary }); }   // A244: geometric band
+        if (o.geo) { window._plugGeoBand({ flush: !!o.flush, nx: o.nx || undefined, ny: o.ny || undefined, observed: !!o.obs, boundary: !!o.boundary, gateAPriori: !!o.gateA }); }   // A244: geometric band
         else if (o.sweep) { window._plugSweepBake({ flush: !!o.flush, holeDemand: !!o.hole, nx: o.nx || undefined }); }   // A232/A234: sweep-defined region + hole-driven demand (the band = the exact reveal)
         else { bgQuickBake = true; buildBackgroundLayer(); }
         isSweeping = true;
@@ -139,7 +139,7 @@ const Z = 0.199;
         gx.putImageData(gi, 0, 0); shots.ghostmap = gm.toDataURL('image/png');
         return { pw, ph, bakeMs, plugFrom, nBand, nFar, nNear, nBoth, nGhost, meanFar: sFar / Math.max(1, nBoth), meanNear: sNear / Math.max(1, nBoth),
                  seam: sSeam / Math.max(1, nSeam), nSeam, gradBand: (gxB + gyB) / Math.max(1, 2 * nGB), gradOut: gOut / Math.max(1, 2 * nGO), anis: gxB / Math.max(1, gyB), shots };
-    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, sweep: !!process.env.SWEEP, hole: !!process.env.HOLE, geo: !!process.env.GEO, obs: !!process.env.OBS, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, sweep: !!process.env.SWEEP, hole: !!process.env.HOLE, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, ny: process.env.NY ? parseInt(process.env.NY) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
     // Phase 0 / A246 audit: the band, the plate depth, the observed depth/count and the geo stats as raw files (source rows) for offline comparison
     try { const raw = await page.evaluate(() => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
