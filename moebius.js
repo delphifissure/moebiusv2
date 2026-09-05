@@ -7801,9 +7801,18 @@ window._plugCpuSweep = function (opts) {
                         // lip nearer than the far surface and its colour between the two sides). The lip is the ramp's
                         // FOOT: walk on while the next foreground cell is deeper by at least the source quantum, at
                         // most 4 RWD cells (a Gaussian ramp of sigma RWD is 95% inside +-2 sigma).
+                        // A246e: the descent that counts as ramp must exceed the far surface's OWN slope per cell
+                        // (measured beyond the ramp: the foreground cells 4 and 8 RWD further along the walk), plus
+                        // the quantum. On quantised depth the quantum dominates (a ramp cell descends by several
+                        // quanta, the surface by less than one); on continuous depth the quantum is 1/65535 and the
+                        // quantum rule alone walked every receding surface to the 4-RWD cap (pole, 16-bit: 1 px behind).
+                        let slopeEst = 0;
+                        { const ax = (wx + rampMax * stxO) | 0, ay = (wy + rampMax * styO) | 0, bx = (wx + 2 * rampMax * stxO) | 0, by = (wy + 2 * rampMax * styO) | 0;
+                          if (ax >= 0 && ay >= 0 && ax < GW && ay < GH && bx >= 0 && by >= 0 && bx < GW && by < GH) { const ca = ay * GW + ax, cb = by * GW + bx; if (own[ca] === -2 && own[cb] === -2) slopeEst = Math.max(0, fgFar[ca] - fgFar[cb]) / rampMax; } }
+                        const rampThr = qN + slopeEst;
                         let cur = cFar, wx2 = wx, wy2 = wy;
                         for (let k = 0; k < rampMax; k++) { wx2 += stxO; wy2 += styO; const ix = wx2 | 0, iy = wy2 | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix;
-                            if (own[cc] !== -2) break; if (fgFar[cc] < fgFar[cur] - qN) cur = cc; else break; }
+                            if (own[cc] !== -2) break; if (fgFar[cur] - fgFar[cc] > rampThr) cur = cc; else break; }
                         if (cur !== cFar) obsRamp++; cFar = cur;
                         wx = (c % GW) + 0.5; wy = ((c / GW) | 0) + 0.5;
                         for (let k = 0; k < maxWalk; k++) { wx -= stxO; wy -= styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cNear = cc; break; } }
