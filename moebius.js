@@ -7708,6 +7708,7 @@ window._plugCpuSweep = function (opts) {
     const obsPush = (t, d) => { if (obsN === obsCap) { obsCap *= 2; const n2 = new Int32Array(obsCap); n2.set(obsNext); obsNext = n2; const v2 = new Float32Array(obsCap); v2.set(obsVal); obsVal = v2; }
         obsVal[obsN] = d; obsNext[obsN] = obsHead[t]; obsHead[t] = obsN++; obsCnt[t]++; };
     let sMaxFG = 0; for (let i = 0; i < N; i++) { const a = Math.abs(sFG[i]); if (a > sMaxFG) sMaxFG = a; }
+    let rowDumps = null;
     // A244: hole -> covering texel (A234's inversion, exact here: the CPU warp IS the shift law).
     // farAt = the nearest demand texel's plate depth (BFS from the demand set, source rows); a
     // hole cell at pose f is covered by the texel that lands there when displaced by the far
@@ -7779,6 +7780,10 @@ window._plugCpuSweep = function (opts) {
         // uncovered cells — are the outpaint class, not reveals). Each reveal cell is inverted
         // through the far shift to the plate texel that must cover it: that texel needs the far
         // fill, whether or not a front reached it. This is the band's outline from geometry.
+        if (opts.rowDump !== undefined && fgOwn) {   // Phase 0 probe: the FG pass's classes along one screen row (cell own / far-corner depth), per pose
+            const ry = Math.max(0, Math.min(GH - 1, (opts.rowDump / sc) | 0)); const o = new Int32Array(GW), fdp = new Float32Array(GW), zz = new Float32Array(GW);
+            for (let cx = 0; cx < GW; cx++) { const c = ry * GW + cx; o[cx] = own[c]; fdp[cx] = own[c] === -2 ? fgFar[c] : -1; zz[cx] = own[c] === -2 ? zb[c] : -1; }
+            (rowDumps = rowDumps || []).push({ fx, fy, y: ry, own: o, far: fdp, z: zz }); }
         if (revealTex) {
             // A245f: a border-connected uncovered cell is NOT thereby outpaint — the corner the troll's feet
             // vacate at the mirror pose is border-connected and is a reveal of in-frame far content (its
@@ -7866,7 +7871,7 @@ window._plugCpuSweep = function (opts) {
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
     const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp } : null;
-    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, ms: Date.now() - t0 };
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -14058,7 +14063,7 @@ function bgBuildBackgroundLayerCore() {
                                 if (nbSrc[k*4+s]) { lv.dR[u] += cd[j*4]; lv.dG[u] += cd[j*4+1]; lv.dB[u] += cd[j*4+2]; lv.dW[u]++; }
                                 else { const uj = uOf[domK[j]]; if (uj >= 0) lv.nb[u*4+s] = uj; } } }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
-                        const mg = bgMembraneSolve(lv, TOLC, (typeof window._membraneCycles === "number" && window._membraneCycles > 0) ? window._membraneCycles : 60);   // A246f: cycle cap override for the convergence A/B (the observed-depth domains hit the 60-cycle cap at 13-21/255)
+                        const mg = bgMembraneSolve(lv, TOLC, 60);   // A246f cycle-cap A/B removed (rule 7): 300 cycles took the observed-depth domain from 21 to 6.6/255 and changed nothing the instruments or the screen resolve (ghost 39.8 -> 39.5, seam 10.20 -> 10.20); Addendum 185
                         nSor = mg.sweeps[0][1]; sorRes = mg.residual; window._qbMembraneLevels = mg.sweeps; window._qbMembraneLevelSizes = mg.levels;
                         for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = lv.vR[u]; cd[i*4+1] = lv.vG[u]; cd[i*4+2] = lv.vB[u]; }
                     } else {
