@@ -7698,13 +7698,12 @@ window._plugCpuSweep = function (opts) {
     // of the lip by the quantum (else the texel at its source depth already covers the cell).
     // Cells with no far lip in frame (outpaint side) fall back to the far-field inversion.
     const observe = !!opts.observe;
-    const srcC = observe ? window._qbSrcColor : null;
     const fgOwn = observe ? new Int32Array(G) : null, fgFar = observe ? new Float32Array(G) : null;   // per cell: far-corner FG texel and its depth
     let curTi = -1, curFar = 0;
     const qN = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
-    let obsHead = null, obsNext = null, obsVal = null, obsCnt = null, obsR = null, obsG = null, obsB = null, obsCap = 0, obsN = 0;
+    let obsHead = null, obsNext = null, obsVal = null, obsCnt = null, obsCap = 0, obsN = 0;
     let obsSamples = 0, obsGeo = 0, obsSelf = 0, obsAmbig = 0, obsOut = 0, obsRamp = 0;
-    if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N); obsR = new Float32Array(N); obsG = new Float32Array(N); obsB = new Float32Array(N);
+    if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N);
         obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap); }
     const obsPush = (t, d) => { if (obsN === obsCap) { obsCap *= 2; const n2 = new Int32Array(obsCap); n2.set(obsNext); obsNext = n2; const v2 = new Float32Array(obsCap); v2.set(obsVal); obsVal = v2; }
         obsVal[obsN] = d; obsNext[obsN] = obsHead[t]; obsHead[t] = obsN++; obsCnt[t]++; };
@@ -7788,7 +7787,7 @@ window._plugCpuSweep = function (opts) {
             const doObs = observe && pfO > 0;
             const stxO = doObs ? -fx / Math.max(Math.abs(fx), Math.abs(fy)) : 0, styO = doObs ? -fy / Math.max(Math.abs(fx), Math.abs(fy)) : 0;   // one cell per step against the parallax
             const maxWalk = doObs ? Math.ceil(sMaxFG * pfO / sc) + 2 : 0;    // the widest gap any texel can open at this pose (its whole shift), plus rounding
-            const rampMax = window._obsNoRamp ? 0 : Math.ceil(4 * Math.max(1, Math.round(4 * pw / 1200)) / sc);   // A246c: the blur ramp's extent in cells (window._obsNoRamp: A/B arm without the ramp walk)
+            const rampMax = Math.ceil(4 * Math.max(1, Math.round(4 * pw / 1200)) / sc);   // A246c: the blur ramp's extent in cells (the walk earned 0.4 q on the degraded figure truth; Addendum 185)
             for (let c = 0; c < G; c++) { if (own[c] === -2) continue;
                 const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc; let tx = cx0, ty = cy0;
                 if (doObs) {
@@ -7824,7 +7823,6 @@ window._plugCpuSweep = function (opts) {
                             const t = tyr * pw + txr;
                             if (dQ[t] - dFar < qN) { obsSelf++; continue; }   // the texel's own source depth is the lip's: at its source depth the plug already covers this cell
                             obsPush(t, dFar); obsSamples++; revealTex[t] = 1; revealIn++;
-                            if (srcC) { const l4 = fgOwn[cFar] * 4; obsR[t] += srcC[l4]; obsG[t] += srcC[l4 + 1]; obsB[t] += srcC[l4 + 2]; }
                             continue;
                         }
                     }
@@ -7867,7 +7865,7 @@ window._plugCpuSweep = function (opts) {
     }
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
-    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, sumR: obsR, sumG: obsG, sumB: obsB, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp } : null;
+    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp } : null;
     return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
@@ -7891,7 +7889,7 @@ window._plugGeoBand = function (opts) {
     // the band is their union (+ pinholes), and the band's depth IS that field. One step.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._geoObsColor = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band names the far rims
@@ -7951,9 +7949,10 @@ window._plugGeoBand = function (opts) {
         const merged = solveField(fixed2, val2);
         window._geoGateField = opts.gateAPriori ? farField.slice() : null;   // A246d: the tear gate may keep the a-priori field (A/B: the observed gate tears 24% more texels on the troll)
         for (let i = 0; i < N; i++) farField[i] = merged.field[i];          // the observed hidden depth field replaces the a-priori far field in place (all consumers read window._geoFarField)
-        const obsColor = new Float32Array(N * 3);
-        for (let i = 0; i < N; i++) { const c = ob.cnt[i]; if (!c) continue; obsColor[i * 3] = ob.sumR[i] / c; obsColor[i * 3 + 1] = ob.sumG[i] / c; obsColor[i * 3 + 2] = ob.sumB[i] / c; }
-        window._geoObsDepth = obsDepth; window._geoObsCount = ob.cnt; window._geoObsColor = obsColor;
+        // A246 lip COLOUR term REMOVED (rule 7): the mean lip colour as a least-squares data term in the colour
+        // membrane painted the band as a directional wallpaper on the troll (ghost index +11 points, anisotropy
+        // 0.78) and scored worse than the membrane on the screen truth scene; the membrane's wash stays. Addendum 185.
+        window._geoObsDepth = obsDepth; window._geoObsCount = ob.cnt;
         obsStats = { samples: ob.samples, rampWalked: ob.ramp, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
         console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
             '; hidden depth field: rims + observed texels fixed, ' + merged.cycles + ' cycles, err ' + merged.err.toFixed(4) + ', ' + merged.nClamp + ' clamped; ' + obsStats.ms + 'ms');
@@ -7968,7 +7967,7 @@ window._plugGeoBand = function (opts) {
                 for (let i = 0; i < N; i++) { if (s1b.revealTex[i]) rev1[i] = 1; if (s1b.seen[i]) s1.seen[i] = 1; }   // union: cover both tears
                 s1.torn = s1b.torn; }
         }
-    } else { window._geoObsDepth = null; window._geoObsCount = null; window._geoObsColor = null; }
+    } else { window._geoObsDepth = null; window._geoObsCount = null; }
     const torn = s1.torn;
     const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0, nRev = 0, nPin = 0;
     // +1 texel of rounding around the reveal texels
@@ -13186,11 +13185,6 @@ function bgBuildBackgroundLayerCore() {
             }
             window._qbSize = { pw, ph };   // A232: plate texture size for the visibility sweep
             if (window._plugSweepCapture) window._qbDQ = dQ;   // A236: source depth (source rows) for the CPU sweep
-            if (window._plugSweepCapture) {   // A246: the source colour at plate resolution (source rows) for the far-lip observations
-                try { const cImgS = (L.elements && L.elements.color) || L.textures.color.image;
-                    const cvS = document.createElement('canvas'); cvS.width = pw; cvS.height = ph; const cxS = cvS.getContext('2d', { willReadFrequently: true });
-                    cxS.drawImage(cImgS, 0, 0, pw, ph); window._qbSrcColor = cxS.getImageData(0, 0, pw, ph).data; } catch (eS) { window._qbSrcColor = null; }
-            }
             // A234 HOLE-DRIVEN DEMAND (window._extraDemand, source rows). Set by
             // window._plugSweepBake({holeDemand:true}) from the UNCOVERED pixels
             // of a visibility sweep: for each hole the plate texel that would
@@ -14027,7 +14021,7 @@ function bgBuildBackgroundLayerCore() {
                     // (|plateQ[i] - plateQ[prev]| <= TOLB) — the same gates
                     // as the BFS, so a scan cannot carry colour through a
                     // cliff. Weights 1/(dist * steplen), Shepard p = 1.
-                    let nBlend = 0, nSor = 0, sorRes = -1, sorL = 0, sorOmega = 0, nCoupled = 0, nObsTerms = 0, wObs = 1;
+                    let nBlend = 0, nSor = 0, sorRes = -1, sorL = 0, sorOmega = 0, nCoupled = 0;
                     if (!!window._plugMembrane) {
                         // couplings: a domain texel talks to a neighbour only through the same
                         // depth gate the BFS used (source neighbour: |plate - src| <= TOLB, a
@@ -14053,21 +14047,13 @@ function bgBuildBackgroundLayerCore() {
                         // the rim keep their BFS colour. Solved by cascadic aggregation multigrid
                         // (bgMembraneSolve): synthetic disc test 35 fine sweeps / 296 ms against 486
                         // sweeps of plain SOR, and a smaller error.
-                        // A246: observed texels (window._geoObsColor, the mean far-lip colour seen next to the gap this
-                        // texel covers) carry a least-squares data term of weight w per texel (default 1: one observation
-                        // weighs as much as one neighbour link, so the fill is the observation field smoothed at the
-                        // texel scale; window._geoObsWeight overrides for the A/B). Observed texels are unknowns even
-                        // in pockets the rim gate cannot reach.
-                        const obsCnt = (window._bandReplace && window._geoObsCount && window._geoObsCount.length === PNq && window._geoObsColor) ? window._geoObsCount : null;
-                        const obsCol = obsCnt ? window._geoObsColor : null; wObs = (typeof window._geoObsWeight === 'number') ? window._geoObsWeight : 1;
                         const uOf = new Int32Array(qt2).fill(-1); let nU = 0;
-                        for (let k = 0; k < qt2; k++) if (dRim[k] >= 0 || (obsCnt && obsCnt[q2[k]] > 0)) uOf[k] = nU++;
+                        for (let k = 0; k < qt2; k++) if (dRim[k] >= 0) uOf[k] = nU++;
                         const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
                                      dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
                                      vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: sorL };
                         for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k];
                             lv.x[u] = i % pw; lv.y[u] = (i / pw) | 0; lv.vR[u] = cd[i*4]; lv.vG[u] = cd[i*4+1]; lv.vB[u] = cd[i*4+2];   // BFS colours as the start
-                            if (obsCnt && obsCnt[i] > 0 && wObs > 0) { lv.dR[u] += wObs * obsCol[i*3]; lv.dG[u] += wObs * obsCol[i*3+1]; lv.dB[u] += wObs * obsCol[i*3+2]; lv.dW[u] += wObs; nObsTerms++; }
                             for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0) continue;
                                 if (nbSrc[k*4+s]) { lv.dR[u] += cd[j*4]; lv.dG[u] += cd[j*4+1]; lv.dB[u] += cd[j*4+2]; lv.dW[u]++; }
                                 else { const uj = uOf[domK[j]]; if (uj >= 0) lv.nb[u*4+s] = uj; } } }
@@ -14131,7 +14117,7 @@ function bgBuildBackgroundLayerCore() {
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
                     if (!!window._plugMembrane)
                         console.log('[QUICK-BAKE] A242 membrane band fill: ' + nGated + ' gated / ' + nPocket + ' pocket of ' + nD + ' band px, ' + nCoupled +
-                            ' coupled to the rim' + (nObsTerms ? ', ' + nObsTerms + ' A246 observed-colour data terms (w ' + wObs + ')' : '') + '; V-cycle multigrid levels ' + JSON.stringify(window._qbMembraneLevelSizes || []) + ', ' + nSor + ' cycles, extrapolated error ' + sorRes.toFixed(3) +
+                            ' coupled to the rim; V-cycle multigrid levels ' + JSON.stringify(window._qbMembraneLevelSizes || []) + ', ' + nSor + ' cycles, extrapolated error ' + sorRes.toFixed(3) +
                             '/255 (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
                     else
                     console.log('[QUICK-BAKE] A215 two-sided band fill: ' + nGated + ' gated / ' + nPocket +
