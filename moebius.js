@@ -14013,7 +14013,7 @@ function bgBuildBackgroundLayerCore() {
             // texel is on the boundary, no clone. Solved by SOR (Young 1954; Numerical
             // Recipes 19.5: omega = 2 / (1 + sin(pi / L)), L the domain extent in texels)
             // to below half an 8-bit step.
-            if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane)) {
+            if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane || !!window._plugWashGated)) {
                 try {
                     const tBF0 = Date.now();
                     const cImgF = (L.elements && L.elements.color) || L.textures.color.image;
@@ -14078,7 +14078,45 @@ function bgBuildBackgroundLayerCore() {
                     // as the BFS, so a scan cannot carry colour through a
                     // cliff. Weights 1/(dist * steplen), Shepard p = 1.
                     let nBlend = 0, nSor = 0, sorRes = -1, sorL = 0, sorOmega = 0, nCoupled = 0;
-                    if (!!window._plugMembrane) {
+                    let nPPSeeds = 0, nPPFilled = 0, ppLevels = 0;
+                    if (!!window._plugWashGated) {
+                        // A247 GATED PULL-PUSH (measured arm; Addendum 187). The real-time path's fill is a
+                        // pull-push diffusion (Gortler et al. 1996, the Lumigraph's pyramid fill; Kraus &
+                        // Strengert 2007) from whatever surrounds a gap on screen, which reads as filled but
+                        // pulls the occluder's colour in (the clones) and is re-solved every frame (the
+                        // flicker). The membrane (A242) fixed both and lost the texture. This arm is the
+                        // same diffusion, ONCE, in the plug's texture space, seeded only by FAR-SIDE texels:
+                        // a non-band texel is a seed when its source depth agrees (within the A44 tear step)
+                        // with the plate depth of the NEAREST band texel — the rim gate of A213 carried
+                        // outward by a multi-source BFS, so the seed set is the far surface at any distance
+                        // and never the occluder. Every band texel takes the pyramid's value.
+                        const nearPlate = new Float32Array(PNq).fill(-1); const qb = new Int32Array(PNq); let qh0 = 0, qt0 = 0;
+                        for (let i = 0; i < PNq; i++) if (disocc[i]) { nearPlate[i] = plateQ[i]; qb[qt0++] = i; }
+                        while (qh0 < qt0) { const i = qb[qh0++]; const x = i % pw, y = (i / pw) | 0; const v = nearPlate[i];
+                            if (x > 0 && nearPlate[i - 1] < 0) { nearPlate[i - 1] = v; qb[qt0++] = i - 1; } if (x < pw - 1 && nearPlate[i + 1] < 0) { nearPlate[i + 1] = v; qb[qt0++] = i + 1; }
+                            if (y > 0 && nearPlate[i - pw] < 0) { nearPlate[i - pw] = v; qb[qt0++] = i - pw; } if (y < ph - 1 && nearPlate[i + pw] < 0) { nearPlate[i + pw] = v; qb[qt0++] = i + pw; } }
+                        // level 0: premultiplied colour + weight; seeds weigh 1, everything else 0
+                        let lw = pw, lh = ph; const levels = [];
+                        { const r = new Float32Array(PNq), g = new Float32Array(PNq), b = new Float32Array(PNq), w = new Float32Array(PNq);
+                          for (let i = 0; i < PNq; i++) { if (!disocc[i] && Math.abs(dQ[i] - nearPlate[i]) <= TOLB) { r[i] = cd[i*4]; g[i] = cd[i*4+1]; b[i] = cd[i*4+2]; w[i] = 1; nPPSeeds++; } }
+                          levels.push({ r, g, b, w, lw, lh }); }
+                        // pull: 2x2 box of the premultiplied sums, weight saturates at 1 (Gortler's pull)
+                        while (lw > 1 || lh > 1) { const p = levels[levels.length - 1]; const nw = Math.max(1, (lw + 1) >> 1), nh = Math.max(1, (lh + 1) >> 1);
+                            const r = new Float32Array(nw * nh), g = new Float32Array(nw * nh), b = new Float32Array(nw * nh), w = new Float32Array(nw * nh);
+                            for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) { let sr = 0, sg = 0, sb = 0, sw = 0;
+                                for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const sx = 2 * x + dx, sy = 2 * y + dy; if (sx >= lw || sy >= lh) continue; const j = sy * lw + sx; const ww = p.w[j]; sr += p.r[j] * ww; sg += p.g[j] * ww; sb += p.b[j] * ww; sw += ww; }
+                                // weight of the coarse texel = mean of its children's weights (a fully seeded block is trusted, a sparsely seeded one is partly deferred to coarser levels)
+                                const o = y * nw + x; if (sw > 0) { r[o] = sr / sw; g[o] = sg / sw; b[o] = sb / sw; w[o] = Math.min(1, sw / 4); } }
+                            levels.push({ r, g, b, w, lw: nw, lh: nh }); lw = nw; lh = nh; }
+                        ppLevels = levels.length;
+                        // push: from the coarsest, each level's holes take the coarser level's value (nearest parent, then the level's own weight blends it in)
+                        for (let L = levels.length - 2; L >= 0; L--) { const f = levels[L], c = levels[L + 1];
+                            for (let y = 0; y < f.lh; y++) for (let x = 0; x < f.lw; x++) { const o = y * f.lw + x; if (f.w[o] >= 1) continue;
+                                const cx = Math.min(c.lw - 1, x >> 1), cy = Math.min(c.lh - 1, y >> 1); const co = cy * c.lw + cx; const cw = c.w[co]; if (cw <= 0) continue;
+                                const t = f.w[o]; f.r[o] = f.r[o] * t + c.r[co] * (1 - t); f.g[o] = f.g[o] * t + c.g[co] * (1 - t); f.b[o] = f.b[o] * t + c.b[co] * (1 - t); f.w[o] = Math.min(1, t + (1 - t) * cw); } }
+                        const L0 = levels[0];
+                        for (let i = 0; i < PNq; i++) if (disocc[i] && L0.w[i] > 0) { cd[i*4] = L0.r[i]; cd[i*4+1] = L0.g[i]; cd[i*4+2] = L0.b[i]; nPPFilled++; }
+                    } else if (!!window._plugMembrane) {
                         // couplings: a domain texel talks to a neighbour only through the same
                         // depth gate the BFS used (source neighbour: |plate - src| <= TOLB, a
                         // Dirichlet value; domain neighbour: |plate - plate| <= TOLB, an unknown)
@@ -14171,7 +14209,9 @@ function bgBuildBackgroundLayerCore() {
                     plateColorTex = new THREE.CanvasTexture(cvF);
                     plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
-                    if (!!window._plugMembrane)
+                    if (!!window._plugWashGated)
+                        console.log('[QUICK-BAKE] A247 gated pull-push band fill: ' + nPPSeeds + ' far-side seeds, ' + nPPFilled + ' of ' + nD + ' band px filled through ' + ppLevels + ' pyramid levels (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
+                    else if (!!window._plugMembrane)
                         console.log('[QUICK-BAKE] A242 membrane band fill: ' + nGated + ' gated / ' + nPocket + ' pocket of ' + nD + ' band px, ' + nCoupled +
                             ' coupled to the rim; V-cycle multigrid levels ' + JSON.stringify(window._qbMembraneLevelSizes || []) + ', ' + nSor + ' cycles, extrapolated error ' + sorRes.toFixed(3) +
                             '/255 (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
