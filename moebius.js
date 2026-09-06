@@ -8090,7 +8090,10 @@ window._plugGeoBand = function (opts) {
         if (window._plugObjectRule || window._geoLipBound) {
             const qNb = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
             const fixedB = new Uint8Array(N), valB = new Float32Array(N);
-            for (let i = 0; i < N; i++) { if (rim[i]) { fixedB[i] = 1; valB[i] = dQ[i]; } else if (ob.cnt[i] > 0 && lipDeep[i] >= 0) { fixedB[i] = 1; valB[i] = Math.min(lipDeep[i], dQ[i]); } }
+            // A253e: the bound is the texel's OBSERVED depth (the depth the observation stage decided: the median, or the
+            // near cluster under _geoObsMode), not the median deeper lip — with near2 the fold's thigh texels had field
+            // 0.509 and plate 0.29: a162 sank them and a floor at the median lip (0.277, the wall's samples) could not restore them
+            for (let i = 0; i < N; i++) { if (rim[i]) { fixedB[i] = 1; valB[i] = dQ[i]; } else if (ob.cnt[i] > 0 && obsDepth[i] >= 0) { fixedB[i] = 1; valB[i] = obsDepth[i]; } }
             const bres = solveField(fixedB, valB); const bnd = bres.field;
             for (let i = 0; i < N; i++) { if (rim[i]) continue; const lim = Math.min(bnd[i] - qNb, dQ[i]); if (merged.field[i] < lim) { sBound += lim - merged.field[i]; merged.field[i] = lim; prov[i] = 4; nBound++; } }
             window._geoLipBoundField = bnd;
