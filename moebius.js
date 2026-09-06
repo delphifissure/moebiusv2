@@ -18449,6 +18449,28 @@ function _wireDebugSheetControls() {
     }
     document.getElementById('bgFullPlanesChk')?.addEventListener('change', (e) => { bgMPIFullPlanes = !!e.target.checked; });
     document.getElementById('bgQuickBakeChk')?.addEventListener('change', (e) => { bgQuickBake = !!e.target.checked; });
+    // A253 GAP RULE SELECT (user request: "give us a toggle to try them out on all the images"). Runs the
+    // experiment's full recipe on the quick-bake path — the observed geometric band with the object rule
+    // and the chosen extent fill — so it can be judged live on any loaded image. 'default' restores the
+    // shipped quick bake (flags cleared). Nothing here changes a default.
+    {
+        const gapSel = document.getElementById('bgGapRuleSel');
+        const bakeGapRule = (m) => {
+            window._bgGapRule = m;   // debug-sheet stamp
+            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._bandReplace = null; window._geoFarField = null; window._geoGateField = null;
+                if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
+            window._plugObjectRule = 1; window._plugExtent = m; window._geoLipSeed = 1;
+            window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;
+            const modeSel2 = document.getElementById('bgModeSel'); if (modeSel2) modeSel2.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
+            showBuildOverlay('Geometric bake, object rule (' + m + ')… 2–5 min', 180000);
+            requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+                try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); } catch (e) { console.error('[A253] gap-rule bake failed:', e); }
+                window._bgUserBuiltOnce = true; hideBuildOverlay();
+            }, 30)));
+        };
+        if (gapSel) gapSel.addEventListener('change', () => bakeGapRule(gapSel.value));
+        window._bakeGapRule = bakeGapRule;
+    }
     // A36: SD-region highlight — preview of exactly where diffusion will
     // inpaint (depth-tinted band + bright rim on the plate, dimmed FG).
     document.getElementById('sdRegionsChk')?.addEventListener('change', (e) => {

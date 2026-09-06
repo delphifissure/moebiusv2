@@ -288,6 +288,12 @@
                    would go with it. Re-enable by removing `disabled`. -->
               <option value="v1" disabled>v1 plug bake (disabled — see a129)</option>
             </select></label>
+          <label style="margin-left:6px; font-size:0.85em;" title="A253 experiment (quick-bake path, observed geometry). default: the shipped quick bake. far: gaps inside an object's rest silhouette are filled from that object (interior step / continuous surface), gaps at its extent from the far side. skirt: extent gaps ramp from the near lip to the far lip (an object side). Changing it runs the full geometric bake (2–5 min on a large image).">gaps
+            <select id="bgGapRuleSel">
+              <option value="default" selected>default</option>
+              <option value="far">object rule · far</option>
+              <option value="skirt">object rule · skirt</option>
+            </select></label>
           <label style="margin-left:6px; font-size:0.85em;" title="Highlight exactly where SD will inpaint: depth-tinted disocclusion regions with a bright rim, foreground dimmed. Run a Quick bake first."><input type="checkbox" id="sdRegionsChk"> 🔦 SD regions</label>
           <button type="button" id="bgLayerBuildBtn" style="margin-left:4px; padding:2px 8px;" title="Build the background layer with the selected bake mode">🧱 Build</button>
           <label style="margin-left:4px;"><input type="checkbox" id="bgLayerToggle" checked> show BG</label>
