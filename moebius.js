@@ -7998,7 +7998,7 @@ window._plugGeoBand = function (opts) {
     // the far field: membrane over every non-rim texel, Dirichlet at the rims (source depth)
     const tF = Date.now();
     // fixed: 1 where the texel is a boundary value (val), membrane elsewhere; init from the plate
-    const solveField = (fixed, val) => {
+    const solveField = (fixed, val, optsF) => {   // optsF.noClamp: the values are not depths (A257 solves in world z)
         const uIdx = new Int32Array(N).fill(-1); let nU = 0; for (let i = 0; i < N; i++) if (!fixed[i]) uIdx[i] = nU++;
         const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
                      dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
@@ -8011,7 +8011,7 @@ window._plugGeoBand = function (opts) {
         const field = new Float32Array(N);
         for (let i = 0; i < N; i++) { const u = uIdx[i]; field[i] = u < 0 ? val[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
         // never in front of the source: the field is a continuation BEHIND the surface (a135's ordering, per texel)
-        let nClamp = 0; const clampMask = new Uint8Array(N); for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; clampMask[i] = 1; nClamp++; }
+        let nClamp = 0; const clampMask = new Uint8Array(N); if (!(optsF && optsF.noClamp)) for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; clampMask[i] = 1; nClamp++; }
         return { field, nU, cycles: mg.sweeps[0][1], err: mg.residual / 255, nClamp, clampMask };
     };
     const ffRes = solveField(rim, dQ);
@@ -8035,8 +8035,55 @@ window._plugGeoBand = function (opts) {
                 for (const n of cN) if (n >= 0 && objId[n] < 0 && isObj(n)) { objId[n] = nObj; st[t++] = n; } }
             nObj++; }
         window._geoObjId = objId; let nIn = 0; for (let i = 0; i < N; i++) if (objId[i] >= 0) nIn++;
-        console.log('[A253] rest-silhouette objects: ' + nObj + ' components over ' + nIn + ' texels in front of the far field by > ' + TOLB.toFixed(3) + '; extent fill = ' + (window._plugExtent === 'skirt' ? 'skirt' : 'far')); }
+        console.log('[A253] rest-silhouette objects: ' + nObj + ' components over ' + nIn + ' texels in front of the far field by > ' + TOLB.toFixed(3) + '; extent fill = ' + (window._plugExtent || 'far')); }
     else window._geoObjId = null;
+    // A257 OBJECT BACKS (window._plugBack): the SECOND LAYER. One plate texel can carry one depth, and beside a
+    // rounded object the gap needs the object's own side first and the background after — both land on the same
+    // plate texels at different eyes (measured: 80 k of the troll's 300 k observed texels, 47 % of the silver
+    // warrior's, carry two hidden layers; every per-texel vote traded tunnelling against pits). So the object's
+    // hidden part becomes its own surface: for each rest-silhouette component the silhouette depth, read one
+    // estimator blur width (RWD, Addendum 93) inside the edge so the ramp does not count, is carried across the
+    // component as a membrane — the object's central plane — and the back is the front MIRRORED through that
+    // plane (front–back symmetry; the related prior is silhouette inflation, Igarashi, Matsuoka & Tanaka,
+    // "Teddy", SIGGRAPH 1999, height ∝ distance from the silhouette — here the depth map's own bulge sets the
+    // thickness instead of an assumed radius). Where the front is flat (the woman) the back coincides with it and
+    // the background shows beside her; where it bulges (knee, head, torso) the back is a side. Solved in world z
+    // (the shift law's own depth→z map), never behind the a-priori background, never in front of the front.
+    // Rendered as its own mesh between the foreground and the plug; the depth test decides per pixel.
+    window._geoBackDepth = null;
+    if (objId && window._plugBack) {
+        const tB0 = Date.now(); const RWDo = Math.max(1, Math.round(4 * pw / 1200));
+        const pnB = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
+        const outerZ = outerVolumeDepth, innerZ = innerVolumeDepth;
+        const zOf = (d) => { d = Math.min(1, Math.max(0, d)); if (d < pnB) { const t = d / pnB; return -outerZ + outerZ * (t * t * (3 - 2 * t)); } const t = (d - pnB) / (1 - pnB); return innerZ * (t * t * (3 - 2 * t)); };
+        const NZ = 8192, zTab = new Float32Array(NZ + 1); for (let i = 0; i <= NZ; i++) zTab[i] = zOf(i / NZ);
+        const dOfZ = (z) => { if (z <= zTab[0]) return 0; if (z >= zTab[NZ]) return 1; let lo = 0, hi = NZ; while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (zTab[mid] <= z) lo = mid; else hi = mid; } const a = zTab[lo], b = zTab[hi]; return (lo + (b > a ? (z - a) / (b - a) : 0)) / NZ; };
+        // distance (4-connected BFS) from every object texel to the nearest non-object texel
+        const dist = new Int32Array(N).fill(-1); const qd = new Int32Array(N); let qh = 0, qt = 0;
+        for (let i = 0; i < N; i++) if (objId[i] < 0) { dist[i] = 0; qd[qt++] = i; }
+        while (qh < qt) { const i = qd[qh++]; const x = i % pw, y = (i / pw) | 0; const dn = dist[i] + 1;
+            if (x > 0 && dist[i - 1] < 0) { dist[i - 1] = dn; qd[qt++] = i - 1; } if (x < pw - 1 && dist[i + 1] < 0) { dist[i + 1] = dn; qd[qt++] = i + 1; }
+            if (y > 0 && dist[i - pw] < 0) { dist[i - pw] = dn; qd[qt++] = i - pw; } if (y < ph - 1 && dist[i + pw] < 0) { dist[i + pw] = dn; qd[qt++] = i + pw; } }
+        // the central plane: Dirichlet on the ring one blur width inside the edge (its own z), the ramp band takes the
+        // ring's values (nearest ring texel), non-object texels their own z; membrane over the interior, in normalised z
+        const zSpan = Math.max(1e-6, outerZ + innerZ), zn = (z) => (z + outerZ) / zSpan;
+        const fixedZ = new Uint8Array(N), valZ = new Float32Array(N);
+        for (let i = 0; i < N; i++) { if (dist[i] <= 0 || dist[i] === RWDo + 1) { fixedZ[i] = 1; valZ[i] = zn(zOf(dQ[i])); } }
+        { const src = new Int32Array(N).fill(-1); qh = 0; qt = 0; for (let i = 0; i < N; i++) if (dist[i] === RWDo + 1) { src[i] = i; qd[qt++] = i; }
+          while (qh < qt) { const i = qd[qh++]; const x = i % pw, y = (i / pw) | 0; const s = src[i];
+            const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+            for (const j of cN) if (j >= 0 && src[j] < 0 && dist[j] >= 1 && dist[j] <= RWDo) { src[j] = s; qd[qt++] = j; } }
+          for (let i = 0; i < N; i++) if (dist[i] >= 1 && dist[i] <= RWDo) { fixedZ[i] = 1; valZ[i] = src[i] >= 0 ? valZ[src[i]] : zn(zOf(dQ[i])); } }
+        let nUnk = 0; for (let i = 0; i < N; i++) if (!fixedZ[i]) nUnk++;
+        const plane = nUnk > 0 ? solveField(fixedZ, valZ, { noClamp: true }).field : valZ;
+        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0;
+        for (let i = 0; i < N; i++) { if (dist[i] <= 0) continue;
+            const zc = plane[i] * zSpan - outerZ, zf = zOf(dQ[i]), zfar = zOf(farField[i]);
+            let zb = Math.min(zc, 2 * zc - zf); if (zb < zfar) zb = zfar; if (zb > zf) zb = zf;
+            backD[i] = dOfZ(zb); nBack++; if (zf - zb > 1e-6) { sThick += zf - zb; nThick++; } }
+        window._geoBackDepth = backD; window._geoBackDist = dist;
+        console.log('[A257] object backs: ' + nBack + ' texels in ' + nObj + ' objects; ' + nThick + ' with thickness (mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + ' world, span ' + zSpan.toFixed(3) + '); ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
+    }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
     let s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent });
@@ -13782,6 +13829,7 @@ function bgBuildBackgroundLayerCore() {
             renderer.setRenderTarget(null);
             // quick mode replaces any prior stack
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
                 bgLayerMesh = null; }
@@ -15282,6 +15330,35 @@ function bgBuildBackgroundLayerCore() {
                 const matR = matQ;
                 bgLayerMesh.userData.ring = plugRing.map((g) => { const m = new THREE.Mesh(g, matR); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; return m; });
             }
+            // A257 OBJECT BACK LAYER (window._plugBack; the back depth per texel comes from _plugGeoBand). The same
+            // geometry and shader as the plug, displaced by each object's mirrored back and textured with the object's
+            // own pixels; alpha 0 outside the objects (the shader discards alpha < 0.01). It sits between the foreground
+            // and the plug in depth, so the depth test shows it exactly where the foreground has moved off it and the
+            // plug is behind it — the object's side — and the plug everywhere else.
+            if (window._plugBack && window._geoBackDepth && window._geoBackDepth.length === PNq) {
+                try {
+                    const bd = window._geoBackDepth; const backF = new Float32Array(PNq); let nB = 0;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const v = bd[i]; backF[(ph - 1 - y) * pw + x] = v >= 0 ? v : 0; if (v >= 0) nB++; }
+                    const backDT = new THREE.DataTexture(backF, pw, ph, THREE.RedFormat, THREE.FloatType);
+                    backDT.needsUpdate = true; backDT.flipY = false; backDT.minFilter = THREE.LinearFilter; backDT.magFilter = THREE.LinearFilter; if ('colorSpace' in backDT) backDT.colorSpace = THREE.NoColorSpace;
+                    const cImgB = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvB = document.createElement('canvas'); cvB.width = pw; cvB.height = ph; const cxB = cvB.getContext('2d', { willReadFrequently: true });
+                    cxB.drawImage(cImgB, 0, 0, pw, ph); const pxB = cxB.getImageData(0, 0, pw, ph);
+                    for (let i = 0; i < PNq; i++) pxB.data[i * 4 + 3] = bd[i] >= 0 ? 255 : 0;
+                    cxB.putImageData(pxB, 0, 0);
+                    const backTex = new THREE.CanvasTexture(cvB); backTex.minFilter = THREE.LinearFilter; backTex.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in backTex && L.textures.color && 'colorSpace' in L.textures.color) backTex.colorSpace = L.textures.color.colorSpace;
+                    const matB = matQ.clone();
+                    matB.uniforms.displacementMap.value = backDT; matB.uniforms.map.value = backTex;
+                    if (matB.uniforms.u_useBgIslands) matB.uniforms.u_useBgIslands.value = false;
+                    if (matB.uniforms.u_restClip) matB.uniforms.u_restClip.value.set(0, 0);   // in-frame content only, no clip needed
+                    const backMesh = new THREE.Mesh(gQ, matB);
+                    backMesh.position.copy(L.mesh.position); backMesh.rotation.copy(L.mesh.rotation); backMesh.scale.copy(L.mesh.scale);
+                    backMesh.renderOrder = bgLayerMesh.renderOrder; backMesh.userData.objectBack = true;
+                    bgLayerMesh.userData.back = backMesh;
+                    console.log('[A257] object back layer: ' + nB + ' texels carry a back');
+                } catch (eB) { console.warn('[A257] object back layer failed:', eB); }
+            }
 
             // A214: the a149 quick skirt is REMOVED, not flagged (rule 7).
             // Its only output was beyond-frame clamp-to-edge continuation —
@@ -15295,6 +15372,7 @@ function bgBuildBackgroundLayerCore() {
             bgLayerMesh.visible = showQ ? showQ.checked : true;
             scene.add(bgLayerMesh);
             if (bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) scene.add(m);   // A245 ring
+            if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
@@ -18521,9 +18599,9 @@ function _wireDebugSheetControls() {
         const gapSel = document.getElementById('bgGapRuleSel');
         const bakeGapRule = (m) => {
             window._bgGapRule = m;   // debug-sheet stamp
-            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._bandReplace = null; window._geoFarField = null; window._geoGateField = null;
+            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._geoFarField = null; window._geoGateField = null;
                 if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
-            window._plugObjectRule = 1; window._plugExtent = m; window._geoLipSeed = 1;
+            window._plugObjectRule = 1; window._plugExtent = (m === 'back') ? 'far' : m; window._geoLipSeed = 1; window._plugBack = (m === 'back') ? 1 : false;
             window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;
             const modeSel2 = document.getElementById('bgModeSel'); if (modeSel2) modeSel2.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
             showBuildOverlay('Geometric bake, object rule (' + m + ')… 2–5 min', 180000);

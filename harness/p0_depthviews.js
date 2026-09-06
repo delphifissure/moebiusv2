@@ -71,20 +71,24 @@ const Z = 0.199;
             for (const m of fgMeshes) m.visible = true;
             // composite (FG + plug)
             _depthPassIncludeBG = true; renderNormalizedDepthPass(); const cAll = depthPanel();
+            // A257: the composite WITHOUT the object-back layer, to tint where the back wins
+            const backM = (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) || null; let dNoB = null;
+            if (backM) { backM.visible = false; renderNormalizedDepthPass(); dNoB = depthPanel().getContext('2d').getImageData(0, 0, W, Hh).data; backM.visible = true; }
             _depthPassIncludeBG = false; renderNormalizedDepthPass();
             const dFG = cFG.getContext('2d').getImageData(0, 0, W, Hh).data, dPl = cPlug.getContext('2d').getImageData(0, 0, W, Hh).data, dAll = cAll.getContext('2d').getImageData(0, 0, W, Hh).data;
-            // who-wins panel: FG grey, plug green-tinted, nothing red
+            // who-wins panel: FG grey, plug green-tinted, object back CYAN, nothing red
             const cWho = document.createElement('canvas'); cWho.width = W; cWho.height = Hh; const wx = cWho.getContext('2d'); const wi = wx.createImageData(W, Hh);
-            const holeFG = new Uint8Array(W * Hh), holeAll = new Uint8Array(W * Hh); let nFG = 0, nAll = 0, nPlugWins = 0;
+            const holeFG = new Uint8Array(W * Hh), holeAll = new Uint8Array(W * Hh); let nFG = 0, nAll = 0, nPlugWins = 0, nBackWins = 0;
             for (let i = 0; i < W * Hh; i++) { const o4 = i * 4;
                 const fgV = !isRed(dFG, i), allV = !isRed(dAll, i), plV = !isRed(dPl, i);
                 if (!fgV) { holeFG[i] = 1; nFG++; } if (!allV) { holeAll[i] = 1; nAll++; }
                 if (!allV) { wi.data[o4] = 200; wi.data[o4 + 1] = 0; wi.data[o4 + 2] = 0; }
                 else if (fgV && Math.abs(dAll[o4] - dFG[o4]) <= 1) { wi.data[o4] = dAll[o4]; wi.data[o4 + 1] = dAll[o4]; wi.data[o4 + 2] = dAll[o4]; }
+                else if (dNoB && (isRed(dNoB, i) || Math.abs(dAll[o4] - dNoB[o4]) > 1)) { nBackWins++; const g = dAll[o4]; wi.data[o4] = g * 0.3; wi.data[o4 + 1] = Math.min(255, 90 + g * 0.6); wi.data[o4 + 2] = Math.min(255, 120 + g * 0.5); }
                 else { nPlugWins++; const g = dAll[o4]; wi.data[o4] = g * 0.35; wi.data[o4 + 1] = Math.min(255, 60 + g); wi.data[o4 + 2] = g * 0.35; if (!plV) { wi.data[o4] = 255; wi.data[o4 + 1] = 0; wi.data[o4 + 2] = 255; } }
                 wi.data[o4 + 3] = 255; }
             wx.putImageData(wi, 0, 0);
-            stats.push({ pose: name, x: px, y: py, holesFG: nFG, holesFGEnclosed: enclosedCount(holeFG), holesAfter: nAll, holesAfterEnclosed: enclosedCount(holeAll), plugWins: nPlugWins });
+            stats.push({ pose: name, x: px, y: py, holesFG: nFG, holesFGEnclosed: enclosedCount(holeFG), holesAfter: nAll, holesAfterEnclosed: enclosedCount(holeAll), plugWins: nPlugWins, backWins: nBackWins });
             shots['depthFG_' + name] = cFG.toDataURL('image/png'); shots['depthPlug_' + name] = cPlug.toDataURL('image/png'); shots['depthAll_' + name] = cAll.toDataURL('image/png'); shots['who_' + name] = cWho.toDataURL('image/png');
         }
         camera.position.set(0, 0, o.z); updateCameraAndProjection(); render();
@@ -94,7 +98,7 @@ const Z = 0.199;
     fs.writeFileSync(path.join(OUT, ARM + '_stats.json'), JSON.stringify(res.stats, null, 1));
     console.log(`${TAG} [${ARM}${process.env.FLUSH ? ',flush' : ''}] bake ${res.bakeMs} ms, depth pass ${res.W}x${res.Hh}`);
     console.log('   pose     x       y       FG holes (enclosed)   after plug (enclosed)   plug wins px');
-    for (const s of res.stats) console.log('   ' + s.pose.padEnd(8) + ' ' + String(s.x).padEnd(7) + ' ' + String(s.y).padEnd(7) + ' ' + String(s.holesFG).padStart(8) + ' (' + String(s.holesFGEnclosed).padStart(7) + ')   ' + String(s.holesAfter).padStart(10) + ' (' + String(s.holesAfterEnclosed).padStart(7) + ')   ' + String(s.plugWins).padStart(10));
+    for (const s of res.stats) console.log('   ' + s.pose.padEnd(8) + ' ' + String(s.x).padEnd(7) + ' ' + String(s.y).padEnd(7) + ' ' + String(s.holesFG).padStart(8) + ' (' + String(s.holesFGEnclosed).padStart(7) + ')   ' + String(s.holesAfter).padStart(10) + ' (' + String(s.holesAfterEnclosed).padStart(7) + ')   ' + String(s.plugWins).padStart(10) + (s.backWins ? '   back wins ' + s.backWins : ''));
     console.log('   shots -> ' + OUT);
     await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });
