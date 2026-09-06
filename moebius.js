@@ -2390,6 +2390,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // evaluated at the CURRENT pose in the fragment shader instead of baked at
         // the cone rim. u_texelsPerPxRest = the foreground's texel density at rest.
         u_fragTear: { value: 0.0 },
+        u_backTear: { value: 0.0 },          // A257e: 1 on the A257 object-back layer — its shader discards the mesh ramps between back and back-less texels
         u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
         u_fragTearFactor: { value: 2.0 },    // stretch beyond which a cell has folded: shift span > its own extent (A212/a102)
         u_texelsPerPxRest: { value: 0.0 },
@@ -2463,6 +2464,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_bandCutUvRate;
         uniform float u_cutContactRamp;
         uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac;   // A241
+        uniform float u_backTear;   // A257e
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
         // --- A171 APERTURE CROP ---
@@ -2533,6 +2535,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // footprint; outside that footprint there is nothing to cover at any pose (the outpaint class
         // is the SD stage's), so the plug is not drawn there — rest stays pixel-faithful to the frame.
         if (u_isBackgroundLayer && u_restClip.x > 0.0) { vec2 ndc = vClip.xy / max(vClip.w, 1e-6); if (abs(ndc.x) > u_restClip.x || abs(ndc.y) > u_restClip.y) discard; }
+        // A257e: on the object-back layer the mesh between a back texel and a back-less neighbour is a ramp whose alpha
+        // runs 1 → 0 across it (the layer's alpha is 1 on back texels, 0 elsewhere); the ramp is not a surface, so it
+        // is discarded past the half-way alpha. (The A241 stretch law was tried here and removed: a side seen edge-on IS
+        // a stretched surface — the law tore exactly the sides the layer exists to draw, leaving a sliver.)
+        if (u_backTear > 0.5 && originalColor.a < 0.5) discard;
         if (u_fragTear > 1.5 && !u_isBackgroundLayer && !isGap) {
             if (u_poseFrac > vFoldAt) isGap = true;
         } else if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
@@ -6572,6 +6579,7 @@ function renderNormalizedDepthPass() {
                     // same varying, same rule — the depth pass discards exactly what the colour pass does.
                     varying float vFoldAt;
                     uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_pxScale;
+                    uniform float u_backTear;   // A257e
                     uniform sampler2D u_sdMask;
                     varying vec4 vClip; uniform vec2 u_restClip;   // A251b (A245 rest-footprint clip)
 
@@ -6601,6 +6609,8 @@ function renderNormalizedDepthPass() {
                             // contract; every texel without a back on the A257 object-back layer). The depth pass
                             // drew them as cover — the back layer then covered the whole plate at its fill depth.
                             if (texture2D(map, vUv).a < 0.01) discard;
+                            // A257e: the object-back layer discards the mesh ramp between a back texel and a back-less one (alpha < 0.5), as the colour pass does
+                            if (u_backTear > 0.5 && texture2D(map, vUv).a < 0.5) discard;
                             gl_FragColor = vec4(vec3(vNormalizedDepth), 1.0);
                             return;
                         }
@@ -8054,7 +8064,7 @@ window._plugGeoBand = function (opts) {
     // the background shows beside her; where it bulges (knee, head, torso) the back is a side. Solved in world z
     // (the shift law's own depth→z map), never behind the a-priori background, never in front of the front.
     // Rendered as its own mesh between the foreground and the plug; the depth test decides per pixel.
-    window._geoBackDepth = null;
+    window._geoBackDepth = null; window._geoBackColor = null;
     if (objId && window._plugBack) {
         const tB0 = Date.now(); const RWDo = Math.max(1, Math.round(4 * pw / 1200));
         const pnB = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
@@ -8086,49 +8096,96 @@ window._plugGeoBand = function (opts) {
         // SIGGRAPH 1999, is the same idea with a chordal axis): every interior texel u carries a ball of radius dist(u),
         // and the inflated half-thickness at t is the balls' envelope, h(t)² = max_u [dist(u)² − |t − u|²]. That
         // envelope is one Felzenszwalb–Huttenlocher distance transform of sampled functions (Theory of Computing 8,
-        // 2012) applied to f = −dist²: exact, separable, O(N). Half-thickness in texels becomes world units through the
-        // projection at the object's depth (a texel spans w0/pw · (D − z)/D world at offset z along the reference
-        // rays), so an object is as deep as it is wide — no constant. The back is the central plane minus that half
-        // thickness, or the mirrored front where the depth map's own bulge is larger; never behind the a-priori
-        // background, never in front of the front.
-        const dt1d = (f, n, out, v, zz, stride, base) => {   // lower envelope of parabolas f(q) + (p − q)²
+        // 2012) applied to f = −dist²: exact, separable, O(N).
+        // A257d — THE SCALE. A257b turned texels into world units through the projection (a texel of width = a texel
+        // of depth), and the user's screen showed sides reaching the background: the depth map is z-compressed
+        // relative to x by an unknown factor (the volume sliders and the estimator's own range), so isotropy in
+        // diorama units is a constant in disguise. The factor is measurable on the data: the ball model predicts the
+        // visible FRONT too, front − plane = s · h(t), and s is the least-squares slope of the measured bulge against
+        // the envelope height over the object texels (through the origin, bounded below by zero — a body has no
+        // negative thickness). Troll: 0.49 of isotropic; the woman 0.38; the head 1.1 (round). One number per image,
+        // from the image. Where the front's own bulge exceeds s·h the front is mirrored (a round part keeps its
+        // roundness). The back is never behind the a-priori background and never in front of the front.
+        // A257d — WHICH TEXELS. The rest-silhouette mask also holds the floor and the cave walls (the far-field
+        // membrane sags under any large rim-less surface); a back belongs only to texels whose nearest silhouette
+        // texel is a CLIFF (a step larger than the tear step across the mask edge), i.e. a head-on silhouette in the
+        // user's sense. The transform carries the nearest-non-mask texel's index so that test costs nothing.
+        const dt1d = (f, n, out, v, zz, stride, base, srcIn, srcOut) => {   // lower envelope of parabolas f(q) + (p − q)²; carries the owner's source index
             let k = 0; v[0] = 0; zz[0] = -1e20; zz[1] = 1e20;
             for (let q = 1; q < n; q++) { let s;
                 while (true) { const r = v[k]; s = ((f[base + q * stride] + q * q) - (f[base + r * stride] + r * r)) / (2 * q - 2 * r); if (s <= zz[k]) { k--; if (k < 0) { k = 0; break; } } else break; }
                 if (k === 0 && s <= zz[0]) { v[0] = q; zz[0] = -1e20; zz[1] = 1e20; continue; }
                 k++; v[k] = q; zz[k] = s; zz[k + 1] = 1e20; }
-            k = 0; for (let q = 0; q < n; q++) { while (zz[k + 1] < q) k++; const r = v[k]; out[base + q * stride] = (q - r) * (q - r) + f[base + r * stride]; } };
+            k = 0; for (let q = 0; q < n; q++) { while (zz[k + 1] < q) k++; const r = v[k]; const ir = base + r * stride; out[base + q * stride] = (q - r) * (q - r) + f[ir]; if (srcOut) srcOut[base + q * stride] = srcIn ? srcIn[ir] : ir; } };
         const gRow = new Float32Array(N), gCol = new Float32Array(N); const vB = new Int32Array(Math.max(pw, ph) + 1), zB = new Float64Array(Math.max(pw, ph) + 2);
-        // exact squared Euclidean distance to the nearest non-object texel (the same transform on the indicator; the
-        // 4-connected BFS distance above is city-block and over-reads diagonals by up to √2 — kept for the ring only)
+        const sRow = new Int32Array(N), sCol = new Int32Array(N);
+        // exact squared Euclidean distance to the nearest non-object texel, with that texel's index (the same transform
+        // on the indicator; the 4-connected BFS distance above is city-block and over-reads diagonals by up to √2 —
+        // kept for the ring only)
         const fInd = new Float32Array(N); for (let i = 0; i < N; i++) fInd[i] = objId[i] < 0 ? 0 : 1e12;
-        for (let y = 0; y < ph; y++) dt1d(fInd, pw, gRow, vB, zB, 1, y * pw);
-        for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x);
+        for (let y = 0; y < ph; y++) dt1d(fInd, pw, gRow, vB, zB, 1, y * pw, null, sRow);
+        for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x, sRow, sCol);
+        const nearestOut = sCol;                                                              // per texel: index of the nearest non-mask texel
         const fDT = new Float32Array(N); for (let i = 0; i < N; i++) fDT[i] = -Math.min(gCol[i], 1e12);   // −dist²
         for (let y = 0; y < ph; y++) dt1d(fDT, pw, gRow, vB, zB, 1, y * pw);
         for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x);
-        // the plate's world width and the portal distance by the same law as bgShiftLUTFor (the window-fit layer width)
-        const laI = pw / ph, faI = terrariumWidth / terrariumHeight; const w0i = (laI > faI) ? terrariumWidth : terrariumHeight * laI;
-        const Dref = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
-        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0, sHalf = 0, nInfl = 0, nMirror = 0, nClampFar = 0, nClampFront = 0;
-        const backMode = new Uint8Array(N), backPlane = new Float32Array(N).fill(-1), backH = new Float32Array(N);   // harness: 1 inflation, 2 mirrored bulge, +4 clamped to the far field, +8 clamped to the front
+        // cliff edges: non-mask texels with a mask neighbour more than a tear step nearer (the silhouette proper)
+        const cliffEdge = new Uint8Array(N); let nCliffEdge = 0;
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (objId[i] >= 0) continue;
+            const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+            for (const j of cN) if (j >= 0 && objId[j] >= 0 && dQ[j] - dQ[i] > TOLB) { cliffEdge[i] = 1; nCliffEdge++; break; } }
+        // the scale s: least squares of the front's bulge above the plane (world z) against the envelope height (texels),
+        // over cliff-bounded texels beyond the blur ring; through the origin; bounded below by zero
+        let sNum = 0, sDen = 0, nFit = 0;
+        for (let i = 0; i < N; i++) { if (dist[i] <= RWDo + 1 || !cliffEdge[nearestOut[i]]) continue;
+            const hT = Math.sqrt(Math.max(0, -gCol[i])); const b = zOf(dQ[i]) - (plane[i] * zSpan - outerZ); sNum += b * hT; sDen += hT * hT; nFit++; }
+        const sScale = sDen > 0 ? Math.max(0, sNum / sDen) : 0;                              // world z per texel of half-width
+        let resSum = 0; for (let i = 0; i < N; i++) { if (dist[i] <= RWDo + 1 || !cliffEdge[nearestOut[i]]) continue; const hT = Math.sqrt(Math.max(0, -gCol[i])); resSum += Math.abs((zOf(dQ[i]) - (plane[i] * zSpan - outerZ)) - sScale * hT); }
+        // the plate's world width by the same law as bgShiftLUTFor (the window-fit layer width) — reported only, as the
+        // isotropic reference the measured scale is compared against
+        const laI = pw / ph, faI = terrariumWidth / terrariumHeight; const w0i = (laI > faI) ? terrariumWidth : terrariumHeight * laI; const texelWorldRef = w0i / pw;
+        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0, sHalf = 0, nInfl = 0, nMirror = 0, nClampFar = 0, nClampFront = 0, nSoft = 0;
+        const backMode = new Uint8Array(N), backPlane = new Float32Array(N).fill(-1), backH = new Float32Array(N);   // harness: 1 inflation, 2 mirrored bulge, +4 clamped to the far field, +8 clamped to the front, 16 soft-bounded (no back)
         for (let i = 0; i < N; i++) { if (dist[i] <= 0) continue;
             const zc = plane[i] * zSpan - outerZ, zf = zOf(dQ[i]), zfar = zOf(farField[i]);
+            backPlane[i] = dOfZ(zc);
+            if (!cliffEdge[nearestOut[i]]) { nSoft++; backMode[i] = 16; continue; }          // bounded by a soft mask edge (floor, wall): not a silhouette
             const hTex = Math.sqrt(Math.max(0, -gCol[i]));                                   // half thickness, texels
-            const texelWorld = (w0i / pw) * Math.max(0.05, (Dref - zc) / Dref);              // world per texel at the plane's depth
-            const hW = hTex * texelWorld, bulge = zf - zc;
+            const hW = hTex * sScale, bulge = zf - zc;                                        // half thickness, world z (the image's own scale)
             let zb, mode; if (bulge > hW) { zb = zc - bulge; nMirror++; mode = 2; } else { zb = zc - hW; nInfl++; mode = 1; }
-            backMode[i] = mode; backPlane[i] = dOfZ(zc); backH[i] = hW;
+            backMode[i] = mode; backH[i] = hW;
             // A257c: where the inflated side has reached the a-priori background there is no side to add — the plug's
-            // far field is the surface there, so such texels carry no back. (The probe on the troll: half of the mask
-            // was this case. The floor and both cave walls are in the rest-silhouette mask because the far-field
-            // membrane sags under any large continuous surface that has no rims, and their "backs" were that sagging,
-            // terraced far field — the terraces the composite showed beside the woman.)
+            // far field is the surface there, so such texels carry no back.
             if (zb < zfar) { nClampFar++; backMode[i] |= 4; continue; }
             if (zb > zf) { zb = zf; nClampFront++; backMode[i] |= 8; }
             backD[i] = dOfZ(zb); nBack++; sHalf += hW; if (zf - zb > 1e-6) { sThick += zf - zb; nThick++; } }
-        window._geoBackDepth = backD; window._geoBackDist = dist; window._geoBackMode = backMode; window._geoBackPlane = backPlane; window._geoBackH = backH;
-        console.log('[A257] object backs (inflation): ' + nBack + ' texels with a back in ' + nObj + ' objects; mean half-thickness ' + (nBack ? (sHalf / nBack).toFixed(4) : '0') + ' world (z span ' + zSpan.toFixed(3) + ', D ' + Dref.toFixed(3) + '); inflation set the back on ' + nInfl + ', the front’s own bulge on ' + nMirror + '; mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + '; no back where the side reaches the far field: ' + nClampFar + ' texels; clamped to the front on ' + nClampFront + '; ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
+        window._geoBackDepth = backD; window._geoBackDist = dist; window._geoBackMode = backMode; window._geoBackPlane = backPlane; window._geoBackH = backH; window._geoBackScale = sScale;
+        // A257d — THE SIDE'S COLOUR. A back texel had carried its own source colour; seen from the side that is the
+        // limb's few texels magnified along the recession, which the user's screen read as stretching (it is: a
+        // foreshortened limb turned out). The fill rule for surfaces never photographed is a plausible wash, not a
+        // clone (the user's rule; the A242 membrane is the same statement for the plug): the back's colour is the
+        // membrane of the source colour over the back texels, Dirichlet on every texel without a back — the object's
+        // own silhouette colours and its interior, no texture to magnify. window._plugBackTex = 1 keeps the raw texels.
+        window._geoBackColor = null;
+        if (nBack > 0 && !window._plugBackTex) { try {
+            const Lc = mediaLayers[0]; const cImgW = (Lc.elements && Lc.elements.color) || Lc.textures.color.image;
+            const cvW = document.createElement('canvas'); cvW.width = pw; cvW.height = ph; const cxW = cvW.getContext('2d', { willReadFrequently: true });
+            cxW.drawImage(cImgW, 0, 0, pw, ph); const srcW = cxW.getImageData(0, 0, pw, ph).data;
+            const uIdx = new Int32Array(N).fill(-1); let nU = 0; for (let i = 0; i < N; i++) if (backD[i] >= 0) uIdx[i] = nU++;
+            const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1),
+                         dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU),
+                         vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
+            for (let i = 0; i < N; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y;
+                lv.vR[u] = srcW[i * 4]; lv.vG[u] = srcW[i * 4 + 1]; lv.vB[u] = srcW[i * 4 + 2];
+                const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+                for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue; if (uIdx[j] < 0) { lv.dR[u] += srcW[j * 4]; lv.dG[u] += srcW[j * 4 + 1]; lv.dB[u] += srcW[j * 4 + 2]; lv.dW[u]++; } else lv.nb[u * 4 + s2] = uIdx[j]; } }
+            const mgW = bgMembraneSolve(lv, 0.5, 60);
+            const col = new Uint8ClampedArray(N * 4);
+            for (let i = 0; i < N; i++) { const u = uIdx[i]; if (u < 0) continue; col[i * 4] = lv.vR[u]; col[i * 4 + 1] = lv.vG[u]; col[i * 4 + 2] = lv.vB[u]; col[i * 4 + 3] = 255; }
+            window._geoBackColor = col;
+            console.log('[A257d] back colour wash: membrane over ' + nU + ' back texels, Dirichlet on the rest of the plate; ' + mgW.sweeps[0][1] + ' cycles, residual ' + (mgW.residual).toFixed(2) + '/255');
+        } catch (eW) { console.warn('[A257d] back colour wash failed:', eW); } }
+        console.log('[A257] object backs (inflation): ' + nBack + ' texels with a back in ' + nObj + ' objects; scale s = ' + sScale.toExponential(3) + ' world z per texel of half-width = ' + (texelWorldRef > 0 ? (sScale / texelWorldRef).toFixed(3) : '?') + ' of isotropic, fit over ' + nFit + ' cliff-bounded texels (median-free mean |residual| ' + (nFit ? (resSum / nFit).toExponential(2) : '0') + ' world); ' + nCliffEdge + ' cliff-edge texels; soft-bounded (no back) ' + nSoft + '; mean half-thickness ' + (nBack ? (sHalf / nBack).toFixed(4) : '0') + ' world (z span ' + zSpan.toFixed(3) + '); inflation set the back on ' + nInfl + ', the front’s own bulge on ' + nMirror + '; mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + '; no back where the side reaches the far field: ' + nClampFar + '; clamped to the front on ' + nClampFront + '; ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
     }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
@@ -15383,16 +15440,24 @@ function bgBuildBackgroundLayerCore() {
             // plug is behind it — the object's side — and the plug everywhere else.
             if (window._plugBack && window._geoBackDepth && window._geoBackDepth.length === PNq) {
                 try {
-                    const bd = window._geoBackDepth; const backF = new Float32Array(PNq); let nB = 0; const ffB = window._geoFarField;
-                    // texels without a back (outside objects, or where the side reaches the far field — A257c) are alpha 0;
-                    // their displacement takes the far field so the mesh stays continuous under the linear filter
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const v = bd[i]; backF[(ph - 1 - y) * pw + x] = v >= 0 ? v : ((ffB && ffB.length === PNq) ? ffB[i] : 0); if (v >= 0) nB++; }
+                    const bd = window._geoBackDepth; const backF = new Float32Array(PNq); let nB = 0;
+                    // texels without a back (outside objects, soft-bounded, or where the side reaches the far field) are
+                    // alpha 0; their displacement takes the NEAREST back texel's depth (multi-source BFS), so the mesh
+                    // carries no ramp at the back's boundary — the ramp between a back texel and a far-field-filled
+                    // neighbour was a one-texel skirt across the whole depth gap (A257e). The shader discards alpha < 0.5.
+                    const fillB = new Float32Array(PNq); const qB = new Int32Array(PNq); let qh = 0, qt = 0; const seenB = new Uint8Array(PNq);
+                    for (let i = 0; i < PNq; i++) if (bd[i] >= 0) { fillB[i] = bd[i]; seenB[i] = 1; qB[qt++] = i; nB++; }
+                    while (qh < qt) { const i = qB[qh++]; const x = i % pw, y = (i / pw) | 0; const v = fillB[i];
+                        if (x > 0 && !seenB[i - 1]) { seenB[i - 1] = 1; fillB[i - 1] = v; qB[qt++] = i - 1; } if (x < pw - 1 && !seenB[i + 1]) { seenB[i + 1] = 1; fillB[i + 1] = v; qB[qt++] = i + 1; }
+                        if (y > 0 && !seenB[i - pw]) { seenB[i - pw] = 1; fillB[i - pw] = v; qB[qt++] = i - pw; } if (y < ph - 1 && !seenB[i + pw]) { seenB[i + pw] = 1; fillB[i + pw] = v; qB[qt++] = i + pw; } }
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; backF[(ph - 1 - y) * pw + x] = fillB[i]; }
                     const backDT = new THREE.DataTexture(backF, pw, ph, THREE.RedFormat, THREE.FloatType);
                     backDT.needsUpdate = true; backDT.flipY = false; backDT.minFilter = THREE.LinearFilter; backDT.magFilter = THREE.LinearFilter; if ('colorSpace' in backDT) backDT.colorSpace = THREE.NoColorSpace;
                     const cImgB = (L.elements && L.elements.color) || L.textures.color.image;
                     const cvB = document.createElement('canvas'); cvB.width = pw; cvB.height = ph; const cxB = cvB.getContext('2d', { willReadFrequently: true });
                     cxB.drawImage(cImgB, 0, 0, pw, ph); const pxB = cxB.getImageData(0, 0, pw, ph);
-                    for (let i = 0; i < PNq; i++) pxB.data[i * 4 + 3] = bd[i] >= 0 ? 255 : 0;
+                    const washB = window._geoBackColor && window._geoBackColor.length === PNq * 4 ? window._geoBackColor : null;   // A257d: the wash, else the raw texels (_plugBackTex)
+                    for (let i = 0; i < PNq; i++) { if (bd[i] >= 0) { if (washB) { pxB.data[i * 4] = washB[i * 4]; pxB.data[i * 4 + 1] = washB[i * 4 + 1]; pxB.data[i * 4 + 2] = washB[i * 4 + 2]; } pxB.data[i * 4 + 3] = 255; } else pxB.data[i * 4 + 3] = 0; }
                     cxB.putImageData(pxB, 0, 0);
                     const backTex = new THREE.CanvasTexture(cvB); backTex.minFilter = THREE.LinearFilter; backTex.magFilter = THREE.LinearFilter;
                     if ('colorSpace' in backTex && L.textures.color && 'colorSpace' in L.textures.color) backTex.colorSpace = L.textures.color.colorSpace;
@@ -15458,6 +15523,8 @@ function bgBuildBackgroundLayerCore() {
                 const layerWf = (layerAspect > frameAspect) ? 1.0 : (layerAspect / frameAspect);   // plate width as a fraction of the frame width
                 const plateScrPx = Math.max(1, renderer.domElement.width * layerWf);
                 fu.u_fragTear.value = (window._fragTear === 2 || window._fragTearMode === 2) ? 2.0 : 1.0; fu.u_texelsPerPxRest.value = pw / plateScrPx;
+                // A257e: mark the object-back layer (its shader discards the mesh ramps between back and back-less texels)
+                if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back && bgLayerMesh.userData.back.material && bgLayerMesh.userData.back.material.uniforms && bgLayerMesh.userData.back.material.uniforms.u_backTear) bgLayerMesh.userData.back.material.uniforms.u_backTear.value = 1.0;
                 if (fu.u_fragTear.value === 2.0) {
                     // per-vertex fold point = min over incident cells of extent / rim shift span (A212's own quantities)
                     const g2 = L.mesh.geometry, gp2 = g2.parameters;
