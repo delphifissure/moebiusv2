@@ -7747,11 +7747,15 @@ window._plugCpuSweep = function (opts) {
     // the gap, extrapolate to meet inside it are one CONTINUOUS surface (a receding wall) and take
     // the interpolation like the equal-depth two-lip case. opts.extent === 'skirt' gives EXTENT
     // samples the interpolation too (the object's side turning away over the reveal width).
-    const objId = opts.objId || null, objRule = !!objId, extentSkirt = opts.extent === 'skirt', extentNear = opts.extent === 'near';
-    // opts.extent === 'near' (user request: "fill those gaps with depth / colour from the near pixels"): an EXTENT sample
-    // takes the NEAR lip's depth less one source quantum — the object continues flat behind its own silhouette, one quantum
-    // behind its own texels (the a135 ordering), and the colour gate then seeds from the object's own edge. The third
-    // position of the "gaps" select; the screen prices it against far and skirt.
+    const objId = opts.objId || null, objRule = !!objId, extentSkirt = opts.extent === 'skirt', extentSide = opts.extent === 'side';
+    // opts.extent === 'near' (every extent sample at the near lip's depth: the object continued FLAT behind its silhouette)
+    // was measured and REMOVED (rule 7): on the user's screen it tunnelled everywhere — the woman stretched into the
+    // background. A true disocclusion (a figure standing off the background) must keep the far side.
+    // opts.extent === 'side' (A253f, the user's reading of the multi-view data): the near surface continued at its OWN
+    // slope, measured beside the lip. When that continuation reaches the far lip's depth within the gap the gap is a
+    // glancing self-occlusion (the cave wall's side turning away, the knee's side) and the fill is the continued surface,
+    // never deeper than the far lip; when it does not reach (the woman's flat body, then a cliff) the gap is a true
+    // disocclusion and keeps the far side. No constant: the slope is the surface's, the tolerance its quantisation noise.
     let obsCont = 0, obsInterior = 0, obsExtent = 0, obsSkirt = 0;
     if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N);
         obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap);
@@ -7901,7 +7905,9 @@ window._plugCpuSweep = function (opts) {
                                     dFar = (dA * kB + dB * kA) / (kA + kB); kind = 1; obsCont++; }
                                 else { const tA = fgOwn[cFar], tB = fgOwn[cNear]; const oA = tA >= 0 ? objId[tA] : -1, oB = tB >= 0 ? objId[tB] : -1;
                                     if (oA >= 0 && oA === oB) { interior = 1; obsInterior++; }
-                                    else { obsExtent++; if (extentSkirt) { dFar = (dA * kB + dB * kA) / (kA + kB); skirt = 1; obsSkirt++; } else if (extentNear) { dFar = dB - qN; skirt = 1; obsSkirt++; } } }
+                                    else { obsExtent++; if (extentSkirt) { dFar = (dA * kB + dB * kA) / (kA + kB); skirt = 1; obsSkirt++; }
+                                        else if (extentSide && slopeBok) { const K = kA + kB;   // A253f: slopeB = depth per cell toward the gap (negative = receding)
+                                            if (dB + slopeB * K <= dA + qN * (1 + K / rampMax)) { dFar = Math.max(dA, Math.min(dB - qN, dB + slopeB * kB)); skirt = 1; obsSkirt++; } } } }
                             }
                             const sT = bgShiftPxAt(lut, dFar); const txr = Math.round(cx0 - sT * fx), tyr = Math.round(cy0 - sT * fy);
                             if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) { obsOut++; revealOut++; continue; }
