@@ -7747,7 +7747,11 @@ window._plugCpuSweep = function (opts) {
     // the gap, extrapolate to meet inside it are one CONTINUOUS surface (a receding wall) and take
     // the interpolation like the equal-depth two-lip case. opts.extent === 'skirt' gives EXTENT
     // samples the interpolation too (the object's side turning away over the reveal width).
-    const objId = opts.objId || null, objRule = !!objId, extentSkirt = opts.extent === 'skirt';
+    const objId = opts.objId || null, objRule = !!objId, extentSkirt = opts.extent === 'skirt', extentNear = opts.extent === 'near';
+    // opts.extent === 'near' (user request: "fill those gaps with depth / colour from the near pixels"): an EXTENT sample
+    // takes the NEAR lip's depth less one source quantum — the object continues flat behind its own silhouette, one quantum
+    // behind its own texels (the a135 ordering), and the colour gate then seeds from the object's own edge. The third
+    // position of the "gaps" select; the screen prices it against far and skirt.
     let obsCont = 0, obsInterior = 0, obsExtent = 0, obsSkirt = 0;
     if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N);
         obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap);
@@ -7897,7 +7901,7 @@ window._plugCpuSweep = function (opts) {
                                     dFar = (dA * kB + dB * kA) / (kA + kB); kind = 1; obsCont++; }
                                 else { const tA = fgOwn[cFar], tB = fgOwn[cNear]; const oA = tA >= 0 ? objId[tA] : -1, oB = tB >= 0 ? objId[tB] : -1;
                                     if (oA >= 0 && oA === oB) { interior = 1; obsInterior++; }
-                                    else { obsExtent++; if (extentSkirt) { dFar = (dA * kB + dB * kA) / (kA + kB); skirt = 1; obsSkirt++; } } }
+                                    else { obsExtent++; if (extentSkirt) { dFar = (dA * kB + dB * kA) / (kA + kB); skirt = 1; obsSkirt++; } else if (extentNear) { dFar = dB - qN; skirt = 1; obsSkirt++; } } }
                             }
                             const sT = bgShiftPxAt(lut, dFar); const txr = Math.round(cx0 - sT * fx), tyr = Math.round(cy0 - sT * fy);
                             if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) { obsOut++; revealOut++; continue; }
@@ -8110,7 +8114,7 @@ window._plugGeoBand = function (opts) {
         // 0.78) and scored worse than the membrane on the screen truth scene; the membrane's wash stays. Addendum 185.
         window._geoObsDepth = obsDepth; window._geoObsCount = ob.cnt;
         obsStats = { samples: ob.samples, rampWalked: ob.ramp, twoLip: ob.twoLip, continuous: ob.continuous, interior: ob.interior, extent: ob.extent, skirt: ob.skirt, objects: nObj, boundRaised: nBound, boundMean: nBound ? sBound / nBound : 0, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
-        if (objId) console.log('[A253] gap classes per sample: continuous by slope ' + ob.continuous + ' (plus ' + ob.twoLip + ' equal-depth two-lip), interior step ' + ob.interior + ', extent step ' + ob.extent + (ob.skirt ? ' (skirt applied to ' + ob.skirt + ')' : ''));
+        if (objId) console.log('[A253] gap classes per sample: continuous by slope ' + ob.continuous + ' (plus ' + ob.twoLip + ' equal-depth two-lip), interior step ' + ob.interior + ', extent step ' + ob.extent + (ob.skirt ? ' (' + (window._plugExtent || 'far') + ' applied to ' + ob.skirt + ')' : ''));
         console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp, ' + ob.twoLip + ' between two far lips) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
             '; hidden depth field: rims + observed texels fixed, ' + merged.cycles + ' cycles, err ' + merged.err.toFixed(4) + ', ' + merged.nClamp + ' clamped; ' + obsStats.ms + 'ms');
         if (opts.regate !== false && !opts.gateAPriori && window._fragTear) {
@@ -15219,11 +15223,18 @@ function bgBuildBackgroundLayerCore() {
                     if (typeof plateF !== 'undefined' && plateF) {
                         for (let x = 0; x < pw; x++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[x])), b = Math.abs(bgShiftPxAt(lutM, plateF[(ph - 1) * pw + x])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
                         for (let y = 0; y < ph; y++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[y * pw])), b = Math.abs(bgShiftPxAt(lutM, plateF[y * pw + pw - 1])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; } }
-                    const M = Math.ceil(sMaxM) + 1;
                     const gp0 = L.mesh.geometry.parameters; const w0 = gp0.width, h0 = gp0.height;
+                    // A253b (second reading): the strips must reach the WINDOW's edge after their own displacement, and the
+                    // window's edge lies a letterbox bar beyond the frame's. The margin per axis is the bar (in texels) plus
+                    // the largest border shift; with M = shift alone the troll's ring (bar 485 texels, M 570) covered the bar at
+                    // rest with 85 texels to spare and the lip floor's nearer corner texel moved it further than that at
+                    // sheet1 (a 660-px wedge at the bottom-right corner).
+                    const barX = (typeof terrariumWidth === 'number') ? Math.max(0, (terrariumWidth - w0) / 2) * pw / w0 : 0;
+                    const barY = (typeof terrariumHeight === 'number') ? Math.max(0, (terrariumHeight - h0) / 2) * ph / h0 : 0;
+                    const M = Math.ceil(sMaxM) + 1, Mx = Math.ceil(sMaxM + barX) + 1, My = Math.ceil(sMaxM + barY) + 1;
                     const segW = ((gp0.widthSegments || 1) | 0), segH = ((gp0.heightSegments || 1) | 0);
-                    const mw = w0 * M / pw, mh = h0 * M / ph;                       // margin in world units
-                    const uM = M / pw, vM = M / ph;                                  // margin in texture units
+                    const mw = w0 * Mx / pw, mh = h0 * My / ph;                     // margin in world units, per axis
+                    const uM = Mx / pw, vM = My / ph;                                // margin in texture units
                     const strip = (W, Hh, sx, sy, cx, cy, u0, u1, v0, v1) => {
                         const g = new THREE.PlaneGeometry(W, Hh, sx, sy); g.translate(cx, cy, 0);
                         const uv = g.attributes.uv; for (let k = 0; k < uv.count; k++) uv.setXY(k, u0 + (u1 - u0) * uv.getX(k), v0 + (v1 - v0) * uv.getY(k)); uv.needsUpdate = true;
@@ -15240,7 +15251,7 @@ function bgBuildBackgroundLayerCore() {
                     // every pose), which leaves the bars as they are at rest and lets torn foreground drifting into them open
                     // onto nothing off-axis. The screen prices this trade.
                     if (matQ.uniforms.u_restClip) { if (window._plugMargin === 2) matQ.uniforms.u_restClip.value.set(w0 / terrariumWidth, h0 / terrariumHeight); else matQ.uniforms.u_restClip.value.set(1, 1); }
-                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border foreground rim shift ' + sMaxM.toFixed(1) + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; clip ' + (window._plugMargin === 2 ? 'rest footprint' : 'whole window'));
+                    console.log('[QUICK-BAKE] A245 plug margin: M = ' + M + ' texels (largest border rim shift ' + sMaxM.toFixed(1) + '; with the bars Mx ' + Mx + ', My ' + My + '); four strips, ' + plugRing.reduce((a, g) => a + g.attributes.position.count, 0) + ' vertices; clip ' + (window._plugMargin === 2 ? 'rest footprint' : 'whole window'));
                 } catch (eM) { console.warn('[QUICK-BAKE] A245 plug margin failed (frame-sized plug kept):', eM); plugRing = null; }
             }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
