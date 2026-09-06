@@ -14160,10 +14160,51 @@ function bgBuildBackgroundLayerCore() {
                             for (let s = 0; s < 4; s++) { const j = nb[k*4+s]; if (j < 0) continue;
                                 if (nbSrc[k*4+s]) { lv.dR[u] += cd[j*4]; lv.dG[u] += cd[j*4+1]; lv.dB[u] += cd[j*4+2]; lv.dW[u]++; }
                                 else { const uj = uOf[domK[j]]; if (uj >= 0) lv.nb[u*4+s] = uj; } } }
+                        // A249 GUIDED MEMBRANE (window._plugGuided; Addendum 188). Perez, Gangnet & Blake 2003,
+                        // "Poisson image editing": the fill is the solution of the Poisson equation whose
+                        // boundary values are the rims (as the membrane) and whose GUIDANCE field is the
+                        // gradient of a source patch — here the far-side texture MIRRORED across the rim into
+                        // the band (each band texel takes the texel reflected through its nearest far-side
+                        // seed; the seed set is A247's: non-band texels whose depth agrees with the nearest
+                        // band texel's plate depth within the A44 tear step). The membrane keeps the low
+                        // frequencies and the seam; the mirrored gradients put the far surface's texture
+                        // back. Guidance is dropped across a change of mirror cell (the reflection through a
+                        // different seed is a different patch), where the fill is the plain membrane. In the
+                        // solver the guidance enters as the per-texel sum of guidance differences to its
+                        // neighbours (eq. 7 of the paper), a constant on the right-hand side.
+                        let nGuided = 0, nMirror = 0;
+                        if (window._plugGuided) {
+                            const nearPlateG = new Float32Array(PNq).fill(-1); const qg = new Int32Array(PNq); let gh = 0, gt = 0;
+                            for (let i = 0; i < PNq; i++) if (disocc[i]) { nearPlateG[i] = plateQ[i]; qg[gt++] = i; }
+                            while (gh < gt) { const i = qg[gh++]; const x = i % pw, y = (i / pw) | 0; const v = nearPlateG[i];
+                                if (x > 0 && nearPlateG[i - 1] < 0) { nearPlateG[i - 1] = v; qg[gt++] = i - 1; } if (x < pw - 1 && nearPlateG[i + 1] < 0) { nearPlateG[i + 1] = v; qg[gt++] = i + 1; }
+                                if (y > 0 && nearPlateG[i - pw] < 0) { nearPlateG[i - pw] = v; qg[gt++] = i - pw; } if (y < ph - 1 && nearPlateG[i + pw] < 0) { nearPlateG[i + pw] = v; qg[gt++] = i + pw; } }
+                            const seedG = new Uint8Array(PNq); for (let i = 0; i < PNq; i++) if (!disocc[i] && Math.abs(dQ[i] - nearPlateG[i]) <= TOLB) seedG[i] = 1;
+                            // nearest seed per band texel: multi-source BFS from the seeds into the band
+                            const nearSeed = new Int32Array(PNq).fill(-1); gh = 0; gt = 0;
+                            for (let i = 0; i < PNq; i++) if (seedG[i]) { nearSeed[i] = i; qg[gt++] = i; }
+                            while (gh < gt) { const i = qg[gh++]; const x = i % pw, y = (i / pw) | 0; const v = nearSeed[i];
+                                const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+                                for (const j of nbs) if (j >= 0 && nearSeed[j] < 0 && disocc[j]) { nearSeed[j] = v; qg[gt++] = j; } }
+                            // the mirrored patch M over the band (NaN where the reflection lands off the far side)
+                            const M = new Float32Array(PNq * 3).fill(NaN);
+                            for (let i = 0; i < PNq; i++) { if (!disocc[i]) { M[i*3] = cd[i*4]; M[i*3+1] = cd[i*4+1]; M[i*3+2] = cd[i*4+2]; continue; }
+                                const sI = nearSeed[i]; if (sI < 0) continue; const sx = sI % pw, sy = (sI / pw) | 0, x = i % pw, y = (i / pw) | 0;
+                                const mx = 2 * sx - x, my = 2 * sy - y; if (mx < 0 || my < 0 || mx >= pw || my >= ph) continue; const m = my * pw + mx; if (!seedG[m]) continue;
+                                M[i*3] = cd[m*4]; M[i*3+1] = cd[m*4+1]; M[i*3+2] = cd[m*4+2]; nMirror++; }
+                            // guidance: for every unknown, the sum over its neighbours of (M_i - M_j), same mirror cell only
+                            for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; if (isNaN(M[i*3])) continue;
+                                const x = i % pw, y = (i / pw) | 0; const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; let any = false;
+                                for (const j of nbs) { if (j < 0 || isNaN(M[j*3])) continue;
+                                    if (disocc[j]) { const si = nearSeed[i], sj = nearSeed[j]; if (si < 0 || sj < 0) continue; const dsx = (si % pw) - (sj % pw), dsy = ((si / pw) | 0) - ((sj / pw) | 0); if (dsx * dsx + dsy * dsy > 4) continue; }
+                                    lv.dR[u] += M[i*3] - M[j*3]; lv.dG[u] += M[i*3+1] - M[j*3+1]; lv.dB[u] += M[i*3+2] - M[j*3+2]; any = true; }
+                                if (any) nGuided++; }
+                        }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
                         const mg = bgMembraneSolve(lv, TOLC, 60);   // A246f cycle-cap A/B removed (rule 7): 300 cycles took the observed-depth domain from 21 to 6.6/255 and changed nothing the instruments or the screen resolve (ghost 39.8 -> 39.5, seam 10.20 -> 10.20); Addendum 185
                         nSor = mg.sweeps[0][1]; sorRes = mg.residual; window._qbMembraneLevels = mg.sweeps; window._qbMembraneLevelSizes = mg.levels;
-                        for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = lv.vR[u]; cd[i*4+1] = lv.vG[u]; cd[i*4+2] = lv.vB[u]; }
+                        for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = Math.max(0, Math.min(255, lv.vR[u])); cd[i*4+1] = Math.max(0, Math.min(255, lv.vG[u])); cd[i*4+2] = Math.max(0, Math.min(255, lv.vB[u])); }
+                        if (window._plugGuided) console.log('[QUICK-BAKE] A249 guided membrane: ' + nMirror + ' band texels with a mirrored far-side source, ' + nGuided + ' unknowns carrying guidance');
                     } else {
                     {
                         const wr2 = new Float32Array(PNq), wg2 = new Float32Array(PNq),
