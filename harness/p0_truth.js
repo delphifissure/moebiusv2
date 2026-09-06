@@ -116,12 +116,11 @@ const POSES = [[0, 0], [0.100, -0.023], [0.141, 0.023], [0.180, 0.008], [-0.141,
                  meanAbsDqR: sDqR / Math.max(1, nR), meanAbsDsR: sDsR / Math.max(1, nR), meanCol: sCol / Math.max(1, nBR), meanColR: sColR / Math.max(1, nColR), cloneScale: sClone / Math.max(1, nBR), perClass, geo: window._plugGeoStats || null, depthMap, colMap };
     }, { scene: SCENE, truth, poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
-    try { const raw = await page.evaluate(() => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
-            const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph; const pS = new Float32Array(N); const pF = window._qbPlateF; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
-            const opt = (a) => a ? b64(a) : null;
-            return { band: b64(window._qbDisocc), dQ: b64(window._qbDQ), plate: b64(pS), field: opt(window._geoFarField), obsDepth: opt(window._geoObsDepth), obsCount: opt(window._geoObsCount),
-                     lipDeep: opt(window._geoLipDeep), lipNear: opt(window._geoLipNear), lipSpread: opt(window._geoLipSpread), rampDrop: opt(window._geoRampDrop), crossFrac: opt(window._geoCrossFrac), kind: opt(window._geoKind), prov: opt(window._geoProv), cls: opt(window._geoClass), post: opt(window._geoPost) }; });   // A252
-        for (const k of ['band', 'dQ', 'plate', 'field', 'obsDepth', 'obsCount', 'lipDeep', 'lipNear', 'lipSpread', 'rampDrop', 'crossFrac', 'kind', 'prov', 'cls', 'post']) if (raw[k]) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(raw[k], 'base64'));
+    try { const SRC = { band: '_qbDisocc', dQ: '_qbDQ', plate: 'PLATE', field: '_geoFarField', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', lipSpread: '_geoLipSpread', rampDrop: '_geoRampDrop', crossFrac: '_geoCrossFrac', kind: '_geoKind', prov: '_geoProv', cls: '_geoClass', post: '_geoPost' };   // A252 (one evaluate per array)
+        for (const k of Object.keys(SRC)) { const b = await page.evaluate((name) => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
+                let a = null; if (name === 'PLATE') { const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph; a = new Float32Array(N); const pF = window._qbPlateF; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) a[y * pw + x] = pF[(ph - 1 - y) * pw + x]; } else a = window[name];
+                return a ? b64(a) : null; }, SRC[k]);
+            if (b) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(b, 'base64')); }
     } catch (eR) { console.log('  (raw export failed: ' + eR.message + ')'); }
     fs.writeFileSync(path.join(OUT, ARM + '_deptherr.png'), Buffer.from(res.depthMap.split(',')[1], 'base64'));
     fs.writeFileSync(path.join(OUT, ARM + '_colerr.png'), Buffer.from(res.colMap.split(',')[1], 'base64'));

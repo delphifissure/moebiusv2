@@ -15177,6 +15177,12 @@ function bgBuildBackgroundLayerCore() {
                     const lutM = bgShiftLUTFor(pw, ph); let sMaxM = 0;
                     for (let x = 0; x < pw; x++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[x])), b = Math.abs(bgShiftPxAt(lutM, dQ[(ph - 1) * pw + x])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
                     for (let y = 0; y < ph; y++) { const a = Math.abs(bgShiftPxAt(lutM, dQ[y * pw])), b = Math.abs(bgShiftPxAt(lutM, dQ[y * pw + pw - 1])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
+                    // A253b: the strips are displaced by the PLATE's edge depth (ClampToEdge), so the margin must also
+                    // cover the plate border's own shift — the lip floor raised the troll's bottom-right edge texels and
+                    // the ring's corner lifted off the window (660 uncovered px at sheet1 in the depth views).
+                    if (typeof plateF !== 'undefined' && plateF) {
+                        for (let x = 0; x < pw; x++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[x])), b = Math.abs(bgShiftPxAt(lutM, plateF[(ph - 1) * pw + x])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; }
+                        for (let y = 0; y < ph; y++) { const a = Math.abs(bgShiftPxAt(lutM, plateF[y * pw])), b = Math.abs(bgShiftPxAt(lutM, plateF[y * pw + pw - 1])); if (a > sMaxM) sMaxM = a; if (b > sMaxM) sMaxM = b; } }
                     const M = Math.ceil(sMaxM) + 1;
                     const gp0 = L.mesh.geometry.parameters; const w0 = gp0.width, h0 = gp0.height;
                     const segW = ((gp0.widthSegments || 1) | 0), segH = ((gp0.heightSegments || 1) | 0);
