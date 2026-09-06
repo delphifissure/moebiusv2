@@ -6565,15 +6565,24 @@ function renderNormalizedDepthPass() {
                     varying float vNormalizedDepth;
                     varying float vClipW;
                     varying vec3 vViewPosition;
-                    
+                    // A251: the per-fragment tear (A241/A241b) lived only in the COLOUR shader, so with
+                    // it armed the depth pass still reported the stretched sheet as covered foreground
+                    // where the colour pass had already torn it open (the depth-layer views showed no
+                    // interior hole at any pose while the composite showed the plug). Same uniforms,
+                    // same varying, same rule — the depth pass discards exactly what the colour pass does.
+                    varying float vFoldAt;
+                    uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_pxScale;
+                    uniform sampler2D u_sdMask;
+                    varying vec4 vClip; uniform vec2 u_restClip;   // A251b (A245 rest-footprint clip)
+
                     float getLuma(vec3 rgb) {
                         return dot(rgb, vec3(0.299, 0.587, 0.114));
                     }
-                    
+
                     float getDepth(vec2 uv) {
                         return texture2D(displacementMap, uv).r;
                     }
-                    
+
                     uniform bool u_isBackgroundLayer;
 
                     void main() {
@@ -6581,8 +6590,25 @@ function renderNormalizedDepthPass() {
                         // detectors below fire on the band-boundary cliff and
                         // punch false holes in the plug (depth-pass only).
                         if (u_isBackgroundLayer) {
+                            // A251b: the colour pass clips the plug to the frame's rest footprint (A245,
+                            // u_restClip); the depth pass drew the margin beyond it and reported cover
+                            // where the screen shows none. Same clip here.
+                            if (u_restClip.x > 0.0) { vec2 ndcR = vClip.xy / max(vClip.w, 1e-6); if (abs(ndcR.x) > u_restClip.x || abs(ndcR.y) > u_restClip.y) discard; }
                             gl_FragColor = vec4(vec3(vNormalizedDepth), 1.0);
                             return;
+                        }
+                        if (u_fragTear > 1.5) {                       // A251: A241b vertex fold points
+                            if (u_poseFrac > vFoldAt) discard;
+                        } else if (u_fragTear > 0.5) {                // A251: A241 per-fragment stretch law
+                            bool gateOkT = (u_fragTearGate < 0.5) || (texture2D(u_sdMask, vUv).r > 0.25);
+                            if (gateOkT) {
+                                float pxS = (u_pxScale > 0.0) ? u_pxScale : 1.0;
+                                vec2 jx = dFdx(vUv) * u_textureSize, jy = dFdy(vUv) * u_textureSize;
+                                float jmax = max(length(jx), length(jy));
+                                float svMin = abs(jx.x * jy.y - jx.y * jy.x) / max(jmax, 1e-9);
+                                float stretch = u_texelsPerPxRest / max(svMin * pxS, 1e-9);
+                                if (stretch > u_fragTearFactor || !gl_FrontFacing) discard;
+                            }
                         }
 
                         vec4 originalColor = texture2D(map, vUv);
