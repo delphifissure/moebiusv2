@@ -14315,10 +14315,9 @@ function bgBuildBackgroundLayerCore() {
             const matQ = L.mesh.material.clone();
             matQ.uniforms.displacementMap.value = plateDT;
             matQ.uniforms.map.value = plateColorTex || bgColorTarget.texture;
-            // A250 (window._plugRingMirror, measured arm): the A245 ring reads UVs past [0,1]; clamp-to-edge streaks the
-            // edge texel across the margin. Mirrored repeat continues the frame's texture by reflection — the frame edge
-            // treated as a rim, the same continuation A249 gives the band. Colour only; the displacement keeps clamping.
-            if (window._plugRingMirror && plateColorTex) { plateColorTex.wrapS = THREE.MirroredRepeatWrapping; plateColorTex.wrapT = THREE.MirroredRepeatWrapping; plateColorTex.needsUpdate = true; }
+            // A250 (mirrored-repeat wrapping for the A245 ring) was built and REMOVED (rule 7): over the whole-window
+            // margin it painted a full mirrored copy of the scene in the side bars (a kaleidoscope, a249d_troll.png),
+            // not a continuation. The frame-edge fill wants the band's treatment at the band's scale, not a texture wrap.
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
             // A59f: the plug is hole-only (renders only where the FG is torn away),
