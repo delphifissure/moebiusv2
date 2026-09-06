@@ -14190,8 +14190,10 @@ function bgBuildBackgroundLayerCore() {
                     const _clsS = (window._geoLipSeed && window._geoClass && window._geoClass.length === PNq) ? window._geoClass : null;
                     const _sprS = (_clsS && window._geoLipSpread && window._geoLipSpread.length === PNq) ? window._geoLipSpread : null;
                     const _qS = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
-                    const _skirtS = window._plugExtent === 'skirt';   // an EXTENT texel under the skirt arm carries the interpolated depth too, so it is coloured from both lips the same way (the A215 two-sided blend, in membrane form)
-                    const tolAt = (j) => (_sprS && (_clsS[j] === 1 || (_skirtS && _clsS[j] === 7)) && _sprS[j] > 0) ? Math.max(TOLB, _sprS[j] + _qS) : TOLB;
+                    // Two-sided seeds for the SKIRT's extent texels were measured and REMOVED (rule 7): on the fold truth scene the
+                    // skirt's colour error went 20.8 -> 122 (interior) and 48 -> 104 (extent) against a clone scale of 68-73, and on
+                    // the troll the plug carried body-coloured patches into the side. The skirt keeps the far-side gated membrane.
+                    const tolAt = (j) => (_sprS && _clsS[j] === 1 && _sprS[j] > 0) ? Math.max(TOLB, _sprS[j] + _qS) : TOLB;
                     const state = new Uint8Array(PNq);           // 0 unvisited band, 1 resolved, 2 not-band
                     const q1 = new Int32Array(PNq); let qh = 0, qt = 0;
                     // seeds: non-band texels adjacent to the band whose REAL depth
