@@ -6590,9 +6590,12 @@ function renderNormalizedDepthPass() {
                         // detectors below fire on the band-boundary cliff and
                         // punch false holes in the plug (depth-pass only).
                         if (u_isBackgroundLayer) {
-                            // A251b: the colour pass clips the plug to the frame's rest footprint (A245,
-                            // u_restClip); the depth pass drew the margin beyond it and reported cover
-                            // where the screen shows none. Same clip here.
+                            // A251b: the colour pass clips the plug to the frame's rest footprint when
+                            // window._plugMargin === 2 (A245, u_restClip); the depth pass drew the margin
+                            // beyond it and reported cover where the screen shows none. Same clip here.
+                            // (With _plugMargin === 1 the clip is the whole window and this is a no-op;
+                            // the black bars beside a non-matching aspect are then the A171 aperture crop
+                            // of the colour pass, which the depth pass does not apply — the margin IS there.)
                             if (u_restClip.x > 0.0) { vec2 ndcR = vClip.xy / max(vClip.w, 1e-6); if (abs(ndcR.x) > u_restClip.x || abs(ndcR.y) > u_restClip.y) discard; }
                             gl_FragColor = vec4(vec3(vNormalizedDepth), 1.0);
                             return;
