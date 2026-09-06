@@ -8076,13 +8076,45 @@ window._plugGeoBand = function (opts) {
           for (let i = 0; i < N; i++) if (dist[i] >= 1 && dist[i] <= RWDo) { fixedZ[i] = 1; valZ[i] = src[i] >= 0 ? valZ[src[i]] : zn(zOf(dQ[i])); } }
         let nUnk = 0; for (let i = 0; i < N; i++) if (!fixedZ[i]) nUnk++;
         const plane = nUnk > 0 ? solveField(fixedZ, valZ, { noClamp: true }).field : valZ;
-        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0;
+        // A257b SILHOUETTE INFLATION (the user's reading; the first form, the front mirrored through the plane, only gave
+        // thickness where the estimator's front already bulged). The object is the union of the maximal balls of its
+        // silhouette (the medial-axis transform, Blum 1967, lifted to 3D — Igarashi, Matsuoka & Tanaka's "Teddy",
+        // SIGGRAPH 1999, is the same idea with a chordal axis): every interior texel u carries a ball of radius dist(u),
+        // and the inflated half-thickness at t is the balls' envelope, h(t)² = max_u [dist(u)² − |t − u|²]. That
+        // envelope is one Felzenszwalb–Huttenlocher distance transform of sampled functions (Theory of Computing 8,
+        // 2012) applied to f = −dist²: exact, separable, O(N). Half-thickness in texels becomes world units through the
+        // projection at the object's depth (a texel spans w0/pw · (D − z)/D world at offset z along the reference
+        // rays), so an object is as deep as it is wide — no constant. The back is the central plane minus that half
+        // thickness, or the mirrored front where the depth map's own bulge is larger; never behind the a-priori
+        // background, never in front of the front.
+        const dt1d = (f, n, out, v, zz, stride, base) => {   // lower envelope of parabolas f(q) + (p − q)²
+            let k = 0; v[0] = 0; zz[0] = -1e20; zz[1] = 1e20;
+            for (let q = 1; q < n; q++) { let s;
+                while (true) { const r = v[k]; s = ((f[base + q * stride] + q * q) - (f[base + r * stride] + r * r)) / (2 * q - 2 * r); if (s <= zz[k]) { k--; if (k < 0) { k = 0; break; } } else break; }
+                if (k === 0 && s <= zz[0]) { v[0] = q; zz[0] = -1e20; zz[1] = 1e20; continue; }
+                k++; v[k] = q; zz[k] = s; zz[k + 1] = 1e20; }
+            k = 0; for (let q = 0; q < n; q++) { while (zz[k + 1] < q) k++; const r = v[k]; out[base + q * stride] = (q - r) * (q - r) + f[base + r * stride]; } };
+        const gRow = new Float32Array(N), gCol = new Float32Array(N); const vB = new Int32Array(Math.max(pw, ph) + 1), zB = new Float64Array(Math.max(pw, ph) + 2);
+        // exact squared Euclidean distance to the nearest non-object texel (the same transform on the indicator; the
+        // 4-connected BFS distance above is city-block and over-reads diagonals by up to √2 — kept for the ring only)
+        const fInd = new Float32Array(N); for (let i = 0; i < N; i++) fInd[i] = objId[i] < 0 ? 0 : 1e12;
+        for (let y = 0; y < ph; y++) dt1d(fInd, pw, gRow, vB, zB, 1, y * pw);
+        for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x);
+        const fDT = new Float32Array(N); for (let i = 0; i < N; i++) fDT[i] = -Math.min(gCol[i], 1e12);   // −dist²
+        for (let y = 0; y < ph; y++) dt1d(fDT, pw, gRow, vB, zB, 1, y * pw);
+        for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x);
+        const gp0i = L.mesh.geometry.parameters; const w0i = gp0i ? gp0i.width : 1; const Dref = (typeof camera !== 'undefined' && camera) ? Math.max(1e-3, Math.abs(camera.position.z - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0))) : 0.2;
+        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0, sHalf = 0, nInfl = 0, nMirror = 0;
         for (let i = 0; i < N; i++) { if (dist[i] <= 0) continue;
             const zc = plane[i] * zSpan - outerZ, zf = zOf(dQ[i]), zfar = zOf(farField[i]);
-            let zb = Math.min(zc, 2 * zc - zf); if (zb < zfar) zb = zfar; if (zb > zf) zb = zf;
-            backD[i] = dOfZ(zb); nBack++; if (zf - zb > 1e-6) { sThick += zf - zb; nThick++; } }
+            const hTex = Math.sqrt(Math.max(0, -gCol[i]));                                   // half thickness, texels
+            const texelWorld = (w0i / pw) * Math.max(0.05, (Dref - zc) / Dref);              // world per texel at the plane's depth
+            const hW = hTex * texelWorld, bulge = zf - zc;
+            let zb; if (bulge > hW) { zb = zc - bulge; nMirror++; } else { zb = zc - hW; nInfl++; }
+            if (zb < zfar) zb = zfar; if (zb > zf) zb = zf;
+            backD[i] = dOfZ(zb); nBack++; sHalf += hW; if (zf - zb > 1e-6) { sThick += zf - zb; nThick++; } }
         window._geoBackDepth = backD; window._geoBackDist = dist;
-        console.log('[A257] object backs: ' + nBack + ' texels in ' + nObj + ' objects; ' + nThick + ' with thickness (mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + ' world, span ' + zSpan.toFixed(3) + '); ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
+        console.log('[A257] object backs (inflation): ' + nBack + ' texels in ' + nObj + ' objects; mean half-thickness ' + (nBack ? (sHalf / nBack).toFixed(4) : '0') + ' world (z span ' + zSpan.toFixed(3) + ', D ' + Dref.toFixed(3) + '); inflation set the back on ' + nInfl + ', the front’s own bulge on ' + nMirror + '; mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + '; ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
     }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
