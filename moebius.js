@@ -8069,7 +8069,11 @@ window._plugGeoBand = function (opts) {
               let nNearC = 0, nFarC = 0; for (let j = 0; j < k; j++) { if (tmp[j] >= mx - TOLB) nNearC++; if (tmp[j] <= mn + TOLB) nFarC++; }
               let kk = 0; for (let j = 0; j < k; j++) if (tmp[j] >= mx - TOLB) tD2[kk++] = tmp[j];
               nearMode = medOf(tD2, kk); nearFrac = nNearC / k;
-              if (window._geoObsMode === 'near' && nNearC >= nFarC) med = nearMode; }
+              // 'near': the near cluster wins as the plurality; 'near2': it wins when a second pose confirms it (two independent
+              // observations, the least that is not a stray) — the layer directly behind the occluder owns the texel, a deeper
+              // layer seen past it would need a second plug layer (measured on the troll: 80 k of 300 k texels carry two layers,
+              // the near one is the plurality on 2.4 k of them)
+              if ((window._geoObsMode === 'near' && nNearC >= nFarC) || (window._geoObsMode === 'near2' && nNearC >= 2)) med = nearMode; }
             lipNearMode[i] = nearMode; lipNearFrac[i] = nearFrac;
             obsDepth[i] = Math.min(med, dQ[i]); if (!rim[i]) { fixed2[i] = 1; val2[i] = obsDepth[i]; } nObsTex++; if (c > maxCnt) maxCnt = c;
             lipDeep[i] = medOf(tD, k); lipNear[i] = medOf(tN, k); lipSpread[i] = medOf(tS, kS); rampDrop[i] = medOf(tR, k); crossFrac[i] = nCross / k;
@@ -8095,7 +8099,7 @@ window._plugGeoBand = function (opts) {
         window._geoLipDeep = lipDeep; window._geoLipNear = lipNear; window._geoLipSpread = lipSpread; window._geoKind = kindTex; window._geoProv = prov; window._geoRampDrop = rampDrop; window._geoCrossFrac = crossFrac;
         window._geoLipNearMode = lipNearMode; window._geoLipNearFrac = lipNearFrac;   // A253d
         { let nBi = 0, nNearWin = 0; for (let i = 0; i < N; i++) { if (ob.cnt[i] > 0 && lipNearFrac[i] < 1 && lipNearMode[i] - lipDeep[i] > TOLB) { nBi++; if (lipNearFrac[i] >= 0.5) nNearWin++; } }
-          console.log('[A253d] texels whose samples span two hidden layers (near cluster more than a cliff above the median deeper lip): ' + nBi + ' of ' + nObsTex + '; near cluster is the plurality on ' + nNearWin + (window._geoObsMode === 'near' ? ' (near mode ARMED: those take the near cluster)' : '')); }
+          console.log('[A253d] texels whose samples span two hidden layers (near cluster more than a cliff above the median deeper lip): ' + nBi + ' of ' + nObsTex + '; near cluster is the plurality on ' + nNearWin + (window._geoObsMode ? ' (mode ' + window._geoObsMode + ' ARMED)' : '')); }
         window._geoGateField = opts.gateAPriori ? farField.slice() : null;   // A246d: the tear gate may keep the a-priori field (A/B: the observed gate tears 24% more texels on the troll)
         for (let i = 0; i < N; i++) farField[i] = merged.field[i];          // the observed hidden depth field replaces the a-priori far field in place (all consumers read window._geoFarField)
         // A246 lip COLOUR term REMOVED (rule 7): the mean lip colour as a least-squares data term in the colour
