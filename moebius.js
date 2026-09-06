@@ -8413,7 +8413,44 @@ function exportDebugContactSheet() {
         } catch (eSolo) { console.warn('[DBG-SHEET] solo panels failed:', eSolo); }
 
         // --- Compose sheet ---
-        const cols = 3, pad = 10, labelH = 22, footerH = 78;
+        // A248 POSE STRIP + FLICKER (user request, Addendum 187): the sheet was one pose; the
+        // comparisons that matter are across poses and across FRAMES. For the four reference
+        // poses of the harness (rest / a221 / sheet1 / mirror) the LIVE composite (what the
+        // screen shows, read from the canvas after a full frame), the gap mask and the
+        // completed depth are added; at the CURRENT pose the composite is rendered twice
+        // (same pose) and once after an eye step of 1 % of the rim offset, and the mean
+        // absolute difference over the gap pixels is stamped in the footer: the same-pose
+        // number is the per-frame instability of the real-time fill (the "flicker"), the
+        // one-step number is how much the fill moves per unit of head motion.
+        let flickerStamp = 'flicker: n/a';
+        try {
+            const savedPos = camera.position.clone();
+            const grabLive = () => { renderPortalFrame(); renderPortalFrame(); const c = document.createElement('canvas'); c.width = panelW; c.height = panelH; c.getContext('2d').drawImage(renderer.domElement, 0, 0, panelW, panelH); return c; };
+            const gapPanel = panels.find(p => p.label.startsWith('gap mask'));
+            const gapData = gapPanel ? gapPanel.canvas.getContext('2d').getImageData(0, 0, panelW, panelH).data : null;
+            const madOverGaps = (P, Q) => { if (!gapData) return null; const a = P.getContext('2d').getImageData(0, 0, panelW, panelH).data, b = Q.getContext('2d').getImageData(0, 0, panelW, panelH).data; let s = 0, n = 0;
+                for (let i = 0; i < a.length; i += 4) { if (gapData[i] < 128) continue; s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); n++; } return { mad: n ? s / (3 * n) : 0, n }; };
+            const fA = grabLive(), fB = grabLive();
+            const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0; const Dd = Math.max(1e-3, Math.abs(camera.position.z - _pz));
+            const exR = Dd * Math.tan(((typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45) * Math.PI / 180);
+            camera.position.x += 0.01 * exR; updateCameraAndProjection(); const fC = grabLive();
+            camera.position.copy(savedPos); updateCameraAndProjection();
+            const same = madOverGaps(fA, fB), step = madOverGaps(fA, fC);
+            if (same) flickerStamp = 'A248 flicker over ' + same.n + ' gap px: same-pose MAD ' + same.mad.toFixed(2) + '/255, one eye step (1% rim) MAD ' + step.mad.toFixed(2) + '/255';
+            window._dbgFlicker = { same, step };
+            const POSES4 = [['rest', 0, 0], ['a221', 0.100, -0.023], ['sheet1', 0.180, 0.008], ['mirror', -0.141, 0.023]];
+            for (const [pn, px, py] of POSES4) {
+                camera.position.set(px, py, savedPos.z); updateCameraAndProjection();
+                panels.push({ label: 'POSE ' + pn + ' (' + px + ', ' + py + '): live composite', canvas: grabLive() });
+                renderNormalizedDepthPass(); let ok2 = false; try { ok2 = runFGSubtraction(pingPongRenderTargetB?.texture || null, true, thr); } catch (e2) {}
+                if (colorTex && depthTex) addPanel('POSE ' + pn + ': gap mask (white = hole)', colorTex, depthTex, 1);
+                if (ok2 && maskTex && depthTex) addPanel('POSE ' + pn + ': completed depth (realtime contract)', maskTex, depthTex, 8);
+            }
+            camera.position.copy(savedPos); updateCameraAndProjection();
+            renderNormalizedDepthPass(); try { runFGSubtraction(pingPongRenderTargetB?.texture || null, true, thr); } catch (e3) {}
+            renderPortalFrame();
+        } catch (eStrip) { console.warn('[DBG-SHEET] A248 pose strip failed:', eStrip); }
+        const cols = 3, pad = 10, labelH = 22, footerH = 96;
         const rows = Math.ceil(panels.length / cols);
         const sheet = document.createElement('canvas');
         sheet.width  = cols * panelW + (cols + 1) * pad;
@@ -8453,7 +8490,8 @@ function exportDebugContactSheet() {
             ' vol=' + ((typeof outerVolumeDepth === 'number' ? outerVolumeDepth.toFixed(3) : '?') + '/' +
                        (typeof innerVolumeDepth === 'number' ? innerVolumeDepth.toFixed(3) : '?')) +
             ' repro=' + ((typeof _rayReprojectNow === 'function') ? (_rayReprojectNow() ? 'ON' : 'off') : '?') +
-            ' refEye=' + ((typeof bgRefEyeZNow === 'function') ? bgRefEyeZNow().toFixed(4) : '?')
+            ' refEye=' + ((typeof bgRefEyeZNow === 'function') ? bgRefEyeZNow().toFixed(4) : '?'),
+            flickerStamp + ' | framePath=' + (window._framePath || '?') + ' inpaint=' + ((typeof useInpainting !== 'undefined') ? useInpainting : '?') + ' method=' + ((typeof currentInpaintingMethod !== 'undefined') ? currentInpaintingMethod : '?') + ' split=' + ((typeof currentInpaintingSplitDepthNorm === 'number') ? currentInpaintingSplitDepthNorm.toFixed(3) : '?') + ' bgBuilt=' + ((typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? 'yes' : 'NO')
         ];
         ctx.fillStyle = '#ff8';
         stamp.forEach((s, i) => ctx.fillText(s, pad, sheet.height - footerH + 20 + i * 18));
