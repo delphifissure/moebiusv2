@@ -13396,6 +13396,15 @@ function bgBuildBackgroundLayerCore() {
                 // admitted the near side and refused the far rims — the dark fill behind the star-watcher
                 // figure, seam 62 where the other scenes reached 9–16)
                 if (window._geoFarField && window._geoFarField.length === PNq) { const ff = window._geoFarField; for (let i = 0; i < PNq; i++) if (disocc[i]) plateQ[i] = ff[i]; }
+                // A253c: the colour gate keys on plateQ, the depth the plate will finally carry is floored to the deeper
+                // lip (A253 B2, after a126). With the object rule the same floor is applied HERE, so the colour seeds of an
+                // interior fill are the object's far part (the tentacle behind, the thigh) and not the backdrop — colour and
+                // depth agree on every band texel. (Measured before this: the octopus's colour did not move with its depth.)
+                if ((window._plugObjectRule || window._geoLipFloor) && window._geoLipBoundField && window._geoLipBoundField.length === PNq) {
+                    const bndQ = window._geoLipBoundField; const qQ = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255; let nQ = 0;
+                    for (let i = 0; i < PNq; i++) { if (!disocc[i] || bndQ[i] < 0) continue; const lim = Math.min(bndQ[i] - qQ, dQ[i] - qQ); if (plateQ[i] < lim) { plateQ[i] = lim; nQ++; } }
+                    console.log('[A253] colour gate depth floored to the deeper lip on ' + nQ + ' band texels');
+                }
                 console.log('[QUICK-BAKE] A244 geometric band: +' + nAdd + ' revealed texels joined, -' + nDrop + ' never-revealed front texels left the band (restored to source depth); band now ' + nD);
             }
             if (window._plugSweepCapture) window._qbDisocc = disocc.slice();
