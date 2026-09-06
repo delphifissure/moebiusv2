@@ -30,7 +30,7 @@ const Z = 0.199;
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (t.includes('A242') || t.includes('A244') || t.includes('A246') || t.includes('A247') || t.includes('A249') || t.includes('A245') || t.includes('A215') || t.includes('band fill') || t.includes('A241') || t.includes('NOTE') || m.type() === 'warning' || m.type() === 'error') console.log('  [page:' + m.type() + '] ' + t.slice(0, 700)); });
+    page.on('console', m => { const t = m.text(); if (t.includes('A242') || t.includes('A244') || t.includes('A246') || t.includes('A252') || t.includes('A253') || t.includes('A247') || t.includes('A249') || t.includes('A245') || t.includes('A215') || t.includes('band fill') || t.includes('A241') || t.includes('NOTE') || m.type() === 'warning' || m.type() === 'error') console.log('  [page:' + m.type() + '] ' + t.slice(0, 700)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const res = await page.evaluate(async (o) => {
@@ -91,6 +91,10 @@ const Z = 0.199;
         let nBoth = 0, nGhost = 0, sFar = 0, sNear = 0, nSeam = 0, sSeam = 0;
         let gxB = 0, gyB = 0, nGB = 0, gOut = 0, nGO = 0;
         const ghostMap = new Uint8Array(N);
+        // A253: the ghost index per gap class (window._geoClass). A CONTINUOUS or INTERIOR fill is SUPPOSED to be
+        // near the near lip's surface, so the standing index is also reported without classes 1 and 2.
+        const gcls = (window._geoClass && window._geoClass.length === N) ? window._geoClass : null;
+        const perCls = {}; const clsAdd = (c, ghost) => { const e = perCls[c] || (perCls[c] = { n: 0, ghost: 0 }); e.n++; if (ghost) e.ghost++; };
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
             if (!dis[i]) {
                 // far-side reference gradient: non-band texels within 8 px of the band that are compatible with it
@@ -98,7 +102,7 @@ const Z = 0.199;
                 if (nearBand && x < pw - 1 && y < ph - 1 && !dis[i + 1] && !dis[i + pw]) { gOut += cd3(src, i, src, i + 1) + cd3(src, i, src, i + pw); nGO++; }
                 continue;
             }
-            if (farC[i] >= 0 && nearC[i] >= 0) { nBoth++; const df = cd3(plug, i, src, farC[i]), dn = cd3(plug, i, src, nearC[i]); sFar += df; sNear += dn; if (dn < df) { nGhost++; ghostMap[i] = 1; } }
+            if (farC[i] >= 0 && nearC[i] >= 0) { nBoth++; const df = cd3(plug, i, src, farC[i]), dn = cd3(plug, i, src, nearC[i]); sFar += df; sNear += dn; if (dn < df) { nGhost++; ghostMap[i] = 1; } if (gcls) clsAdd(gcls[i], dn < df); }
             if (x < pw - 1 && dis[i + 1]) { gxB += cd3(plug, i, plug, i + 1); nGB++; }
             if (y < ph - 1 && dis[i + pw]) { gyB += cd3(plug, i, plug, i + pw); }
             // seam: band texel adjacent to a compatible rim texel
@@ -137,15 +141,19 @@ const Z = 0.199;
             if (dis[i]) { if (ghostMap[i]) { r = 230; g = 40; b = 40; } else if (farC[i] >= 0) { r = 40; g = 190; b = 70; } else { r = 120; g = 120; b = 120; } }
             gi.data[o4] = r; gi.data[o4 + 1] = g; gi.data[o4 + 2] = b; gi.data[o4 + 3] = 255; }
         gx.putImageData(gi, 0, 0); shots.ghostmap = gm.toDataURL('image/png');
-        return { pw, ph, bakeMs, plugFrom, nBand, nFar, nNear, nBoth, nGhost, meanFar: sFar / Math.max(1, nBoth), meanNear: sNear / Math.max(1, nBoth),
+        return { pw, ph, bakeMs, plugFrom, nBand, nFar, nNear, nBoth, nGhost, perCls: gcls ? perCls : null, meanFar: sFar / Math.max(1, nBoth), meanNear: sNear / Math.max(1, nBoth),
                  seam: sSeam / Math.max(1, nSeam), nSeam, gradBand: (gxB + gyB) / Math.max(1, 2 * nGB), gradOut: gOut / Math.max(1, 2 * nGO), anis: gxB / Math.max(1, gyB), shots };
     }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, sweep: !!process.env.SWEEP, hole: !!process.env.HOLE, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, boundary: !!process.env.BOUNDARY, nx: process.env.NX ? parseInt(process.env.NX) : 0, ny: process.env.NY ? parseInt(process.env.NY) : 0, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     if (res.err) { console.log('ERR ' + res.err); process.exit(1); }
     // Phase 0 / A246 audit: the band, the plate depth, the observed depth/count and the geo stats as raw files (source rows) for offline comparison
     try { const raw = await page.evaluate(() => { const b64 = (ta) => { const u8 = new Uint8Array(ta.buffer, ta.byteOffset, ta.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 32768) s += String.fromCharCode.apply(null, u8.subarray(i, i + 32768)); return btoa(s); };
             const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph; const pS = new Float32Array(N); const pF = window._qbPlateF; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
-            return { band: b64(window._qbDisocc), dQ: b64(window._qbDQ), plate: b64(pS), field: window._geoFarField ? b64(window._geoFarField) : null, obsDepth: window._geoObsDepth ? b64(window._geoObsDepth) : null, obsCount: window._geoObsCount ? b64(window._geoObsCount) : null, stats: window._plugGeoStats || null }; });
-        for (const k of ['band', 'dQ', 'plate', 'field', 'obsDepth', 'obsCount']) if (raw[k]) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(raw[k], 'base64'));
+            const opt = (a) => a ? b64(a) : null;
+            return { band: b64(window._qbDisocc), dQ: b64(window._qbDQ), plate: b64(pS), field: opt(window._geoFarField), obsDepth: opt(window._geoObsDepth), obsCount: opt(window._geoObsCount),
+                     // A252 lip instrument (all source rows): lipDeep/lipNear/lipSpread/rampDrop/post Float32, kind/prov/cls Uint8, crossFrac Float32
+                     lipDeep: opt(window._geoLipDeep), lipNear: opt(window._geoLipNear), lipSpread: opt(window._geoLipSpread), rampDrop: opt(window._geoRampDrop), crossFrac: opt(window._geoCrossFrac), kind: opt(window._geoKind), prov: opt(window._geoProv), cls: opt(window._geoClass), post: opt(window._geoPost),
+                     stats: window._plugGeoStats || null }; });
+        for (const k of ['band', 'dQ', 'plate', 'field', 'obsDepth', 'obsCount', 'lipDeep', 'lipNear', 'lipSpread', 'rampDrop', 'crossFrac', 'kind', 'prov', 'cls', 'post']) if (raw[k]) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.bin'), Buffer.from(raw[k], 'base64'));
         fs.writeFileSync(path.join(OUT, ARM + '_geostats.json'), JSON.stringify(Object.assign({ pw: res.pw, ph: res.ph }, raw.stats || {}), null, 1));
     } catch (eR) { console.log('  (raw export failed: ' + eR.message + ')'); }
     for (const k of Object.keys(res.shots)) { const f = path.join(OUT, ARM + '_' + k + '.png'); fs.writeFileSync(f, Buffer.from(res.shots[k].split(',')[1], 'base64')); }
@@ -154,6 +162,9 @@ const Z = 0.199;
     console.log(`   band ${res.nBand} texels; far-anchored (A213 domain) ${res.nFar} (${pct(res.nFar, res.nBand)}); with a near lip ${res.nNear}; scored ${res.nBoth}`);
     console.log(`   GHOST INDEX ${res.nGhost} of ${res.nBoth} = ${pct(res.nGhost, res.nBoth)} nearer the near lip than the far rim; mean |plug-far| ${res.meanFar.toFixed(1)}, |plug-near| ${res.meanNear.toFixed(1)} (sum of RGB, /255 each)`);
     console.log(`   far-rim seam ${res.seam.toFixed(2)} over ${res.nSeam} rim contacts; gradient in band ${res.gradBand.toFixed(2)} vs far side ${res.gradOut.toFixed(2)} (ratio ${(res.gradBand / Math.max(1e-6, res.gradOut)).toFixed(2)}); row/col anisotropy ${res.anis.toFixed(2)}`);
+    if (res.perCls) { const CN = { 1: 'continuous', 2: 'interior-step', 7: 'extent-step', 3: 'single-lip', 4: 'fallback', 5: 'pinhole', 6: 'dilation' }; let nX = 0, gX = 0;
+        const parts = Object.keys(res.perCls).sort().map(c => { const e = res.perCls[c]; if (c !== '1' && c !== '2') { nX += e.n; gX += e.ghost; } return `${CN[c] || c} ${pct(e.ghost, e.n)} of ${e.n}`; });
+        console.log(`   GHOST per class: ${parts.join('; ')};  EXCLUDING continuous + interior (the classes meant to be near the near lip): ${pct(gX, nX)} of ${nX}`); }
     console.log('   shots -> ' + OUT);
     await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });

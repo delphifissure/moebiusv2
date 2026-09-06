@@ -7731,11 +7731,30 @@ window._plugCpuSweep = function (opts) {
     let curTi = -1, curFar = 0;
     const qN = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
     let obsHead = null, obsNext = null, obsVal = null, obsCnt = null, obsCap = 0, obsN = 0;
+    // A252 LIP INSTRUMENT: every sample also keeps the two lips it was made from — the far lip
+    // after the ramp walk (lipA), the near lip or -1 (lipB), the far lip BEFORE the ramp walk
+    // (lipA0, so the walk's drop is measurable) and a packed record: bits 0-1 kind (1 two-lip
+    // interpolation, 2 step = far lip taken, 3 no near lip in frame), bit 2 the far walk crossed
+    // plate-owned cells (foreground absent there at this pose: torn or a reveal), bit 3 the ramp
+    // walk moved the lip, bits 4-17 kA and 18-31 kB (lip distances in cells). Read by
+    // _plugGeoBand for the per-texel class and by the a252 offline tables.
+    let obsLipA = null, obsLipB = null, obsLipA0 = null, obsMeta = null;
     let obsSamples = 0, obsGeo = 0, obsSelf = 0, obsAmbig = 0, obsOut = 0, obsRamp = 0, obsTwoLip = 0;
+    // A253 GAP CLASSES (opts.objId = the rest-silhouette object id per source texel, from _plugGeoBand):
+    // a step sample whose two lips lie in ONE object is INTERIOR (the far lip is the far part of the
+    // same object: calf over thigh); a step whose far lip is outside the near lip's object is EXTENT
+    // (the object's silhouette against something else). Two lips whose own slopes, measured outside
+    // the gap, extrapolate to meet inside it are one CONTINUOUS surface (a receding wall) and take
+    // the interpolation like the equal-depth two-lip case. opts.extent === 'skirt' gives EXTENT
+    // samples the interpolation too (the object's side turning away over the reveal width).
+    const objId = opts.objId || null, objRule = !!objId, extentSkirt = opts.extent === 'skirt';
+    let obsCont = 0, obsInterior = 0, obsExtent = 0, obsSkirt = 0;
     if (observe) { obsHead = new Int32Array(N).fill(-1); obsCnt = new Int32Array(N);
-        obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap); }
-    const obsPush = (t, d) => { if (obsN === obsCap) { obsCap *= 2; const n2 = new Int32Array(obsCap); n2.set(obsNext); obsNext = n2; const v2 = new Float32Array(obsCap); v2.set(obsVal); obsVal = v2; }
-        obsVal[obsN] = d; obsNext[obsN] = obsHead[t]; obsHead[t] = obsN++; obsCnt[t]++; };
+        obsCap = 1 << 20; obsNext = new Int32Array(obsCap); obsVal = new Float32Array(obsCap);
+        obsLipA = new Float32Array(obsCap); obsLipB = new Float32Array(obsCap); obsLipA0 = new Float32Array(obsCap); obsMeta = new Int32Array(obsCap); }
+    const obsPush = (t, d, dA, dB, dA0, meta) => { if (obsN === obsCap) { obsCap *= 2; const n2 = new Int32Array(obsCap); n2.set(obsNext); obsNext = n2; const v2 = new Float32Array(obsCap); v2.set(obsVal); obsVal = v2;
+            const a2 = new Float32Array(obsCap); a2.set(obsLipA); obsLipA = a2; const b2 = new Float32Array(obsCap); b2.set(obsLipB); obsLipB = b2; const a0 = new Float32Array(obsCap); a0.set(obsLipA0); obsLipA0 = a0; const m2 = new Int32Array(obsCap); m2.set(obsMeta); obsMeta = m2; }
+        obsVal[obsN] = d; obsLipA[obsN] = dA; obsLipB[obsN] = dB; obsLipA0[obsN] = dA0; obsMeta[obsN] = meta; obsNext[obsN] = obsHead[t]; obsHead[t] = obsN++; obsCnt[t]++; };
     let sMaxFG = 0; for (let i = 0; i < N; i++) { const a = Math.abs(sFG[i]); if (a > sMaxFG) sMaxFG = a; }
     let rowDumps = null;
     // A244: hole -> covering texel (A234's inversion, exact here: the CPU warp IS the shift law).
@@ -7827,8 +7846,10 @@ window._plugCpuSweep = function (opts) {
                 if (doObs) {
                     // far lip: first FG cell against the parallax; near lip: first FG cell with it
                     let wx = (c % GW) + 0.5, wy = ((c / GW) | 0) + 0.5, cFar = -1, cNear = -1;
-                    for (let k = 0; k < maxWalk; k++) { wx += stxO; wy += styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cFar = cc; break; } }
+                    let crossedPlate = 0, kFarWalk = 0, kNearWalk = 0;   // A252
+                    for (let k = 0; k < maxWalk; k++) { wx += stxO; wy += styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cFar = cc; kFarWalk = k + 1; break; } if (own[cc] >= 0) crossedPlate = 1; }
                     if (cFar >= 0) {
+                        const dA0 = fgFar[cFar];   // A252: the far lip before the ramp walk
                         // A246c RAMP FOOT: the first foreground cell beyond a gap is the silhouette's blur ramp (the
                         // estimator's RWD smear, Addendum 93: intermediate depth, blended colour — sampling it puts the
                         // lip nearer than the far surface and its colour between the two sides). The lip is the ramp's
@@ -7839,16 +7860,19 @@ window._plugCpuSweep = function (opts) {
                         // the quantum. On quantised depth the quantum dominates (a ramp cell descends by several
                         // quanta, the surface by less than one); on continuous depth the quantum is 1/65535 and the
                         // quantum rule alone walked every receding surface to the 4-RWD cap (pole, 16-bit: 1 px behind).
-                        let slopeEst = 0;
+                        let slopeEst = 0, slopeA = 0, slopeAok = false;   // slopeA (A253): signed, depth change per cell moving TOWARD the gap along the far surface
                         { const ax = (wx + rampMax * stxO) | 0, ay = (wy + rampMax * styO) | 0, bx = (wx + 2 * rampMax * stxO) | 0, by = (wy + 2 * rampMax * styO) | 0;
-                          if (ax >= 0 && ay >= 0 && ax < GW && ay < GH && bx >= 0 && by >= 0 && bx < GW && by < GH) { const ca = ay * GW + ax, cb = by * GW + bx; if (own[ca] === -2 && own[cb] === -2) slopeEst = Math.max(0, fgFar[ca] - fgFar[cb]) / rampMax; } }
+                          if (ax >= 0 && ay >= 0 && ax < GW && ay < GH && bx >= 0 && by >= 0 && bx < GW && by < GH) { const ca = ay * GW + ax, cb = by * GW + bx; if (own[ca] === -2 && own[cb] === -2) { slopeA = (fgFar[ca] - fgFar[cb]) / rampMax; slopeAok = true; slopeEst = Math.max(0, slopeA); } } }
                         const rampThr = qN + slopeEst;
                         let cur = cFar, wx2 = wx, wy2 = wy;
                         for (let k = 0; k < rampMax; k++) { wx2 += stxO; wy2 += styO; const ix = wx2 | 0, iy = wy2 | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix;
                             if (own[cc] !== -2) break; if (fgFar[cur] - fgFar[cc] > rampThr) cur = cc; else break; }
-                        if (cur !== cFar) obsRamp++; cFar = cur;
+                        const rampMoved = cur !== cFar ? 1 : 0; if (rampMoved) obsRamp++; cFar = cur;
                         wx = (c % GW) + 0.5; wy = ((c / GW) | 0) + 0.5;
-                        for (let k = 0; k < maxWalk; k++) { wx -= stxO; wy -= styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cNear = cc; break; } }
+                        for (let k = 0; k < maxWalk; k++) { wx -= stxO; wy -= styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cNear = cc; kNearWalk = k + 1; break; } }
+                        let slopeB = 0, slopeBok = false;   // A253: the near surface's own slope beyond the near lip, signed toward the gap
+                        if (cNear >= 0 && objRule) { const ax = (wx - rampMax * stxO) | 0, ay = (wy - rampMax * styO) | 0, bx = (wx - 2 * rampMax * stxO) | 0, by = (wy - 2 * rampMax * styO) | 0;
+                          if (ax >= 0 && ay >= 0 && ax < GW && ay < GH && bx >= 0 && by >= 0 && bx < GW && by < GH) { const ca = ay * GW + ax, cb = by * GW + bx; if (own[ca] === -2 && own[cb] === -2) { slopeB = (fgFar[ca] - fgFar[cb]) / rampMax; slopeBok = true; } } }
                         // A246g TWO LIPS (the pole row probe, Addendum 185): the zero-parallax plane lies inside the
                         // scene, so the far surface and the occluder move in OPPOSITE directions and the gap is the
                         // landing zone of the hidden texels — behind a WIDE occluder one lip is the far surface and
@@ -7861,15 +7885,26 @@ window._plugCpuSweep = function (opts) {
                         let dFar = dA;
                         if (cNear >= 0 && dA - dB > fgTearStep) { obsAmbig++; obsGeo--; }
                         else {
+                            const kA = Math.max(1, Math.abs(((cFar % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cFar / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5)));
+                            const kB = cNear >= 0 ? Math.max(1, Math.abs(((cNear % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cNear / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5))) : 0;
+                            let kind = cNear >= 0 ? 2 : 3, interior = 0, skirt = 0;
                             if (cNear >= 0 && Math.abs(dA - dB) <= fgTearStep) {
-                                const kA = Math.max(1, Math.abs(((cFar % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cFar / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5)));
-                                const kB = Math.max(1, Math.abs(((cNear % GW) + 0.5) - ((c % GW) + 0.5)) + Math.abs((((cNear / GW) | 0) + 0.5) - (((c / GW) | 0) + 0.5)));
-                                dFar = (dA * kB + dB * kA) / (kA + kB); obsTwoLip++; }
+                                dFar = (dA * kB + dB * kA) / (kA + kB); obsTwoLip++; kind = 1; }
+                            else if (cNear >= 0 && objRule) {
+                                // A253 continuity: each lip's surface extrapolated by its own slope to the cell; they meet within the
+                                // quantisation noise of a slope measured over rampMax cells carried over the lip distance (qN, rampMax, k: no constant)
+                                if (slopeAok && slopeBok && Math.abs((dA + slopeA * kA) - (dB + slopeB * kB)) <= qN * (1 + (kA + kB) / rampMax)) {
+                                    dFar = (dA * kB + dB * kA) / (kA + kB); kind = 1; obsCont++; }
+                                else { const tA = fgOwn[cFar], tB = fgOwn[cNear]; const oA = tA >= 0 ? objId[tA] : -1, oB = tB >= 0 ? objId[tB] : -1;
+                                    if (oA >= 0 && oA === oB) { interior = 1; obsInterior++; }
+                                    else { obsExtent++; if (extentSkirt) { dFar = (dA * kB + dB * kA) / (kA + kB); skirt = 1; obsSkirt++; } } }
+                            }
                             const sT = bgShiftPxAt(lut, dFar); const txr = Math.round(cx0 - sT * fx), tyr = Math.round(cy0 - sT * fy);
                             if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) { obsOut++; revealOut++; continue; }
                             const t = tyr * pw + txr;
                             if (dQ[t] - dFar < qN) { obsSelf++; continue; }   // the texel's own source depth is the lip's: at its source depth the plug already covers this cell
-                            obsPush(t, dFar); obsSamples++; revealTex[t] = 1; revealIn++;
+                            const meta = kind | (crossedPlate << 2) | (rampMoved << 3) | (interior << 4) | (skirt << 5) | (Math.min(8191, kA) << 6) | (Math.min(4095, kB) << 19);   // A252/A253 (bits 0-1 kind, 2 crossed, 3 ramp, 4 interior, 5 skirt, 6-18 kA, 19-30 kB)
+                            obsPush(t, dFar, dA, dB, dA0, meta); obsSamples++; revealTex[t] = 1; revealIn++;
                             continue;
                         }
                     }
@@ -7912,7 +7947,7 @@ window._plugCpuSweep = function (opts) {
     }
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
-    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip } : null;
+    const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, lipA: obsLipA, lipB: obsLipB, lipA0: obsLipA0, meta: obsMeta, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip, continuous: obsCont, interior: obsInterior, extent: obsExtent, skirt: obsSkirt } : null;
     return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
@@ -7937,6 +7972,7 @@ window._plugGeoBand = function (opts) {
     opts = opts || {};
     const t0 = Date.now();
     window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._geoLipDeep = null; window._geoLipNear = null; window._geoLipSpread = null; window._geoKind = null; window._geoProv = null; window._geoClass = null; window._geoPost = null; window._geoRampDrop = null;   // A252
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 1: the fronts' band names the far rims
@@ -7965,8 +8001,8 @@ window._plugGeoBand = function (opts) {
         const field = new Float32Array(N);
         for (let i = 0; i < N; i++) { const u = uIdx[i]; field[i] = u < 0 ? val[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
         // never in front of the source: the field is a continuation BEHIND the surface (a135's ordering, per texel)
-        let nClamp = 0; for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; nClamp++; }
-        return { field, nU, cycles: mg.sweeps[0][1], err: mg.residual / 255, nClamp };
+        let nClamp = 0; const clampMask = new Uint8Array(N); for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; clampMask[i] = 1; nClamp++; }
+        return { field, nU, cycles: mg.sweeps[0][1], err: mg.residual / 255, nClamp, clampMask };
     };
     const ffRes = solveField(rim, dQ);
     const farField = ffRes.field, nU = ffRes.nU, nClampF = ffRes.nClamp, mgF = { sweeps: [[0, ffRes.cycles]], residual: ffRes.err * 255 };
@@ -7976,9 +8012,24 @@ window._plugGeoBand = function (opts) {
     // foliage case. Addendum 180 items 23-25.
     window._geoFarField = farField;
     const msF = Date.now() - tF;
+    // A253 OBJECTS AT REST (window._plugObjectRule): the head-on silhouette the user means. A texel
+    // belongs to an object when it stands in front of the background continuation (the a-priori far
+    // field) by more than the cliff step; 4-connected components of that mask are the objects (the
+    // troll, the woman, the roots, the man on bears). The receding cave wall IS the far field and is
+    // not an object; its glancing gaps are the continuity class. No segmentation model, no constant
+    // beyond the cliff step already in use.
+    let objId = null, nObj = 0;
+    if (window._plugObjectRule) { objId = new Int32Array(N).fill(-1); const st = new Int32Array(N); const isObj = (i) => dQ[i] - farField[i] > TOLB;
+        for (let i = 0; i < N; i++) { if (objId[i] >= 0 || !isObj(i)) continue; let h = 0, t = 0; st[t++] = i; objId[i] = nObj;
+            while (h < t) { const j = st[h++]; const x = j % pw, y = (j / pw) | 0; const cN = [x > 0 ? j - 1 : -1, x < pw - 1 ? j + 1 : -1, y > 0 ? j - pw : -1, y < ph - 1 ? j + pw : -1];
+                for (const n of cN) if (n >= 0 && objId[n] < 0 && isObj(n)) { objId[n] = nObj; st[t++] = n; } }
+            nObj++; }
+        window._geoObjId = objId; let nIn = 0; for (let i = 0; i < N; i++) if (objId[i] >= 0) nIn++;
+        console.log('[A253] rest-silhouette objects: ' + nObj + ' components over ' + nIn + ' texels in front of the far field by > ' + TOLB.toFixed(3) + '; extent fill = ' + (window._plugExtent === 'skirt' ? 'skirt' : 'far')); }
+    else window._geoObjId = null;
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
-    let s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed });
+    let s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     let obsStats = null;
     if (observed && s1.obs) {
@@ -7989,18 +8040,52 @@ window._plugGeoBand = function (opts) {
         const tO = Date.now();
         const ob = s1.obs; const obsDepth = new Float32Array(N).fill(-1); const fixed2 = new Uint8Array(N); const val2 = new Float32Array(N); let nObsTex = 0, maxCnt = 0;
         const tmp = new Float32Array(1024);
+        // A252 per-texel lip record: the deeper and the nearer lip (medians over the texel's samples),
+        // the lip spread, the majority kind, the ramp walk's median drop, and how many samples crossed
+        // plate-owned cells on the far walk. These name the surfaces beside each gap; the depth the
+        // texel finally carries is compared with them offline (a252_lips.py) and by the class rule.
+        const lipDeep = new Float32Array(N).fill(-1), lipNear = new Float32Array(N).fill(-1), lipSpread = new Float32Array(N).fill(-1), rampDrop = new Float32Array(N);
+        const kindTex = new Uint8Array(N), prov = new Uint8Array(N); const crossFrac = new Float32Array(N);
+        const tD = new Float32Array(1024), tN = new Float32Array(1024), tS = new Float32Array(1024), tR = new Float32Array(1024);
+        const medOf = (a, k) => { if (!k) return -1; const arr = a.subarray(0, k).slice().sort(); return (k & 1) ? arr[k >> 1] : 0.5 * (arr[(k >> 1) - 1] + arr[k >> 1]); };
         for (let i = 0; i < N; i++) { fixed2[i] = rim[i]; val2[i] = dQ[i]; const c = ob.cnt[i]; if (!c) continue;
-            let k = 0; for (let p = ob.head[i]; p >= 0 && k < tmp.length; p = ob.next[p]) tmp[k++] = ob.val[p];
-            const arr = tmp.subarray(0, k).slice().sort(); const med = (k & 1) ? arr[k >> 1] : 0.5 * (arr[(k >> 1) - 1] + arr[k >> 1]);
-            obsDepth[i] = Math.min(med, dQ[i]); if (!rim[i]) { fixed2[i] = 1; val2[i] = obsDepth[i]; } nObsTex++; if (c > maxCnt) maxCnt = c; }
+            let k = 0, kS = 0, nK1 = 0, nK2 = 0, nK3 = 0, nCross = 0, nInt = 0;
+            for (let p = ob.head[i]; p >= 0 && k < tmp.length; p = ob.next[p]) { tmp[k] = ob.val[p];
+                const a = ob.lipA[p], b = ob.lipB[p], m = ob.meta[p], kd = m & 3;
+                tD[k] = b >= 0 ? Math.min(a, b) : a; tN[k] = b >= 0 ? Math.max(a, b) : a; tR[k] = ob.lipA0[p] - a;
+                if (b >= 0) tS[kS++] = Math.abs(a - b);
+                if (kd === 1) nK1++; else if (kd === 2) { nK2++; if (m & 16) nInt++; } else nK3++; if (m & 4) nCross++; k++; }
+            const med = medOf(tmp, k);
+            obsDepth[i] = Math.min(med, dQ[i]); if (!rim[i]) { fixed2[i] = 1; val2[i] = obsDepth[i]; } nObsTex++; if (c > maxCnt) maxCnt = c;
+            lipDeep[i] = medOf(tD, k); lipNear[i] = medOf(tN, k); lipSpread[i] = medOf(tS, kS); rampDrop[i] = medOf(tR, k); crossFrac[i] = nCross / k;
+            // kind 1 continuous, 2 interior step (A253: most step samples had both lips in one object), 7 extent step, 3 single lip; without the object rule every step is 2
+            kindTex[i] = (nK1 >= nK2 && nK1 >= nK3) ? 1 : (nK2 >= nK3 ? ((objId && nInt * 2 < nK2) ? 7 : 2) : 3); prov[i] = 1; }
         const merged = solveField(fixed2, val2);
+        for (let i = 0; i < N; i++) if (!prov[i] && !rim[i]) prov[i] = merged.clampMask[i] ? 3 : 2;   // A252: 2 field solve, 3 clamped to the source
+        // A253 B1 THE LIP BOUND in the field: no band texel may carry a depth deeper than the deeper of its
+        // two lips less one source quantum (the surfaces beside the gap are the evidence; deeper than both
+        // is a pit nothing observed). Carried to unobserved texels by the same membrane (rims = source
+        // depth, observed texels = their deeper lip), so it is inert at the background rims and the
+        // surface near observed interior texels. Exported for the post-a126 floor (B2) in the bake.
+        let nBound = 0, sBound = 0;
+        if (window._plugObjectRule || window._geoLipBound) {
+            const qNb = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
+            const fixedB = new Uint8Array(N), valB = new Float32Array(N);
+            for (let i = 0; i < N; i++) { if (rim[i]) { fixedB[i] = 1; valB[i] = dQ[i]; } else if (ob.cnt[i] > 0 && lipDeep[i] >= 0) { fixedB[i] = 1; valB[i] = Math.min(lipDeep[i], dQ[i]); } }
+            const bres = solveField(fixedB, valB); const bnd = bres.field;
+            for (let i = 0; i < N; i++) { if (rim[i]) continue; const lim = Math.min(bnd[i] - qNb, dQ[i]); if (merged.field[i] < lim) { sBound += lim - merged.field[i]; merged.field[i] = lim; prov[i] = 4; nBound++; } }
+            window._geoLipBoundField = bnd;
+            console.log('[A253] lip bound in the field: ' + nBound + ' texels raised (mean ' + (nBound ? (sBound / nBound).toFixed(4) : '0') + '); bound membrane ' + bres.cycles + ' cycles, err ' + bres.err.toFixed(4));
+        } else window._geoLipBoundField = null;
+        window._geoLipDeep = lipDeep; window._geoLipNear = lipNear; window._geoLipSpread = lipSpread; window._geoKind = kindTex; window._geoProv = prov; window._geoRampDrop = rampDrop; window._geoCrossFrac = crossFrac;
         window._geoGateField = opts.gateAPriori ? farField.slice() : null;   // A246d: the tear gate may keep the a-priori field (A/B: the observed gate tears 24% more texels on the troll)
         for (let i = 0; i < N; i++) farField[i] = merged.field[i];          // the observed hidden depth field replaces the a-priori far field in place (all consumers read window._geoFarField)
         // A246 lip COLOUR term REMOVED (rule 7): the mean lip colour as a least-squares data term in the colour
         // membrane painted the band as a directional wallpaper on the troll (ghost index +11 points, anisotropy
         // 0.78) and scored worse than the membrane on the screen truth scene; the membrane's wash stays. Addendum 185.
         window._geoObsDepth = obsDepth; window._geoObsCount = ob.cnt;
-        obsStats = { samples: ob.samples, rampWalked: ob.ramp, twoLip: ob.twoLip, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
+        obsStats = { samples: ob.samples, rampWalked: ob.ramp, twoLip: ob.twoLip, continuous: ob.continuous, interior: ob.interior, extent: ob.extent, skirt: ob.skirt, objects: nObj, boundRaised: nBound, boundMean: nBound ? sBound / nBound : 0, texels: nObsTex, maxCount: maxCnt, geoFallback: ob.geo, selfCovered: ob.self, ambiguous: ob.ambiguous, outpaint: ob.out, fieldCycles: merged.cycles, fieldErr: merged.err, fieldClamped: merged.nClamp, ms: Date.now() - tO };
+        if (objId) console.log('[A253] gap classes per sample: continuous by slope ' + ob.continuous + ' (plus ' + ob.twoLip + ' equal-depth two-lip), interior step ' + ob.interior + ', extent step ' + ob.extent + (ob.skirt ? ' (skirt applied to ' + ob.skirt + ')' : ''));
         console.log('[A246] observed hidden layer: ' + ob.samples + ' lip samples (' + ob.ramp + ' walked down a blur ramp, ' + ob.twoLip + ' between two far lips) on ' + nObsTex + ' texels (max ' + maxCnt + ' per texel); cells with no far lip in frame ' + ob.geo + ' (far-field inversion), no step across the gap ' + ob.ambiguous + ', self-covered ' + ob.self + ', outpaint ' + ob.out +
             '; hidden depth field: rims + observed texels fixed, ' + merged.cycles + ' cycles, err ' + merged.err.toFixed(4) + ', ' + merged.nClamp + ' clamped; ' + obsStats.ms + 'ms');
         if (opts.regate !== false && !opts.gateAPriori && window._fragTear) {
@@ -8023,7 +8108,22 @@ window._plugGeoBand = function (opts) {
         if (!b) { const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && s1.revealTex[j]) { b = true; break; } }
         if (b) { band[i] = 1; nB++; } if (b && dis1[i]) nKeep++; else if (b) nAdd++; else if (dis1[i]) nDrop++; }
     window._bandReplace = band;
+    // A252 per-texel CLASS: 1 interior-continuous (observed, two-lip majority), 2 step (observed, far lip
+    // taken), 3 single lip (observed, no near lip in frame), 4 fallback (revealed, never observed: the
+    // far-field inversion), 5 pinhole, 6 the +1 dilation. 0 = not band.
+    const geoClass = new Uint8Array(N); { const kt = window._geoKind, oc = window._geoObsCount || (s1.obs && s1.obs.cnt);
+        for (let i = 0; i < N; i++) { if (!band[i]) continue;
+            if (oc && oc[i] > 0 && kt) geoClass[i] = kt[i]; else if (s1.revealTex[i]) geoClass[i] = 4; else if (s1.seen[i] && torn && torn[i]) geoClass[i] = 5; else geoClass[i] = 6; } }
+    window._geoClass = geoClass;
     bgQuickBake = true; buildBackgroundLayer();                                   // pass 2: the band from the far field, depth = the far field
+    // A252 post-field drop: what the passes after the field (a135 / a162 / a126 ...) did to the band's depth
+    // (field - plate; positive = the plate was pushed deeper). Provenance 5 where it exceeds the quantum.
+    const geoPost = new Float32Array(N); let nPost = 0, sPost = 0; { const pF2 = window._qbPlateF, pv = window._geoProv; const qN2 = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
+        if (pF2 && pF2.length === N) for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!band[i]) continue; const d = farField[i] - pF2[(ph - 1 - y) * pw + x]; geoPost[i] = d; if (d > qN2) { nPost++; sPost += d; if (pv) pv[i] = 5; } } }
+    window._geoPost = geoPost;
+    { const h = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N; i++) h[geoClass[i]]++;
+      console.log('[A252] band classes: continuous ' + h[1] + ', ' + (objId ? 'interior ' : '') + 'step ' + h[2] + (objId ? ', extent step ' + h[7] : '') + ', single-lip ' + h[3] + ', fallback ' + h[4] + ', pinhole ' + h[5] + ', dilation ' + h[6] + '; plate pushed deeper than the field after it on ' + nPost + ' band texels (mean ' + (nPost ? (sPost / nPost).toFixed(4) : '0') + ')');
+      if (obsStats) { obsStats.classes = h; obsStats.postDeeper = nPost; obsStats.postMean = nPost ? sPost / nPost : 0; } }
     const s2 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary });
     let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
     const stats = { pw, ph, poses: s1.poses, observed, obs: obsStats, boundary: !!opts.boundary, rims: nRim, farFieldCycles: mgF.sweeps[0][1], farFieldErr: mgF.residual / 255, farFieldClamped: nClampF, farFieldMs: msF,
@@ -14052,6 +14152,15 @@ function bgBuildBackgroundLayerCore() {
                     const pxF = cxF.getImageData(0, 0, pw, ph);
                     const cd = pxF.data;
                     const TOLB = fgTearStep;
+                    // A255 (window._geoLipSeed): a CONTINUOUS gap texel (A253 class 1, both lips one surface) admits
+                    // seeds from BOTH lips — its gate is its own lip spread plus the source quantum; every other
+                    // texel keeps the cliff step. The wall behind its own glancing edge is then coloured by the wall
+                    // on both sides of the gap instead of the far side only.
+                    const _clsS = (window._geoLipSeed && window._geoClass && window._geoClass.length === PNq) ? window._geoClass : null;
+                    const _sprS = (_clsS && window._geoLipSpread && window._geoLipSpread.length === PNq) ? window._geoLipSpread : null;
+                    const _qS = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+                    const _skirtS = window._plugExtent === 'skirt';   // an EXTENT texel under the skirt arm carries the interpolated depth too, so it is coloured from both lips the same way (the A215 two-sided blend, in membrane form)
+                    const tolAt = (j) => (_sprS && (_clsS[j] === 1 || (_skirtS && _clsS[j] === 7)) && _sprS[j] > 0) ? Math.max(TOLB, _sprS[j] + _qS) : TOLB;
                     const state = new Uint8Array(PNq);           // 0 unvisited band, 1 resolved, 2 not-band
                     const q1 = new Int32Array(PNq); let qh = 0, qt = 0;
                     // seeds: non-band texels adjacent to the band whose REAL depth
@@ -14067,7 +14176,7 @@ function bgBuildBackgroundLayerCore() {
                         const cN = [x > 0 ? i-1 : -1, x < pw-1 ? i+1 : -1, y > 0 ? i-pw : -1, y < ph-1 ? i+pw : -1];
                         for (const j of cN) {
                             if (j < 0 || !disocc[j] || state[j] !== 0) continue;
-                            if (Math.abs(plateQ[j] - dQ[i]) <= TOLB) tryPush(j, cd[i*4], cd[i*4+1], cd[i*4+2]);
+                            if (Math.abs(plateQ[j] - dQ[i]) <= tolAt(j)) tryPush(j, cd[i*4], cd[i*4+1], cd[i*4+2]);
                         }
                     }
                     let nGated = qt;
@@ -14076,7 +14185,7 @@ function bgBuildBackgroundLayerCore() {
                         const cN = [x > 0 ? i-1 : -1, x < pw-1 ? i+1 : -1, y > 0 ? i-pw : -1, y < ph-1 ? i+pw : -1];
                         for (const j of cN) {
                             if (j < 0 || state[j] !== 0) continue;
-                            if (Math.abs(plateQ[j] - plateQ[i]) <= TOLB) tryPush(j, cd[i*4], cd[i*4+1], cd[i*4+2]);
+                            if (Math.abs(plateQ[j] - plateQ[i]) <= tolAt(j)) tryPush(j, cd[i*4], cd[i*4+1], cd[i*4+2]);
                         }
                     }
                     nGated = qt;
@@ -14165,8 +14274,8 @@ function bgBuildBackgroundLayerCore() {
                             const cN = [x > 0 ? i-1 : -1, x < pw-1 ? i+1 : -1, y > 0 ? i-pw : -1, y < ph-1 ? i+pw : -1];
                             let touchesRim = false;
                             for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0) continue;
-                                if (state[j] === 2) { if (Math.abs(plateQ[i] - dQ[j]) <= TOLB) { nb[k*4+s] = j; nbSrc[k*4+s] = 1; touchesRim = true; } }
-                                else if (state[j] === 1 && Math.abs(plateQ[i] - plateQ[j]) <= TOLB) { nb[k*4+s] = j; } }
+                                if (state[j] === 2) { if (Math.abs(plateQ[i] - dQ[j]) <= tolAt(i)) { nb[k*4+s] = j; nbSrc[k*4+s] = 1; touchesRim = true; } }
+                                else if (state[j] === 1 && Math.abs(plateQ[i] - plateQ[j]) <= tolAt(i)) { nb[k*4+s] = j; } }
                             if (touchesRim) { dRim[k] = 0; qd[dt++] = k; }
                         }
                         // domain extent = twice the deepest texel's distance from the rim (the SOR L)
@@ -14203,12 +14312,12 @@ function bgBuildBackgroundLayerCore() {
                         // neighbours (eq. 7 of the paper), a constant on the right-hand side.
                         let nMirror = 0;
                         if (window._plugGuided) {
-                            const nearPlateG = new Float32Array(PNq).fill(-1); const qg = new Int32Array(PNq); let gh = 0, gt = 0;
-                            for (let i = 0; i < PNq; i++) if (disocc[i]) { nearPlateG[i] = plateQ[i]; qg[gt++] = i; }
-                            while (gh < gt) { const i = qg[gh++]; const x = i % pw, y = (i / pw) | 0; const v = nearPlateG[i];
-                                if (x > 0 && nearPlateG[i - 1] < 0) { nearPlateG[i - 1] = v; qg[gt++] = i - 1; } if (x < pw - 1 && nearPlateG[i + 1] < 0) { nearPlateG[i + 1] = v; qg[gt++] = i + 1; }
-                                if (y > 0 && nearPlateG[i - pw] < 0) { nearPlateG[i - pw] = v; qg[gt++] = i - pw; } if (y < ph - 1 && nearPlateG[i + pw] < 0) { nearPlateG[i + pw] = v; qg[gt++] = i + pw; } }
-                            const seedG = new Uint8Array(PNq); for (let i = 0; i < PNq; i++) if (!disocc[i] && Math.abs(dQ[i] - nearPlateG[i]) <= TOLB) seedG[i] = 1;
+                            const nearPlateG = new Float32Array(PNq).fill(-1); const nearTolG = new Float32Array(PNq); const qg = new Int32Array(PNq); let gh = 0, gt = 0;
+                            for (let i = 0; i < PNq; i++) if (disocc[i]) { nearPlateG[i] = plateQ[i]; nearTolG[i] = tolAt(i); qg[gt++] = i; }
+                            while (gh < gt) { const i = qg[gh++]; const x = i % pw, y = (i / pw) | 0; const v = nearPlateG[i], tv = nearTolG[i];
+                                if (x > 0 && nearPlateG[i - 1] < 0) { nearPlateG[i - 1] = v; nearTolG[i - 1] = tv; qg[gt++] = i - 1; } if (x < pw - 1 && nearPlateG[i + 1] < 0) { nearPlateG[i + 1] = v; nearTolG[i + 1] = tv; qg[gt++] = i + 1; }
+                                if (y > 0 && nearPlateG[i - pw] < 0) { nearPlateG[i - pw] = v; nearTolG[i - pw] = tv; qg[gt++] = i - pw; } if (y < ph - 1 && nearPlateG[i + pw] < 0) { nearPlateG[i + pw] = v; nearTolG[i + pw] = tv; qg[gt++] = i + pw; } }
+                            const seedG = new Uint8Array(PNq); for (let i = 0; i < PNq; i++) if (!disocc[i] && Math.abs(dQ[i] - nearPlateG[i]) <= nearTolG[i]) seedG[i] = 1;   // A255: the nearest band texel's tolerance
                             // nearest seed per band texel: multi-source BFS from the seeds into the band
                             const nearSeed = new Int32Array(PNq).fill(-1); gh = 0; gt = 0;
                             for (let i = 0; i < PNq; i++) if (seedG[i]) { nearSeed[i] = i; qg[gt++] = i; }
@@ -14794,6 +14903,25 @@ function bgBuildBackgroundLayerCore() {
                         console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + _moved + ' texels lowered of ' + PNq +
                                     ' (' + (100*_moved/Math.max(1,PNq)).toFixed(2) + '%), max ' + _maxMove.toFixed(4) +
                                     ' depth, step = ' + _st.toFixed(5) + '/texel (k=' + _kPl.toFixed(0) + '), ' + (Date.now()-_t0P) + 'ms');
+                    }
+                    // A253 B2 THE LIP FLOOR after the ordering and slope passes (window._geoLipFloor, or the object rule).
+                    // The A252 instrument measured on the troll that the observed lip depths are right (the observation
+                    // is below the deeper lip on 77 of 303 732 texels) and that the plate is pushed BELOW the deeper lip
+                    // afterwards on 108 k band texels — by a162's cross-texel ordering (the plug may never occlude any
+                    // source texel) and a126's slope limit. That invariant assumed the plug is always the farthest
+                    // thing; an interior fill (the thigh behind the calf, the wall behind its own glancing edge) is
+                    // nearer than the background source texels beside it and MAY occlude them — the thigh is in front
+                    // of the cave. The invariant becomes: the plug may not occlude source texels of the surface it
+                    // continues (the same-texel clamp behind the source, kept), and not be deeper than the deeper lip
+                    // of the gap it fills (this floor). Floored steps are steps the plate carries as stretched quads
+                    // (or tears, under the plate-tear arm); measured by p0_depthviews and the plug-only shots.
+                    if ((window._geoLipFloor || window._plugObjectRule) && window._geoLipBoundField && window._geoLipBoundField.length === PNq && plateF) {
+                        const bndF = window._geoLipBoundField, clsF = window._geoClass; const qF = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+                        let nFl = 0, sFl = 0, mxFl = 0; const onlyObs = window._geoLipFloor === 2;   // 2: floor only the observed classes (1/2/3/7), else every band texel the bound membrane reaches
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw + x; if (!disocc[i]) continue; if (onlyObs && clsF && !(clsF[i] === 1 || clsF[i] === 2 || clsF[i] === 3 || clsF[i] === 7)) continue;
+                            const f = (ph-1-y)*pw + x; const lim = Math.min(bndF[i] - qF, dQ[i] - qF); if (plateF[f] < lim) { const m = lim - plateF[f]; sFl += m; if (m > mxFl) mxFl = m; plateF[f] = lim; nFl++; } }
+                        plateDT.needsUpdate = true;
+                        console.log('[A253] lip floor after a126: ' + nFl + ' band texels raised to the deeper lip - q (mean ' + (nFl ? (sFl / nFl).toFixed(4) : '0') + ', max ' + mxFl.toFixed(4) + ')' + (onlyObs ? ' [observed classes only]' : ''));
                     }
                 } else if (window._noPlateTear !== true) {
                     const gpP = L.mesh.geometry.parameters || {};

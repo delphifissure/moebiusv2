@@ -42,8 +42,8 @@ const checker = (x, y, p, a, b) => (((Math.floor(x / p) + Math.floor(y / p)) & 1
 const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
-// scene: far(x,y) -> {d, rgb}; near(x,y) -> {d, rgb} | null
-function build(name, far, near, notes) {
+// scene: far(x,y) -> {d, rgb}; near(x,y) -> {d, rgb} | null; gapClass(x,y) -> 0|1|2|3 (A253: the class the hidden texel belongs to)
+function build(name, far, near, notes, gapClass) {
     const N = W * H;
     const farD = new Float32Array(N), farC = new Uint8Array(N * 3), nearM = new Uint8Array(N);
     const compD = new Float32Array(N), compC = new Uint8Array(N * 3);
@@ -68,7 +68,10 @@ function build(name, far, near, notes) {
     fs.writeFileSync(path.join(OUT, name + '_near_mask.u8'), Buffer.from(nearM.buffer));
     fs.writeFileSync(path.join(OUT, name + '_comp_depth.f32'), Buffer.from(compD.buffer));   // the true composite depth (near where the occluder is, far elsewhere)
     let nNear = 0; for (let i = 0; i < N; i++) nNear += nearM[i];
-    fs.writeFileSync(path.join(OUT, name + '_truth.json'), JSON.stringify({ name, w: W, h: H, rwd: RWD, nearTexels: nNear, notes, files: { color: name + '_color.png', depth16: name + '_depth16.png', depth8: name + '_depth8.png', farDepth: name + '_far_depth.f32', farRGB: name + '_far_rgb.u8', nearMask: name + '_near_mask.u8' } }, null, 1));
+    const files = { color: name + '_color.png', depth16: name + '_depth16.png', depth8: name + '_depth8.png', farDepth: name + '_far_depth.f32', farRGB: name + '_far_rgb.u8', nearMask: name + '_near_mask.u8' };
+    if (gapClass) { const gc = new Uint8Array(N); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; gc[i] = nearM[i] ? gapClass(x, y) : 0; }
+        fs.writeFileSync(path.join(OUT, name + '_gapclass.u8'), Buffer.from(gc.buffer)); files.gapClass = name + '_gapclass.u8'; }
+    fs.writeFileSync(path.join(OUT, name + '_truth.json'), JSON.stringify({ name, w: W, h: H, rwd: RWD, nearTexels: nNear, notes, files }, null, 1));
     console.log(name + ': ' + W + 'x' + H + ', occluder ' + nNear + ' texels (' + (100 * nNear / N).toFixed(1) + '%), RWD ' + RWD);
 }
 
@@ -107,4 +110,30 @@ function build(name, far, near, notes) {
     const far = (x, y) => { const d = 0.12 + 0.30 * (x / W) + 0.05 * (y / H); const t = x / W, u = y / H; return { d, rgb: [Math.round(60 + 150 * t), Math.round(90 + 100 * u), Math.round(200 - 120 * t)] }; };
     const near = (x, y) => { const cx = 0.46 * W, hw = 5; if (Math.abs(x - cx) > hw || y < 0.05 * H) return null; return { d: 0.82, rgb: [30, 30, 34] }; };
     build('pole', far, near, 'thin pole before a smooth gradient; hidden = a 11-px strip of a smooth surface');
+}
+// S4 FOLD (A253): the three gap classes side by side with their hidden depth known.
+//   far layer  = a textured wall receding to the right (d = 0.45 - 0.35 x/W) with a horizontal "thigh" bar
+//                at constant depth 0.50 in front of it (y in [0.55, 0.70] H);
+//   near layer = (a) a RIDGE on the wall, x in [0.28, 0.46] W, at the wall's depth at its left edge: the wall's
+//                own near edge, so the gap behind it is the SAME surface continuing (class 1, continuous; the two
+//                lips differ by 0.35 * 0.18 = 0.063 > the cliff step, so only the slope test can join them);
+//                (b) a vertical "calf" bar, x in [0.62, 0.72] W, y in [0.30, 0.95] H, at depth 0.60: over the thigh
+//                it hides the same object's far part (class 2, interior step); over the wall it hides the
+//                background (class 3, extent).
+{
+    const wallD = (x) => 0.45 - 0.35 * (x / W);
+    const inThigh = (y) => y >= 0.55 * H && y <= 0.70 * H;
+    const far = (x, y) => {
+        if (inThigh(y)) { const s = ((Math.floor((x + 2 * y) / 22)) & 1) ? [190, 150, 110] : [150, 110, 80]; return { d: 0.50, rgb: s }; }
+        const c = checker(x, y, 24, [170, 170, 180], [90, 95, 110]); const t = 0.5 + 0.5 * Math.sin(y / 70); return { d: wallD(x), rgb: mix(c, [200, 120, 90], 0.35 * t).map(Math.round) };
+    };
+    const inRidge = (x, y) => x >= 0.28 * W && x <= 0.46 * W && y >= 0.05 * H && y <= 0.50 * H;
+    const inCalf = (x, y) => x >= 0.62 * W && x <= 0.72 * W && y >= 0.30 * H && y <= 0.95 * H;
+    const near = (x, y) => {
+        if (inCalf(x, y)) return { d: 0.60, rgb: [60 + 10 * ((x + y) % 3), 50, 70] };
+        if (inRidge(x, y)) { const c = checker(x, y, 24, [170, 170, 180], [90, 95, 110]); const t = 0.5 + 0.5 * Math.sin(y / 70); return { d: wallD(0.28 * W - 1) + 0.001, rgb: mix(c, [200, 120, 90], 0.35 * t).map(Math.round) }; }
+        return null;
+    };
+    const gapClass = (x, y) => inCalf(x, y) ? (inThigh(y) ? 2 : 3) : (inRidge(x, y) ? 1 : 0);
+    build('fold', far, near, 'A253 classes: ridge on a receding wall (continuous), calf over thigh (interior step), calf over wall (extent)', gapClass);
 }
