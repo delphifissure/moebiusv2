@@ -6597,6 +6597,10 @@ function renderNormalizedDepthPass() {
                             // the black bars beside a non-matching aspect are then the A171 aperture crop
                             // of the colour pass, which the depth pass does not apply — the margin IS there.)
                             if (u_restClip.x > 0.0) { vec2 ndcR = vClip.xy / max(vClip.w, 1e-6); if (abs(ndcR.x) > u_restClip.x || abs(ndcR.y) > u_restClip.y) discard; }
+                            // A257c: the colour pass discards alpha-0 texels (beyond-frame plug texels by the a214
+                            // contract; every texel without a back on the A257 object-back layer). The depth pass
+                            // drew them as cover — the back layer then covered the whole plate at its fill depth.
+                            if (texture2D(map, vUv).a < 0.01) discard;
                             gl_FragColor = vec4(vec3(vNormalizedDepth), 1.0);
                             return;
                         }
@@ -8103,18 +8107,28 @@ window._plugGeoBand = function (opts) {
         const fDT = new Float32Array(N); for (let i = 0; i < N; i++) fDT[i] = -Math.min(gCol[i], 1e12);   // −dist²
         for (let y = 0; y < ph; y++) dt1d(fDT, pw, gRow, vB, zB, 1, y * pw);
         for (let x = 0; x < pw; x++) dt1d(gRow, ph, gCol, vB, zB, pw, x);
-        const gp0i = L.mesh.geometry.parameters; const w0i = gp0i ? gp0i.width : 1; const Dref = (typeof camera !== 'undefined' && camera) ? Math.max(1e-3, Math.abs(camera.position.z - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0))) : 0.2;
-        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0, sHalf = 0, nInfl = 0, nMirror = 0;
+        // the plate's world width and the portal distance by the same law as bgShiftLUTFor (the window-fit layer width)
+        const laI = pw / ph, faI = terrariumWidth / terrariumHeight; const w0i = (laI > faI) ? terrariumWidth : terrariumHeight * laI;
+        const Dref = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
+        const backD = new Float32Array(N).fill(-1); let nBack = 0, sThick = 0, nThick = 0, sHalf = 0, nInfl = 0, nMirror = 0, nClampFar = 0, nClampFront = 0;
+        const backMode = new Uint8Array(N), backPlane = new Float32Array(N).fill(-1), backH = new Float32Array(N);   // harness: 1 inflation, 2 mirrored bulge, +4 clamped to the far field, +8 clamped to the front
         for (let i = 0; i < N; i++) { if (dist[i] <= 0) continue;
             const zc = plane[i] * zSpan - outerZ, zf = zOf(dQ[i]), zfar = zOf(farField[i]);
             const hTex = Math.sqrt(Math.max(0, -gCol[i]));                                   // half thickness, texels
             const texelWorld = (w0i / pw) * Math.max(0.05, (Dref - zc) / Dref);              // world per texel at the plane's depth
             const hW = hTex * texelWorld, bulge = zf - zc;
-            let zb; if (bulge > hW) { zb = zc - bulge; nMirror++; } else { zb = zc - hW; nInfl++; }
-            if (zb < zfar) zb = zfar; if (zb > zf) zb = zf;
+            let zb, mode; if (bulge > hW) { zb = zc - bulge; nMirror++; mode = 2; } else { zb = zc - hW; nInfl++; mode = 1; }
+            backMode[i] = mode; backPlane[i] = dOfZ(zc); backH[i] = hW;
+            // A257c: where the inflated side has reached the a-priori background there is no side to add — the plug's
+            // far field is the surface there, so such texels carry no back. (The probe on the troll: half of the mask
+            // was this case. The floor and both cave walls are in the rest-silhouette mask because the far-field
+            // membrane sags under any large continuous surface that has no rims, and their "backs" were that sagging,
+            // terraced far field — the terraces the composite showed beside the woman.)
+            if (zb < zfar) { nClampFar++; backMode[i] |= 4; continue; }
+            if (zb > zf) { zb = zf; nClampFront++; backMode[i] |= 8; }
             backD[i] = dOfZ(zb); nBack++; sHalf += hW; if (zf - zb > 1e-6) { sThick += zf - zb; nThick++; } }
-        window._geoBackDepth = backD; window._geoBackDist = dist;
-        console.log('[A257] object backs (inflation): ' + nBack + ' texels in ' + nObj + ' objects; mean half-thickness ' + (nBack ? (sHalf / nBack).toFixed(4) : '0') + ' world (z span ' + zSpan.toFixed(3) + ', D ' + Dref.toFixed(3) + '); inflation set the back on ' + nInfl + ', the front’s own bulge on ' + nMirror + '; mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + '; ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
+        window._geoBackDepth = backD; window._geoBackDist = dist; window._geoBackMode = backMode; window._geoBackPlane = backPlane; window._geoBackH = backH;
+        console.log('[A257] object backs (inflation): ' + nBack + ' texels with a back in ' + nObj + ' objects; mean half-thickness ' + (nBack ? (sHalf / nBack).toFixed(4) : '0') + ' world (z span ' + zSpan.toFixed(3) + ', D ' + Dref.toFixed(3) + '); inflation set the back on ' + nInfl + ', the front’s own bulge on ' + nMirror + '; mean front−back ' + (nThick ? (sThick / nThick).toFixed(4) : '0') + '; no back where the side reaches the far field: ' + nClampFar + ' texels; clamped to the front on ' + nClampFront + '; ring at ' + (RWDo + 1) + ' texels; ' + (Date.now() - tB0) + 'ms');
     }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
@@ -15369,8 +15383,10 @@ function bgBuildBackgroundLayerCore() {
             // plug is behind it — the object's side — and the plug everywhere else.
             if (window._plugBack && window._geoBackDepth && window._geoBackDepth.length === PNq) {
                 try {
-                    const bd = window._geoBackDepth; const backF = new Float32Array(PNq); let nB = 0;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const v = bd[i]; backF[(ph - 1 - y) * pw + x] = v >= 0 ? v : 0; if (v >= 0) nB++; }
+                    const bd = window._geoBackDepth; const backF = new Float32Array(PNq); let nB = 0; const ffB = window._geoFarField;
+                    // texels without a back (outside objects, or where the side reaches the far field — A257c) are alpha 0;
+                    // their displacement takes the far field so the mesh stays continuous under the linear filter
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const v = bd[i]; backF[(ph - 1 - y) * pw + x] = v >= 0 ? v : ((ffB && ffB.length === PNq) ? ffB[i] : 0); if (v >= 0) nB++; }
                     const backDT = new THREE.DataTexture(backF, pw, ph, THREE.RedFormat, THREE.FloatType);
                     backDT.needsUpdate = true; backDT.flipY = false; backDT.minFilter = THREE.LinearFilter; backDT.magFilter = THREE.LinearFilter; if ('colorSpace' in backDT) backDT.colorSpace = THREE.NoColorSpace;
                     const cImgB = (L.elements && L.elements.color) || L.textures.color.image;

@@ -74,6 +74,14 @@ const Z = 0.199;
             // A257: the composite WITHOUT the object-back layer, to tint where the back wins
             const backM = (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) || null; let dNoB = null;
             if (backM) { backM.visible = false; renderNormalizedDepthPass(); dNoB = depthPanel().getContext('2d').getImageData(0, 0, W, Hh).data; backM.visible = true; }
+            // BACKONLY=1: the back layer alone (FG, plug and ring hidden), and the same with its per-fragment tear off
+            if (backM && o.backOnly) {
+                for (const m of fgMeshes) m.visible = false; bgLayerMesh.visible = false; const ringM = bgLayerMesh.userData.ring; if (ringM) ringM.visible = false;
+                renderNormalizedDepthPass(); shots['depthBack_' + name] = depthPanel().toDataURL('image/png');
+                const uT = backM.material.uniforms.u_fragTear; const saved = uT ? uT.value : null; if (uT) uT.value = 0;
+                renderNormalizedDepthPass(); shots['depthBackNoTear_' + name] = depthPanel().toDataURL('image/png'); if (uT) uT.value = saved;
+                for (const m of fgMeshes) m.visible = true; bgLayerMesh.visible = true; if (ringM) ringM.visible = true;
+            }
             _depthPassIncludeBG = false; renderNormalizedDepthPass();
             const dFG = cFG.getContext('2d').getImageData(0, 0, W, Hh).data, dPl = cPlug.getContext('2d').getImageData(0, 0, W, Hh).data, dAll = cAll.getContext('2d').getImageData(0, 0, W, Hh).data;
             // who-wins panel: FG grey, plug green-tinted, object back CYAN, nothing red
@@ -93,7 +101,7 @@ const Z = 0.199;
         }
         camera.position.set(0, 0, o.z); updateCameraAndProjection(); render();
         return { bakeMs, W, Hh, shots, stats };
-    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, v2: process.env.MODE === 'v2', nobake: !!process.env.NOBAKE, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
+    }, { poses: POSES, z: Z, flush: !!process.env.FLUSH, geo: !!process.env.GEO, obs: !!process.env.OBS, gateA: !!process.env.GATEA, v2: process.env.MODE === 'v2', nobake: !!process.env.NOBAKE, backOnly: !!process.env.BACKONLY, flags: (process.env.FLAGS || '').split(',').filter(Boolean) });
     for (const k of Object.keys(res.shots)) fs.writeFileSync(path.join(OUT, ARM + '_' + k + '.png'), Buffer.from(res.shots[k].split(',')[1], 'base64'));
     fs.writeFileSync(path.join(OUT, ARM + '_stats.json'), JSON.stringify(res.stats, null, 1));
     console.log(`${TAG} [${ARM}${process.env.FLUSH ? ',flush' : ''}] bake ${res.bakeMs} ms, depth pass ${res.W}x${res.Hh}`);
