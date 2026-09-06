@@ -14200,7 +14200,7 @@ function bgBuildBackgroundLayerCore() {
                             // continuous with the far side there), deep in the band only detail finer than the
                             // distance to the rim, the membrane supplying everything coarser. No constant: d is the
                             // band geometry in texels.
-                            window._a249M = M; window._a249nMirror = nMirror;
+                            window._a249M = M; window._a249nMirror = nMirror; window._a249Seed = nearSeed;
                         }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
                         const mg = bgMembraneSolve(lv, TOLC, 60);   // A246f cycle-cap A/B removed (rule 7): 300 cycles took the observed-depth domain from 21 to 6.6/255 and changed nothing the instruments or the screen resolve (ghost 39.8 -> 39.5, seam 10.20 -> 10.20); Addendum 185
@@ -14222,12 +14222,25 @@ function bgBuildBackgroundLayerCore() {
                             const sampleL = (L, x, y, out) => { const p = pyr[L]; const sc = 1 << L; const gx = (x + 0.5) / sc - 0.5, gy = (y + 0.5) / sc - 0.5; const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0; let sr = 0, sg = 0, sb = 0, sw = 0;
                                 for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const cx = Math.max(0, Math.min(p.lw - 1, x0 + dx)), cy = Math.max(0, Math.min(p.lh - 1, y0 + dy)); const o = cy * p.lw + cx; const k = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * p.w[o]; sr += p.r[o] * k; sg += p.g[o] * k; sb += p.b[o] * k; sw += k; }
                                 if (sw <= 0) return false; out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw; return true; };
+                            // A249c: mirror-cell borders (a band texel whose 4-neighbour reflects through a seed more than two
+                            // texels away is on a border) — the mirrored detail is feathered to zero at the border over the
+                            // texel's own rim distance d (the same scale as its low-pass; no constant), so two different
+                            // reflected patches never meet with a step.
+                            const nearSeedF = window._a249Seed; window._a249Seed = null;
+                            const bdist = new Int32Array(PNq).fill(-1); const qb2 = new Int32Array(PNq); let bh = 0, bt = 0;
+                            for (let k = 0; k < qt2; k++) { const i = q2[k]; const si = nearSeedF[i]; if (si < 0) continue; const x = i % pw, y = (i / pw) | 0;
+                                const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+                                for (const j of nbs) { if (j < 0 || !disocc[j]) continue; const sj = nearSeedF[j]; if (sj < 0) continue; const dsx = (si % pw) - (sj % pw), dsy = ((si / pw) | 0) - ((sj / pw) | 0);
+                                    if (dsx * dsx + dsy * dsy > 4) { bdist[i] = 0; qb2[bt++] = i; break; } } }
+                            while (bh < bt) { const i = qb2[bh++]; const x = i % pw, y = (i / pw) | 0; const dv = bdist[i] + 1;
+                                const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+                                for (const j of nbs) if (j >= 0 && disocc[j] && bdist[j] < 0) { bdist[j] = dv; qb2[bt++] = j; } }
                             const lo = [0, 0, 0], lo2 = [0, 0, 0]; let nHP = 0;
                             for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; if (isNaN(M[i*3])) continue;
-                                const d = Math.max(1, dRim[k]); const Lf = Math.log2(d); const L0 = Math.min(pyr.length - 1, Math.floor(Lf)), L1 = Math.min(pyr.length - 1, L0 + 1); const t = Math.min(1, Math.max(0, Lf - L0));
+                                const d = Math.max(1, dRim[k]); const fw = bdist[i] < 0 ? 1 : Math.min(1, bdist[i] / d); const Lf = Math.log2(d); const L0 = Math.min(pyr.length - 1, Math.floor(Lf)), L1 = Math.min(pyr.length - 1, L0 + 1); const t = Math.min(1, Math.max(0, Lf - L0));
                                 const x = i % pw, y = (i / pw) | 0; if (!sampleL(L0, x, y, lo)) continue; if (!sampleL(L1, x, y, lo2)) { lo2[0] = lo[0]; lo2[1] = lo[1]; lo2[2] = lo[2]; }
                                 const lr = lo[0] * (1 - t) + lo2[0] * t, lg = lo[1] * (1 - t) + lo2[1] * t, lb = lo[2] * (1 - t) + lo2[2] * t;
-                                cd[i*4] = Math.max(0, Math.min(255, cd[i*4] + (M[i*3] - lr))); cd[i*4+1] = Math.max(0, Math.min(255, cd[i*4+1] + (M[i*3+1] - lg))); cd[i*4+2] = Math.max(0, Math.min(255, cd[i*4+2] + (M[i*3+2] - lb))); nHP++; }
+                                cd[i*4] = Math.max(0, Math.min(255, cd[i*4] + fw * (M[i*3] - lr))); cd[i*4+1] = Math.max(0, Math.min(255, cd[i*4+1] + fw * (M[i*3+1] - lg))); cd[i*4+2] = Math.max(0, Math.min(255, cd[i*4+2] + fw * (M[i*3+2] - lb))); nHP++; }
                             console.log('[QUICK-BAKE] A249b guided membrane: ' + window._a249nMirror + ' band texels with a mirrored far-side source, ' + nHP + ' took the mirrored detail above their rim distance over the membrane (' + pyr.length + ' pyramid levels)');
                         }
                     } else {
@@ -14299,6 +14312,10 @@ function bgBuildBackgroundLayerCore() {
             const matQ = L.mesh.material.clone();
             matQ.uniforms.displacementMap.value = plateDT;
             matQ.uniforms.map.value = plateColorTex || bgColorTarget.texture;
+            // A250 (window._plugRingMirror, measured arm): the A245 ring reads UVs past [0,1]; clamp-to-edge streaks the
+            // edge texel across the margin. Mirrored repeat continues the frame's texture by reflection — the frame edge
+            // treated as a rim, the same continuation A249 gives the band. Colour only; the displacement keeps clamping.
+            if (window._plugRingMirror && plateColorTex) { plateColorTex.wrapS = THREE.MirroredRepeatWrapping; plateColorTex.wrapT = THREE.MirroredRepeatWrapping; plateColorTex.needsUpdate = true; }
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
             // A59f: the plug is hole-only (renders only where the FG is torn away),
