@@ -14226,7 +14226,7 @@ function bgBuildBackgroundLayerCore() {
                             // texels away is on a border) — the mirrored detail is feathered to zero at the border over the
                             // texel's own rim distance d (the same scale as its low-pass; no constant), so two different
                             // reflected patches never meet with a step.
-                            const nearSeedF = window._a249Seed; window._a249Seed = null;
+                            const nearSeedF = window._a249Seed; window._a249Seed = null; const RWDf = Math.max(1, Math.round(4 * pw / 1200));
                             const bdist = new Int32Array(PNq).fill(-1); const qb2 = new Int32Array(PNq); let bh = 0, bt = 0;
                             for (let k = 0; k < qt2; k++) { const i = q2[k]; const si = nearSeedF[i]; if (si < 0) continue; const x = i % pw, y = (i / pw) | 0;
                                 const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
@@ -14237,7 +14237,10 @@ function bgBuildBackgroundLayerCore() {
                                 for (const j of nbs) if (j >= 0 && disocc[j] && bdist[j] < 0) { bdist[j] = dv; qb2[bt++] = j; } }
                             const lo = [0, 0, 0], lo2 = [0, 0, 0]; let nHP = 0;
                             for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; if (isNaN(M[i*3])) continue;
-                                const d = Math.max(1, dRim[k]); const fw = bdist[i] < 0 ? 1 : Math.min(1, bdist[i] / d); const Lf = Math.log2(d); const L0 = Math.min(pyr.length - 1, Math.floor(Lf)), L1 = Math.min(pyr.length - 1, L0 + 1); const t = Math.min(1, Math.max(0, Lf - L0));
+                                // A249d: feather width = min(rim distance, RWD): over the rim distance (A249c) the feather ate most of the
+                                // detail (band texture 0.73 -> 0.24 on the troll) because mirror cells are small; a texture seam needs
+                                // only the smear window's width (RWD, 4/1200 of the width, Addendum 93) to disappear
+                                const d = Math.max(1, dRim[k]); const fw = bdist[i] < 0 ? 1 : Math.min(1, bdist[i] / Math.min(d, RWDf)); const Lf = Math.log2(d); const L0 = Math.min(pyr.length - 1, Math.floor(Lf)), L1 = Math.min(pyr.length - 1, L0 + 1); const t = Math.min(1, Math.max(0, Lf - L0));
                                 const x = i % pw, y = (i / pw) | 0; if (!sampleL(L0, x, y, lo)) continue; if (!sampleL(L1, x, y, lo2)) { lo2[0] = lo[0]; lo2[1] = lo[1]; lo2[2] = lo[2]; }
                                 const lr = lo[0] * (1 - t) + lo2[0] * t, lg = lo[1] * (1 - t) + lo2[1] * t, lb = lo[2] * (1 - t) + lo2[2] * t;
                                 cd[i*4] = Math.max(0, Math.min(255, cd[i*4] + fw * (M[i*3] - lr))); cd[i*4+1] = Math.max(0, Math.min(255, cd[i*4+1] + fw * (M[i*3+1] - lg))); cd[i*4+2] = Math.max(0, Math.min(255, cd[i*4+2] + fw * (M[i*3+2] - lb))); nHP++; }
