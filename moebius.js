@@ -8046,7 +8046,8 @@ window._plugGeoBand = function (opts) {
         // texel finally carries is compared with them offline (a252_lips.py) and by the class rule.
         const lipDeep = new Float32Array(N).fill(-1), lipNear = new Float32Array(N).fill(-1), lipSpread = new Float32Array(N).fill(-1), rampDrop = new Float32Array(N);
         const kindTex = new Uint8Array(N), prov = new Uint8Array(N); const crossFrac = new Float32Array(N);
-        const tD = new Float32Array(1024), tN = new Float32Array(1024), tS = new Float32Array(1024), tR = new Float32Array(1024);
+        const tD = new Float32Array(1024), tN = new Float32Array(1024), tS = new Float32Array(1024), tR = new Float32Array(1024), tD2 = new Float32Array(1024);
+        const lipNearMode = new Float32Array(N).fill(-1), lipNearFrac = new Float32Array(N);   // A253d
         const medOf = (a, k) => { if (!k) return -1; const arr = a.subarray(0, k).slice().sort(); return (k & 1) ? arr[k >> 1] : 0.5 * (arr[(k >> 1) - 1] + arr[k >> 1]); };
         for (let i = 0; i < N; i++) { fixed2[i] = rim[i]; val2[i] = dQ[i]; const c = ob.cnt[i]; if (!c) continue;
             let k = 0, kS = 0, nK1 = 0, nK2 = 0, nK3 = 0, nCross = 0, nInt = 0;
@@ -8055,7 +8056,21 @@ window._plugGeoBand = function (opts) {
                 tD[k] = b >= 0 ? Math.min(a, b) : a; tN[k] = b >= 0 ? Math.max(a, b) : a; tR[k] = ob.lipA0[p] - a;
                 if (b >= 0) tS[kS++] = Math.abs(a - b);
                 if (kd === 1) nK1++; else if (kd === 2) { nK2++; if (m & 16) nInt++; } else nK3++; if (m & 4) nCross++; k++; }
-            const med = medOf(tmp, k);
+            let med = medOf(tmp, k);
+            // A253d TWO HIDDEN LAYERS ON ONE TEXEL (the fold truth scene, 8-bit: under the calf in the thigh's rows the
+            // samples' far lips are the WALL on most texels — vertical poses reveal the wall behind the thigh's edge and
+            // invert into the same plate texels the horizontal poses need for the thigh). One texel can carry one depth.
+            // The nearest cluster of samples (within the cliff step of the nearest sample) is the layer directly behind
+            // the occluder at this texel; the farther cluster is a deeper layer seen past it. Recorded per texel (the
+            // near cluster's depth and its share); window._geoObsMode = 'near' makes the near cluster the texel's depth
+            // when it is the plurality (its count >= the far cluster's count) — a measured arm, no constant.
+            let nearMode = -1, nearFrac = 0;
+            { let mx = -1, mn = 2; for (let j = 0; j < k; j++) { if (tmp[j] > mx) mx = tmp[j]; if (tmp[j] < mn) mn = tmp[j]; }
+              let nNearC = 0, nFarC = 0; for (let j = 0; j < k; j++) { if (tmp[j] >= mx - TOLB) nNearC++; if (tmp[j] <= mn + TOLB) nFarC++; }
+              let kk = 0; for (let j = 0; j < k; j++) if (tmp[j] >= mx - TOLB) tD2[kk++] = tmp[j];
+              nearMode = medOf(tD2, kk); nearFrac = nNearC / k;
+              if (window._geoObsMode === 'near' && nNearC >= nFarC) med = nearMode; }
+            lipNearMode[i] = nearMode; lipNearFrac[i] = nearFrac;
             obsDepth[i] = Math.min(med, dQ[i]); if (!rim[i]) { fixed2[i] = 1; val2[i] = obsDepth[i]; } nObsTex++; if (c > maxCnt) maxCnt = c;
             lipDeep[i] = medOf(tD, k); lipNear[i] = medOf(tN, k); lipSpread[i] = medOf(tS, kS); rampDrop[i] = medOf(tR, k); crossFrac[i] = nCross / k;
             // kind 1 continuous, 2 interior step (A253: most step samples had both lips in one object), 7 extent step, 3 single lip; without the object rule every step is 2
@@ -8078,6 +8093,9 @@ window._plugGeoBand = function (opts) {
             console.log('[A253] lip bound in the field: ' + nBound + ' texels raised (mean ' + (nBound ? (sBound / nBound).toFixed(4) : '0') + '); bound membrane ' + bres.cycles + ' cycles, err ' + bres.err.toFixed(4));
         } else window._geoLipBoundField = null;
         window._geoLipDeep = lipDeep; window._geoLipNear = lipNear; window._geoLipSpread = lipSpread; window._geoKind = kindTex; window._geoProv = prov; window._geoRampDrop = rampDrop; window._geoCrossFrac = crossFrac;
+        window._geoLipNearMode = lipNearMode; window._geoLipNearFrac = lipNearFrac;   // A253d
+        { let nBi = 0, nNearWin = 0; for (let i = 0; i < N; i++) { if (ob.cnt[i] > 0 && lipNearFrac[i] < 1 && lipNearMode[i] - lipDeep[i] > TOLB) { nBi++; if (lipNearFrac[i] >= 0.5) nNearWin++; } }
+          console.log('[A253d] texels whose samples span two hidden layers (near cluster more than a cliff above the median deeper lip): ' + nBi + ' of ' + nObsTex + '; near cluster is the plurality on ' + nNearWin + (window._geoObsMode === 'near' ? ' (near mode ARMED: those take the near cluster)' : '')); }
         window._geoGateField = opts.gateAPriori ? farField.slice() : null;   // A246d: the tear gate may keep the a-priori field (A/B: the observed gate tears 24% more texels on the troll)
         for (let i = 0; i < N; i++) farField[i] = merged.field[i];          // the observed hidden depth field replaces the a-priori far field in place (all consumers read window._geoFarField)
         // A246 lip COLOUR term REMOVED (rule 7): the mean lip colour as a least-squares data term in the colour
