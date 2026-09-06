@@ -14112,11 +14112,17 @@ function bgBuildBackgroundLayerCore() {
                                 const o = y * nw + x; if (sw > 0) { r[o] = sr / sw; g[o] = sg / sw; b[o] = sb / sw; w[o] = Math.min(1, sw); } }
                             levels.push({ r, g, b, w, lw: nw, lh: nh }); lw = nw; lh = nh; }
                         ppLevels = levels.length;
-                        // push: from the coarsest, each level's holes take the coarser level's value (nearest parent, then the level's own weight blends it in)
+                        // push: from the coarsest, each level's holes take the coarser level's value — a weight-aware BILINEAR
+                        // upsample of the parent level (Gortler's push interpolates; the nearest parent alone leaves the
+                        // pyramid's squares in the fill, seen on the first run) — and the level's own weight blends it in
                         for (let L = levels.length - 2; L >= 0; L--) { const f = levels[L], c = levels[L + 1];
                             for (let y = 0; y < f.lh; y++) for (let x = 0; x < f.lw; x++) { const o = y * f.lw + x; if (f.w[o] >= 1) continue;
-                                const cx = Math.min(c.lw - 1, x >> 1), cy = Math.min(c.lh - 1, y >> 1); const co = cy * c.lw + cx; const cw = c.w[co]; if (cw <= 0) continue;
-                                const t = f.w[o]; f.r[o] = f.r[o] * t + c.r[co] * (1 - t); f.g[o] = f.g[o] * t + c.g[co] * (1 - t); f.b[o] = f.b[o] * t + c.b[co] * (1 - t); f.w[o] = Math.min(1, t + (1 - t) * cw); } }
+                                const gx = (x + 0.5) / 2 - 0.5, gy = (y + 0.5) / 2 - 0.5; const x0 = Math.floor(gx), y0 = Math.floor(gy); const fx = gx - x0, fy = gy - y0;
+                                let sr = 0, sg = 0, sb = 0, sw = 0, sk = 0;
+                                for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const cx = Math.max(0, Math.min(c.lw - 1, x0 + dx)), cy = Math.max(0, Math.min(c.lh - 1, y0 + dy)); const co = cy * c.lw + cx;
+                                    const k = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy); const kw = k * c.w[co]; sr += c.r[co] * kw; sg += c.g[co] * kw; sb += c.b[co] * kw; sw += kw; sk += k; }
+                                if (sw <= 0) continue; const cr = sr / sw, cg = sg / sw, cb = sb / sw, cw = sw / Math.max(1e-6, sk);
+                                const t = f.w[o]; f.r[o] = f.r[o] * t + cr * (1 - t); f.g[o] = f.g[o] * t + cg * (1 - t); f.b[o] = f.b[o] * t + cb * (1 - t); f.w[o] = Math.min(1, t + (1 - t) * cw); } }
                         const L0 = levels[0];
                         for (let i = 0; i < PNq; i++) if (disocc[i] && L0.w[i] > 0) { cd[i*4] = L0.r[i]; cd[i*4+1] = L0.g[i]; cd[i*4+2] = L0.b[i]; nPPFilled++; }
                     } else if (!!window._plugMembrane) {
