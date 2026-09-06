@@ -14172,7 +14172,7 @@ function bgBuildBackgroundLayerCore() {
                         // different seed is a different patch), where the fill is the plain membrane. In the
                         // solver the guidance enters as the per-texel sum of guidance differences to its
                         // neighbours (eq. 7 of the paper), a constant on the right-hand side.
-                        let nGuided = 0, nMirror = 0;
+                        let nMirror = 0;
                         if (window._plugGuided) {
                             const nearPlateG = new Float32Array(PNq).fill(-1); const qg = new Int32Array(PNq); let gh = 0, gt = 0;
                             for (let i = 0; i < PNq; i++) if (disocc[i]) { nearPlateG[i] = plateQ[i]; qg[gt++] = i; }
@@ -14192,19 +14192,44 @@ function bgBuildBackgroundLayerCore() {
                                 const sI = nearSeed[i]; if (sI < 0) continue; const sx = sI % pw, sy = (sI / pw) | 0, x = i % pw, y = (i / pw) | 0;
                                 const mx = 2 * sx - x, my = 2 * sy - y; if (mx < 0 || my < 0 || mx >= pw || my >= ph) continue; const m = my * pw + mx; if (!seedG[m]) continue;
                                 M[i*3] = cd[m*4]; M[i*3+1] = cd[m*4+1]; M[i*3+2] = cd[m*4+2]; nMirror++; }
-                            // guidance: for every unknown, the sum over its neighbours of (M_i - M_j), same mirror cell only
-                            for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; if (isNaN(M[i*3])) continue;
-                                const x = i % pw, y = (i / pw) | 0; const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; let any = false;
-                                for (const j of nbs) { if (j < 0 || isNaN(M[j*3])) continue;
-                                    if (disocc[j]) { const si = nearSeed[i], sj = nearSeed[j]; if (si < 0 || sj < 0) continue; const dsx = (si % pw) - (sj % pw), dsy = ((si / pw) | 0) - ((sj / pw) | 0); if (dsx * dsx + dsy * dsy > 4) continue; }
-                                    lv.dR[u] += M[i*3] - M[j*3]; lv.dG[u] += M[i*3+1] - M[j*3+1]; lv.dB[u] += M[i*3+2] - M[j*3+2]; any = true; }
-                                if (any) nGuided++; }
+                            // A249b: the guidance is NOT put on the solver's right-hand side — with a Poisson source term
+                            // the aggregation V-cycle (built and validated for Laplace) did not converge (extrapolated
+                            // error 732/255, saturated blobs; rule 7). The equivalent, stable composition is applied
+                            // after the membrane solve: u = membrane + (M - lowpass_d(M)), where the low-pass scale d is
+                            // the texel's distance to the rim — at the rim the whole mirrored detail is kept (it is
+                            // continuous with the far side there), deep in the band only detail finer than the
+                            // distance to the rim, the membrane supplying everything coarser. No constant: d is the
+                            // band geometry in texels.
+                            window._a249M = M; window._a249nMirror = nMirror;
                         }
                         const TOLC = 0.5;            // half an 8-bit step: below the output quantum
                         const mg = bgMembraneSolve(lv, TOLC, 60);   // A246f cycle-cap A/B removed (rule 7): 300 cycles took the observed-depth domain from 21 to 6.6/255 and changed nothing the instruments or the screen resolve (ghost 39.8 -> 39.5, seam 10.20 -> 10.20); Addendum 185
                         nSor = mg.sweeps[0][1]; sorRes = mg.residual; window._qbMembraneLevels = mg.sweeps; window._qbMembraneLevelSizes = mg.levels;
                         for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; cd[i*4] = Math.max(0, Math.min(255, lv.vR[u])); cd[i*4+1] = Math.max(0, Math.min(255, lv.vG[u])); cd[i*4+2] = Math.max(0, Math.min(255, lv.vB[u])); }
-                        if (window._plugGuided) console.log('[QUICK-BAKE] A249 guided membrane: ' + nMirror + ' band texels with a mirrored far-side source, ' + nGuided + ' unknowns carrying guidance');
+                        if (window._plugGuided && window._a249M) {
+                            const M = window._a249M; window._a249M = null;
+                            // valid-weighted box pyramid of M (seeds and mirrored band texels are valid)
+                            const lv0 = { r: new Float32Array(PNq), g: new Float32Array(PNq), b: new Float32Array(PNq), w: new Float32Array(PNq), lw: pw, lh: ph };
+                            for (let i = 0; i < PNq; i++) if (!isNaN(M[i*3])) { lv0.r[i] = M[i*3]; lv0.g[i] = M[i*3+1]; lv0.b[i] = M[i*3+2]; lv0.w[i] = 1; }
+                            const pyr = [lv0]; let cw2 = pw, ch2 = ph;
+                            while (cw2 > 1 || ch2 > 1) { const p = pyr[pyr.length - 1]; const nw = Math.max(1, (cw2 + 1) >> 1), nh = Math.max(1, (ch2 + 1) >> 1);
+                                const q = { r: new Float32Array(nw * nh), g: new Float32Array(nw * nh), b: new Float32Array(nw * nh), w: new Float32Array(nw * nh), lw: nw, lh: nh };
+                                for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) { let sr = 0, sg = 0, sb = 0, sw = 0;
+                                    for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const sx = 2 * x + dx, sy = 2 * y + dy; if (sx >= cw2 || sy >= ch2) continue; const j = sy * cw2 + sx; sr += p.r[j] * p.w[j]; sg += p.g[j] * p.w[j]; sb += p.b[j] * p.w[j]; sw += p.w[j]; }
+                                    const o = y * nw + x; if (sw > 0) { q.r[o] = sr / sw; q.g[o] = sg / sw; q.b[o] = sb / sw; q.w[o] = sw / 4; } }
+                                pyr.push(q); cw2 = nw; ch2 = nh; }
+                            // bilinear sample of level L at fine coordinates (x, y)
+                            const sampleL = (L, x, y, out) => { const p = pyr[L]; const sc = 1 << L; const gx = (x + 0.5) / sc - 0.5, gy = (y + 0.5) / sc - 0.5; const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0; let sr = 0, sg = 0, sb = 0, sw = 0;
+                                for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const cx = Math.max(0, Math.min(p.lw - 1, x0 + dx)), cy = Math.max(0, Math.min(p.lh - 1, y0 + dy)); const o = cy * p.lw + cx; const k = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * p.w[o]; sr += p.r[o] * k; sg += p.g[o] * k; sb += p.b[o] * k; sw += k; }
+                                if (sw <= 0) return false; out[0] = sr / sw; out[1] = sg / sw; out[2] = sb / sw; return true; };
+                            const lo = [0, 0, 0], lo2 = [0, 0, 0]; let nHP = 0;
+                            for (let k = 0; k < qt2; k++) { const u = uOf[k]; if (u < 0) continue; const i = q2[k]; if (isNaN(M[i*3])) continue;
+                                const d = Math.max(1, dRim[k]); const Lf = Math.log2(d); const L0 = Math.min(pyr.length - 1, Math.floor(Lf)), L1 = Math.min(pyr.length - 1, L0 + 1); const t = Math.min(1, Math.max(0, Lf - L0));
+                                const x = i % pw, y = (i / pw) | 0; if (!sampleL(L0, x, y, lo)) continue; if (!sampleL(L1, x, y, lo2)) { lo2[0] = lo[0]; lo2[1] = lo[1]; lo2[2] = lo[2]; }
+                                const lr = lo[0] * (1 - t) + lo2[0] * t, lg = lo[1] * (1 - t) + lo2[1] * t, lb = lo[2] * (1 - t) + lo2[2] * t;
+                                cd[i*4] = Math.max(0, Math.min(255, cd[i*4] + (M[i*3] - lr))); cd[i*4+1] = Math.max(0, Math.min(255, cd[i*4+1] + (M[i*3+1] - lg))); cd[i*4+2] = Math.max(0, Math.min(255, cd[i*4+2] + (M[i*3+2] - lb))); nHP++; }
+                            console.log('[QUICK-BAKE] A249b guided membrane: ' + window._a249nMirror + ' band texels with a mirrored far-side source, ' + nHP + ' took the mirrored detail above their rim distance over the membrane (' + pyr.length + ' pyramid levels)');
+                        }
                     } else {
                     {
                         const wr2 = new Float32Array(PNq), wg2 = new Float32Array(PNq),
