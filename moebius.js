@@ -14105,8 +14105,11 @@ function bgBuildBackgroundLayerCore() {
                             const r = new Float32Array(nw * nh), g = new Float32Array(nw * nh), b = new Float32Array(nw * nh), w = new Float32Array(nw * nh);
                             for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) { let sr = 0, sg = 0, sb = 0, sw = 0;
                                 for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) { const sx = 2 * x + dx, sy = 2 * y + dy; if (sx >= lw || sy >= lh) continue; const j = sy * lw + sx; const ww = p.w[j]; sr += p.r[j] * ww; sg += p.g[j] * ww; sb += p.b[j] * ww; sw += ww; }
-                                // weight of the coarse texel = mean of its children's weights (a fully seeded block is trusted, a sparsely seeded one is partly deferred to coarser levels)
-                                const o = y * nw + x; if (sw > 0) { r[o] = sr / sw; g[o] = sg / sw; b[o] = sb / sw; w[o] = Math.min(1, sw / 4); } }
+                                // weight of the coarse texel = the SUM of its children's weights saturated at 1 (Gortler et al. 1996): a block
+                                // with any seeded child is trusted in full, so the push fills a hole from the NEAREST level that saw a seed and
+                                // the fill is a local diffusion. (The first run used the mean: a one-seed block was trusted 25% and the push
+                                // dragged the coarse global average into every band texel — seam 23.5 against the membrane's 10.6.)
+                                const o = y * nw + x; if (sw > 0) { r[o] = sr / sw; g[o] = sg / sw; b[o] = sb / sw; w[o] = Math.min(1, sw); } }
                             levels.push({ r, g, b, w, lw: nw, lh: nh }); lw = nw; lh = nh; }
                         ppLevels = levels.length;
                         // push: from the coarsest, each level's holes take the coarser level's value (nearest parent, then the level's own weight blends it in)
