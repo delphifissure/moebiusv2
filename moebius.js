@@ -2537,12 +2537,14 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         if (u_isBackgroundLayer && u_restClip.x > 0.0) { vec2 ndc = vClip.xy / max(vClip.w, 1e-6); if (abs(ndc.x) > u_restClip.x || abs(ndc.y) > u_restClip.y) discard; }
         // A257e: on the object-back layer the mesh between a back texel and a back-less neighbour is a ramp whose alpha
         // runs 1 → 0 across it (the layer's alpha is 1 on back texels, 0 elsewhere); the ramp is not a surface, so it
-        // is discarded past the half-way alpha. (The A241 stretch law was tried here and removed: a side seen edge-on IS
-        // a stretched surface — the law tore exactly the sides the layer exists to draw, leaving a sliver.)
+        // is discarded past the half-way alpha. A257g: the layer ALSO obeys the A241 stretch law below (mode 1, ungated) —
+        // a quad within one tear step can still span 20+ texels of parallax at the cone's edge (the bristlecone's bars),
+        // and the foreground is torn by the same law; it costs the steepest part of the sides (~40 % of their pixels
+        // on the troll), which is the part a texel cannot honestly cover either.
         if (u_backTear > 0.5 && originalColor.a < 0.5) discard;
         if (u_fragTear > 1.5 && !u_isBackgroundLayer && !isGap) {
             if (u_poseFrac > vFoldAt) isGap = true;
-        } else if (u_fragTear > 0.5 && !u_isBackgroundLayer && !isGap) {
+        } else if (u_fragTear > 0.5 && (!u_isBackgroundLayer || u_backTear > 0.5) && !isGap) {   // A257g: the object-back layer obeys the same stretch law as the foreground
             bool gateOk = (u_fragTearGate < 0.5) || (texture2D(u_sdMask, vUv).r > 0.25);
             if (gateOk) {
                 float pxS = (u_pxScale > 0.0) ? u_pxScale : 1.0;
@@ -6611,6 +6613,14 @@ function renderNormalizedDepthPass() {
                             if (texture2D(map, vUv).a < 0.01) discard;
                             // A257e: the object-back layer discards the mesh ramp between a back texel and a back-less one (alpha < 0.5), as the colour pass does
                             if (u_backTear > 0.5 && texture2D(map, vUv).a < 0.5) discard;
+                            if (u_backTear > 0.5 && u_fragTear > 0.5) {   // A257g: the same stretch law as the colour pass
+                                float pxSB = (u_pxScale > 0.0) ? u_pxScale : 1.0;
+                                vec2 jxB = dFdx(vUv) * u_textureSize, jyB = dFdy(vUv) * u_textureSize;
+                                float jmaxB = max(length(jxB), length(jyB));
+                                float svMinB = abs(jxB.x * jyB.y - jxB.y * jyB.x) / max(jmaxB, 1e-9);
+                                float stretchB = u_texelsPerPxRest / max(svMinB * pxSB, 1e-9);
+                                if (stretchB > u_fragTearFactor || !gl_FrontFacing) discard;
+                            }
                             gl_FragColor = vec4(vec3(vNormalizedDepth), 1.0);
                             return;
                         }
@@ -15549,8 +15559,14 @@ function bgBuildBackgroundLayerCore() {
                 const layerWf = (layerAspect > frameAspect) ? 1.0 : (layerAspect / frameAspect);   // plate width as a fraction of the frame width
                 const plateScrPx = Math.max(1, renderer.domElement.width * layerWf);
                 fu.u_fragTear.value = (window._fragTear === 2 || window._fragTearMode === 2) ? 2.0 : 1.0; fu.u_texelsPerPxRest.value = pw / plateScrPx;
-                // A257e: mark the object-back layer (its shader discards the mesh ramps between back and back-less texels)
-                if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back && bgLayerMesh.userData.back.material && bgLayerMesh.userData.back.material.uniforms && bgLayerMesh.userData.back.material.uniforms.u_backTear) bgLayerMesh.userData.back.material.uniforms.u_backTear.value = 1.0;
+                // A257e/g: mark the object-back layer (its shader discards the mesh ramps between back and back-less texels)
+                // and arm the stretch law on it (mode 1, ungated — its fold points would be the plug's), same factor as the FG
+                if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back && bgLayerMesh.userData.back.material && bgLayerMesh.userData.back.material.uniforms) {
+                    const bu = bgLayerMesh.userData.back.material.uniforms;
+                    if (bu.u_backTear) bu.u_backTear.value = 1.0; if (bu.u_fragTear) bu.u_fragTear.value = 1.0; if (bu.u_fragTearGate) bu.u_fragTearGate.value = 0.0;
+                    if (bu.u_texelsPerPxRest) bu.u_texelsPerPxRest.value = pw / plateScrPx;
+                    if (bu.u_fragTearFactor) bu.u_fragTearFactor.value = (typeof window._fragTearFactor === 'number') ? window._fragTearFactor : 2.0;
+                }
                 if (fu.u_fragTear.value === 2.0) {
                     // per-vertex fold point = min over incident cells of extent / rim shift span (A212's own quantities)
                     const g2 = L.mesh.geometry, gp2 = g2.parameters;
