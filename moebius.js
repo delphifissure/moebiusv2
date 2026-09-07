@@ -15465,7 +15465,29 @@ function bgBuildBackgroundLayerCore() {
                     matB.uniforms.displacementMap.value = backDT; matB.uniforms.map.value = backTex;
                     if (matB.uniforms.u_useBgIslands) matB.uniforms.u_useBgIslands.value = false;
                     if (matB.uniforms.u_restClip) matB.uniforms.u_restClip.value.set(0, 0);   // in-frame content only, no clip needed
-                    const backMesh = new THREE.Mesh(gQ, matB);
+                    // A257f: the back's own index — a quad survives only if its four corners carry a back and their back
+                    // depths lie within one tear step of each other (fgTearStep, the FG's own cliff constant). Between
+                    // two back texels of different depth the plug's grid spans a ramp; on the bristlecone (a speckled
+                    // foliage silhouette) those internal ramps were metre-long orange bars across the sky. A side's
+                    // texel-to-texel step is a few quanta; a skirt's is the depth gap. The A212 pre-tear, for this layer.
+                    let gB = gQ; let nQuadKept = 0, nQuadAll = 0;
+                    try {
+                        const gpB = gQ.parameters || {}; const ws = (gpB.widthSegments || 1) | 0, hs = (gpB.heightSegments || 1) | 0;
+                        const uvA = gQ.attributes.uv; const nV = (ws + 1) * (hs + 1);
+                        if (uvA && uvA.count === nV) {
+                            const vd = new Float32Array(nV);                       // back depth at each vertex (source rows), -1 = none
+                            for (let v = 0; v < nV; v++) { const u = uvA.getX(v), w = uvA.getY(v); const tx = Math.min(pw - 1, Math.max(0, Math.round(u * (pw - 1)))); const ty = Math.min(ph - 1, Math.max(0, Math.round((1 - w) * (ph - 1)))); vd[v] = bd[ty * pw + tx]; }
+                            const idx = []; const tolB = fgTearStep;
+                            for (let iy = 0; iy < hs; iy++) for (let ix = 0; ix < ws; ix++) { nQuadAll++;
+                                const a = ix + (ws + 1) * iy, b = ix + (ws + 1) * (iy + 1), c = (ix + 1) + (ws + 1) * (iy + 1), d = (ix + 1) + (ws + 1) * iy;
+                                const da = vd[a], db = vd[b], dc = vd[c], dd = vd[d]; if (da < 0 || db < 0 || dc < 0 || dd < 0) continue;
+                                const mx = Math.max(da, db, dc, dd), mn = Math.min(da, db, dc, dd); if (mx - mn > tolB) continue;
+                                idx.push(a, b, d, b, c, d); nQuadKept++; }
+                            gB = gQ.clone(); gB.setIndex(idx.length > 65535 * 3 || nV > 65535 ? new THREE.BufferAttribute(new Uint32Array(idx), 1) : new THREE.BufferAttribute(new Uint16Array(idx), 1)); gB.userData = {};
+                            console.log('[A257f] back mesh index: ' + nQuadKept + ' of ' + nQuadAll + ' quads kept (all four corners with a back, spread <= ' + tolB.toFixed(3) + ')');
+                        }
+                    } catch (eI) { console.warn('[A257f] back index failed, full grid used:', eI); gB = gQ; }
+                    const backMesh = new THREE.Mesh(gB, matB);
                     backMesh.position.copy(L.mesh.position); backMesh.rotation.copy(L.mesh.rotation); backMesh.scale.copy(L.mesh.scale);
                     backMesh.renderOrder = bgLayerMesh.renderOrder; backMesh.userData.objectBack = true;
                     bgLayerMesh.userData.back = backMesh;
