@@ -26,10 +26,13 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
     const meta = await page.evaluate(async (o) => {
         window._rayReproject = true; window._plugSweepCapture = true; window._plugCarve = false;
         if (o.flush) window._plateFlushExempt = true;
+        // truthkit scenes carry their own depth mapping (meta.json outer/inner/pn); apply it before the bake
+        if (o.depth) { if (o.depth.outer !== undefined) outerVolumeDepth = o.depth.outer; if (o.depth.inner !== undefined) innerVolumeDepth = o.depth.inner; if (o.depth.pn !== undefined) currentNormPortalPlane = o.depth.pn; }
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         window._plugGeoBand({ flush: !!o.flush, observed: !!o.obs, gateAPriori: !!o.gateA });
         const sz = window._qbSize; return { pw: sz.pw, ph: sz.ph, outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, D: Math.abs(camera.position.z - portalPlaneWorldZ), terrariumWidth, terrariumHeight };
-    }, { flush: !!process.env.FLUSH, obs: !!process.env.OBS, gateA: !!process.env.GATEA, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null });
+    }, { flush: !!process.env.FLUSH, obs: !!process.env.OBS, gateA: !!process.env.GATEA, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
+         depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(meta));
     const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc' };
     for (const [name, key] of Object.entries(arrays)) {
