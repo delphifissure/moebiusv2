@@ -15472,9 +15472,12 @@ function bgBuildBackgroundLayerCore() {
                     // texel-to-texel step is a few quanta; a skirt's is the depth gap. The A212 pre-tear, for this layer.
                     let gB = gQ; let nQuadKept = 0, nQuadAll = 0;
                     try {
-                        const gpB = gQ.parameters || {}; const ws = (gpB.widthSegments || 1) | 0, hs = (gpB.heightSegments || 1) | 0;
-                        const uvA = gQ.attributes.uv; const nV = (ws + 1) * (hs + 1);
-                        if (uvA && uvA.count === nV) {
+                        // the grid's dimensions from the uv layout itself (the decoupled clone carries no PlaneGeometry parameters):
+                        // a PlaneGeometry lists its vertices row by row, so the first row is the run of vertices sharing uv.y with vertex 0
+                        const uvA = gQ.attributes.uv; const nV = uvA ? uvA.count : 0; let ws = 0;
+                        if (uvA) { const y0 = uvA.getY(0); while (ws + 1 < nV && uvA.getY(ws + 1) === y0) ws++; }
+                        const hs = ws > 0 ? Math.round(nV / (ws + 1)) - 1 : 0;
+                        if (uvA && ws > 0 && hs > 0 && (ws + 1) * (hs + 1) === nV) {
                             const vd = new Float32Array(nV);                       // back depth at each vertex (source rows), -1 = none
                             for (let v = 0; v < nV; v++) { const u = uvA.getX(v), w = uvA.getY(v); const tx = Math.min(pw - 1, Math.max(0, Math.round(u * (pw - 1)))); const ty = Math.min(ph - 1, Math.max(0, Math.round((1 - w) * (ph - 1)))); vd[v] = bd[ty * pw + tx]; }
                             const idx = []; const tolB = fgTearStep;
@@ -15486,6 +15489,7 @@ function bgBuildBackgroundLayerCore() {
                             gB = gQ.clone(); gB.setIndex(idx.length > 65535 * 3 || nV > 65535 ? new THREE.BufferAttribute(new Uint32Array(idx), 1) : new THREE.BufferAttribute(new Uint16Array(idx), 1)); gB.userData = {};
                             console.log('[A257f] back mesh index: ' + nQuadKept + ' of ' + nQuadAll + ' quads kept (all four corners with a back, spread <= ' + tolB.toFixed(3) + ')');
                         }
+                        else console.warn('[A257f] back index skipped: grid dimensions not recoverable (' + nV + ' vertices, first row ' + (ws + 1) + ')');
                     } catch (eI) { console.warn('[A257f] back index failed, full grid used:', eI); gB = gQ; }
                     const backMesh = new THREE.Mesh(gB, matB);
                     backMesh.position.copy(L.mesh.position); backMesh.rotation.copy(L.mesh.rotation); backMesh.scale.copy(L.mesh.scale);
