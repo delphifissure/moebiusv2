@@ -14793,17 +14793,30 @@ function bgBuildBackgroundLayerCore() {
                         if (jA >= 0 && mA > 0) { winMean(jA, FR.w[2 * i], ax, -1); r += mA * acc[0]; g += mA * acc[1]; b += mA * acc[2]; }
                         if (jB >= 0 && mA < 1) { winMean(jB, FR.w[2 * i + 1], ax, +1); r += (1 - mA) * acc[0]; g += (1 - mA) * acc[1]; b += (1 - mA) * acc[2]; }
                         col[i * 3] = r; col[i * 3 + 1] = g; col[i * 3 + 2] = b; hasC[i] = 1; nCol++; }
-                    // ring (band texels touching a non-band texel) = Dirichlet; interior = membrane unknowns
-                    const ring = new Uint8Array(PNq); let nRing = 0;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!disocc[i] || !hasC[i]) continue;
-                        if ((x > 0 && !disocc[i - 1]) || (x < pw - 1 && !disocc[i + 1]) || (y > 0 && !disocc[i - pw]) || (y < ph - 1 && !disocc[i + pw])) { ring[i] = 1; nRing++; } }
+                    // ring = domain texels (band with a far side) touching anything outside the domain, Dirichlet; interior = membrane unknowns.
+                    // (Measured with "touching a non-band texel": the box's outline texels were interior, because the band's margin
+                    // — texels whose plate depth is their own — surrounds the silhouette; the 150 ring texels left were the floor
+                    // rows and the whole box went floor-grey where the truth is the brick wall.)
+                    const ring = new Uint8Array(PNq); let nRing = 0; const inD = (j) => disocc[j] && hasC[j];
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!inD(i)) continue;
+                        if (x === 0 || y === 0 || x === pw - 1 || y === ph - 1 || !inD(i - 1) || !inD(i + 1) || !inD(i - pw) || !inD(i + pw)) { ring[i] = 1; nRing++; } }
                     const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (disocc[i] && hasC[i] && !ring[i]) uIdx[i] = nU++;
                     const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1), dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU), vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
                     for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y; lv.vR[u] = col[i * 3]; lv.vG[u] = col[i * 3 + 1]; lv.vB[u] = col[i * 3 + 2];
                         const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
                         for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0 || !disocc[j] || !hasC[j]) continue; if (ring[j]) { lv.dR[u] += col[j * 3]; lv.dG[u] += col[j * 3 + 1]; lv.dB[u] += col[j * 3 + 2]; lv.dW[u]++; } else lv.nb[u * 4 + s] = uIdx[j]; } }
+                    // an interior component that touches no ring value (a band region whose outline texels are their own far side)
+                    // has a constant null space and the aggregation multigrid diverges on it (S15: error 1.4e5/255); such a
+                    // component keeps its per-texel rim colours. If the solve still does not converge, every interior texel does.
+                    let nFixC = 0; { const comp = new Int32Array(nU).fill(-1); const stack = new Int32Array(nU); let nc = 0;
+                        for (let s0 = 0; s0 < nU; s0++) { if (comp[s0] >= 0) continue; let sp = 0; stack[sp++] = s0; comp[s0] = nc; let wSum = 0; const mem = [];
+                            while (sp > 0) { const u = stack[--sp]; mem.push(u); wSum += lv.dW[u]; for (let s2 = 0; s2 < 4; s2++) { const v = lv.nb[u * 4 + s2]; if (v >= 0 && comp[v] < 0) { comp[v] = nc; stack[sp++] = v; } } }
+                            if (wSum === 0) for (const u of mem) { const i = lv.y[u] * pw + lv.x[u]; lv.dR[u] = col[i * 3]; lv.dG[u] = col[i * 3 + 1]; lv.dB[u] = col[i * 3 + 2]; lv.dW[u] = 1; for (let s2 = 0; s2 < 4; s2++) lv.nb[u * 4 + s2] = -1; nFixC++; }
+                            nc++; } }
                     let mgC = { sweeps: [[nU, 0, 0]], residual: 0 }; if (nU > 0) mgC = bgMembraneSolve(lv, 0.5, 60);
-                    for (let i = 0; i < PNq; i++) { if (!disocc[i] || !hasC[i]) continue; const u = uIdx[i]; const r = u >= 0 ? lv.vR[u] : col[i * 3], g = u >= 0 ? lv.vG[u] : col[i * 3 + 1], b = u >= 0 ? lv.vB[u] : col[i * 3 + 2];
+                    const useMem = isFinite(mgC.residual) && mgC.residual < 2;
+                    if (!useMem) console.warn('[S3] plane colour: the membrane did not converge (error ' + mgC.residual + '/255); interior texels keep their rim colours');
+                    for (let i = 0; i < PNq; i++) { if (!disocc[i] || !hasC[i]) continue; const u = useMem ? uIdx[i] : -1; const r = u >= 0 ? lv.vR[u] : col[i * 3], g = u >= 0 ? lv.vG[u] : col[i * 3 + 1], b = u >= 0 ? lv.vB[u] : col[i * 3 + 2];
                         cd[i * 4] = Math.max(0, Math.min(255, r)); cd[i * 4 + 1] = Math.max(0, Math.min(255, g)); cd[i * 4 + 2] = Math.max(0, Math.min(255, b)); }
                     cxC.putImageData(pxC, 0, 0);
                     if (window._plugSweepCapture) window._qbPlateColor = cd.slice();
