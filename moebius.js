@@ -7883,7 +7883,9 @@ window._plugCpuSweep = function (opts) {
     // screen per texel is not drawn. Mirror that as a span-length cut; the
     // shader's second, mask-relative 'torn' test and its dither are not
     // modelled (validation: harness/a236_cpusweep.js).
-    const cutLen = (opts.noCut ? Infinity : ((typeof bgBandCutStretchFrac === 'number' && bgBandCutStretchFrac > 0) ? 1 / bgBandCutStretchFrac : Infinity));
+    // S2b: under the rim law a joined quad is one surface however far it stretches (magnification is
+    // not a hole); the stretch cut is off for the sweep, as it is for the rendered foreground below
+    const cutLen = ((opts.noCut || bgRimLawOn()) ? Infinity : ((typeof bgBandCutStretchFrac === 'number' && bgBandCutStretchFrac > 0) ? 1 / bgBandCutStretchFrac : Infinity));
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
         if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } };
     const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
@@ -14862,6 +14864,15 @@ function bgBuildBackgroundLayerCore() {
             if (L.mesh.material.uniforms.u_bandCutUvRate) {
                 L.mesh.material.uniforms.u_bandCutUvRate.value = 1.0 / Math.max(1, w);
                 bgBandCutArmedW = Math.max(1, w); }
+            // S2b: under the rim law the foreground's stretch net is OFF. The net cut fragments whose
+            // triangle stretched past 1/bgBandCutStretchFrac (3.3x) — on a grazing ceiling under a
+            // vertical pose that is every row, and a stretched continuous surface is magnification,
+            // not a hole. Rims are torn in the geometry by the rim law; nothing else is cut.
+            if (bgRimLawOn() && L.mesh.material.uniforms.u_useBandCut) {
+                L.mesh.material.uniforms.u_useBandCut.value = false;
+                if (L.mesh.material.uniforms.u_bandCutAll) L.mesh.material.uniforms.u_bandCutAll.value = false;
+                console.log('[S2b] rim law: foreground stretch net disarmed (joined surfaces render at any stretch; rims are geometric tears)');
+            }
             // A50: the plate must render SOLID, but sharing the FG geometry
             // AFTER the pre-tear inherits every cliff hole — and lifted ink
             // strokes are cliffs (two per stroke), so the plate re-drew the
