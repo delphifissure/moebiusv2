@@ -7784,6 +7784,12 @@ window._plugCpuSweep = function (opts) {
     const tornPose = foldTex ? new Uint8Array(N) : null;
     let tornAny = null; if (foldTex) { tornAny = new Uint8Array(N); }
     const lut = bgShiftLUTFor(pw, ph);
+    // S2b: the rim law (see bgRimLawFor). Under it the foreground is one sheet except across
+    // unjoined edges, the plate pass warps the FAR FIELD (so the plate texel that lands on an
+    // uncovered cell IS the demand texel), and holes with no such texel are outpaint.
+    const rimL = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;
+    const rimJ = rimL ? rimL.joined : null;
+    let nRimCut = 0;
     const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
     const _cz = (camera && camera.position) ? camera.position.z : 0.2;
     const D = Math.max(1e-3, Math.abs(_cz - _pz));
@@ -7805,6 +7811,11 @@ window._plugCpuSweep = function (opts) {
     for (let i = 0; i < N; i++) sFG[i] = bgShiftPxAt(lut, dQ[i]);
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) sPL[y * pw + x] = bgShiftPxAt(lut, pF[(ph - 1 - y) * pw + x]);   // source rows
     const pFs = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pFs[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+    // S2b: under the rim law the plate pass warps the a-priori far field (the surface behind every
+    // texel: itself outside occluders, the surround's membrane inside), so own[c] names the texel
+    // whose far-field displacement lands on cell c — the demand texel, exact under the shift law
+    const rimFF = (rimL && opts.farField && opts.farField.length === N) ? opts.farField : null;
+    if (rimFF) for (let i = 0; i < N; i++) { pFs[i] = rimFF[i]; sPL[i] = bgShiftPxAt(lut, rimFF[i]); }
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
@@ -7904,11 +7915,6 @@ window._plugCpuSweep = function (opts) {
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
-    // S2b: under the rim law the foreground is one sheet except across unjoined edges; a quad is
-    // drawn iff its four edges are joined (and, as before, not stretched past the cut length)
-    const rimL = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;
-    const rimJ = rimL ? rimL.joined : null;
-    let nRimCut = 0;
     for (const [ex, ey] of poses) {
         const fx = sign * ex / exRim, fy = sign * ey / exRim;
         zb.fill(-1e9); own.fill(-1);
@@ -7942,7 +7948,7 @@ window._plugCpuSweep = function (opts) {
             const ry = Math.max(0, Math.min(GH - 1, (opts.rowDump / sc) | 0)); const o = new Int32Array(GW), fdp = new Float32Array(GW), zz = new Float32Array(GW);
             for (let cx = 0; cx < GW; cx++) { const c = ry * GW + cx; o[cx] = own[c]; fdp[cx] = own[c] === -2 ? fgFar[c] : -1; zz[cx] = own[c] === -2 ? zb[c] : -1; }
             (rowDumps = rowDumps || []).push({ fx, fy, y: ry, own: o, far: fdp, z: zz }); }
-        if (revealTex) {
+        if (revealTex && !rimFF) {
             // A245f: a border-connected uncovered cell is NOT thereby outpaint — the corner the troll's feet
             // vacate at the mirror pose is border-connected and is a reveal of in-frame far content (its
             // inversion lands inside the plate). Outpaint is what inverts OUTSIDE the plate; that is the test.
@@ -8038,6 +8044,17 @@ window._plugCpuSweep = function (opts) {
                 }
                 splat(xs, ys, d, i);
             } }
+        // S2b RIM-LAW DEMAND: every cell the foreground does not cover is a reveal; the demand texel is the
+        // one the far-field plate pass landed there (own[c] >= 0). A texel whose far field is its own source
+        // depth is a pinhole of the foreground sheet, not a reveal (the same texel would have covered the cell
+        // as foreground); a cell no far-field texel reaches is outpaint (content beside the frame).
+        if (revealTex && rimFF) {
+            const qR = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
+            for (let c = 0; c < G; c++) { const o = own[c]; if (o === -2) continue;
+                if (o < 0) { revealOut++; continue; }
+                if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
+                revealTex[o] = 1; revealIn++; }
+        }
         for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
             if (wantHoles) {
                 const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc;
@@ -8117,7 +8134,39 @@ window._plugGeoBand = function (opts) {
         let nClamp = 0; const clampMask = new Uint8Array(N); if (!(optsF && optsF.noClamp)) for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; clampMask[i] = 1; nClamp++; }
         return { field, nU, cycles: mg.sweeps[0][1], err: mg.residual / 255, nClamp, clampMask };
     };
-    const ffRes = solveField(rim, dQ);
+    // S2b: under the rim law the far field is the SOURCE depth on every texel that is not an occluder
+    // (pass 1's front band), and the membrane of that surround inside the occluders. Anchoring at the
+    // rims alone left every rim-less surface an unknown, and the membrane sagged under the open floor
+    // to the wall's depth (S2, 16-bit: far field − source = −0.25 median on the open floor), so every
+    // hole inverted through it overshot onto the floor. A continuous surface's far side is itself.
+    // S2b.2 THE REACH. Anchoring at "every texel outside pass 1's band" imported pass 1's misses:
+    // on S2 (16-bit) the lower middle of every box front is hidden truth (floor behind the box, seen
+    // from the side) but was outside dis1, so its far field was pinned to itself and the plate pass
+    // read it as self-covered (recall 0.80, all 3294 misses with far field == source). The set of
+    // texels whose far side is NOT themselves does not depend on any band: a reveal only opens at
+    // an unjoined edge, and at the envelope rim the far side slides past the near side by exactly
+    // |shift(d_far) - shift(d_near)| texels along the edge's axis (the app's own shift law at e_max,
+    // times the envelope aspect vertically). So: walk from every unjoined edge into its near side,
+    // along the axis, for that many texels or until the next unjoined edge; those texels are free
+    // (membrane), everything else is its own far side. No constant: span and joinedness both come
+    // from the shift law, the resolution and the envelope.
+    let fixedFF = rim, nReach = 0, nEdgeU = 0;
+    if (bgRimLawOn()) {
+        const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
+        const free = new Uint8Array(N);
+        const walk = (iNear, step, span, limit) => { let i = iNear, k = 0, prev = -1;
+            while (k < span && k < limit) { if (prev >= 0 && !rl.joined(dQ[prev], dQ[i])) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } };
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
+            if (x < pw - 1) { const j = i + 1; if (!rl.joined(dQ[i], dQ[j])) { nEdgeU++;
+                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j]));
+                if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1); else walk(j, 1, span, pw - 1 - x); } }
+            if (y < ph - 1) { const j = i + pw; if (!rl.joined(dQ[i], dQ[j])) { nEdgeU++;
+                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR;
+                if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1); else walk(j, pw, span, ph - 1 - y); } } }
+        fixedFF = new Uint8Array(N); for (let i = 0; i < N; i++) fixedFF[i] = free[i] ? 0 : 1;
+        console.log('[S2b] reach: ' + nEdgeU + ' unjoined edges, ' + nReach + ' texels within the far side\'s slide at the envelope rim (' + (100 * nReach / N).toFixed(2) + '% of the plate); pass-1 band was ' + (100 * (() => { let c = 0; for (let i = 0; i < N; i++) c += dis1[i] ? 1 : 0; return c; })() / N).toFixed(2) + '%');
+    }
+    const ffRes = solveField(fixedFF, dQ);
     const farField = ffRes.field, nU = ffRes.nU, nClampF = ffRes.nClamp, mgF = { sweeps: [[0, ffRes.cycles]], residual: ffRes.err * 255 };
     // A244h (refined far field: source texels at or behind the field join its boundary) was built, measured
     // and REMOVED (rule 7): against the gate fix alone it changed nothing the instruments or the screen
@@ -8298,7 +8347,7 @@ window._plugGeoBand = function (opts) {
         const tD = new Float32Array(1024), tN = new Float32Array(1024), tS = new Float32Array(1024), tR = new Float32Array(1024), tD2 = new Float32Array(1024);
         const lipNearMode = new Float32Array(N).fill(-1), lipNearFrac = new Float32Array(N);   // A253d
         const medOf = (a, k) => { if (!k) return -1; const arr = a.subarray(0, k).slice().sort(); return (k & 1) ? arr[k >> 1] : 0.5 * (arr[(k >> 1) - 1] + arr[k >> 1]); };
-        for (let i = 0; i < N; i++) { fixed2[i] = rim[i]; val2[i] = dQ[i]; const c = ob.cnt[i]; if (!c) continue;
+        for (let i = 0; i < N; i++) { fixed2[i] = rim[i] || (fixedFF !== rim && fixedFF[i]) ? 1 : 0; val2[i] = dQ[i]; const c = ob.cnt[i]; if (!c) continue;   // S2b: source-anchored outside occluders
             let k = 0, kS = 0, nK1 = 0, nK2 = 0, nK3 = 0, nCross = 0, nInt = 0;
             for (let p = ob.head[i]; p >= 0 && k < tmp.length; p = ob.next[p]) { tmp[k] = ob.val[p];
                 const a = ob.lipA[p], b = ob.lipB[p], m = ob.meta[p], kd = m & 3;

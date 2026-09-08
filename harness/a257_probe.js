@@ -34,12 +34,29 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
     }, { flush: !!process.env.FLUSH, obs: !!process.env.OBS, gateA: !!process.env.GATEA, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
          depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(meta));
-    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc' };
+    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc', geoClass: '_geoClass', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', fgTorn: '_qbFgTorn' };
     for (const [name, key] of Object.entries(arrays)) {
         const b64 = await page.evaluate((k) => { const a = window[k]; if (!a) return null; const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return { b64: btoa(s), type: a.constructor.name }; }, key);
         if (!b64) { console.log('  missing ' + key); continue; }
         const ext = { Float32Array: 'f32', Uint8Array: 'u8', Int32Array: 'i32', Int16Array: 'i16', Uint16Array: 'u16' }[b64.type] || 'bin';
         fs.writeFileSync(path.join(OUT, name + '.' + ext), Buffer.from(b64.b64, 'base64')); console.log('  wrote ' + name + '.' + ext);
+    }
+    // S2b per-pose class maps: POSES="fx:fy,fx:fy" (fractions of the rim); each pose's cell classes + reveal texels
+    if (process.env.POSES) {
+        for (const ps of process.env.POSES.split(',')) {
+            const [fx, fy] = ps.split(':').map(Number);
+            const r = await page.evaluate(([fx, fy]) => {
+                const D = Math.abs(camera.position.z - portalPlaneWorldZ); const exR = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+                const s = window._plugCpuSweep({ poses: [[fx * exR, fy * exR * bgEnvAspect()]], classMap: true, revealDemand: true, farField: window._geoFarField, observe: true });
+                let nRev = 0; for (let i = 0; i < s.N; i++) nRev += s.revealTex[i];
+                const u8 = s.revealTex; let str = ''; for (let i = 0; i < u8.length; i += 0x8000) str += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+                return { png: s.classMap, holeCells: s.holeCells, revealIn: s.revealIn, revealOut: s.revealOut, nRev, obs: s.obs ? { samples: s.obs.samples, geo: s.obs.geo, self: s.obs.self, out: s.obs.out, ambiguous: s.obs.ambiguous } : null, rev: btoa(str) };
+            }, [fx, fy]);
+            const tag = 'pose_' + ps.replace(':', '_').replace(/-/g, 'm');
+            fs.writeFileSync(path.join(OUT, tag + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+            fs.writeFileSync(path.join(OUT, tag + '_reveal.u8'), Buffer.from(r.rev, 'base64'));
+            console.log('  pose ' + ps + ': hole cells ' + r.holeCells + ', reveal cells in/out ' + r.revealIn + '/' + r.revealOut + ', reveal texels ' + r.nRev + ', obs ' + JSON.stringify(r.obs));
+        }
     }
     await browser.close(); srv.kill(); console.log('done ' + OUT);
 })();
