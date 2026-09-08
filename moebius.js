@@ -596,7 +596,11 @@ function bgFarSidePlane(dQ, pw, ph) {
             if (Sn >= 3) { const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
                 const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
                 const dM = det(M); if (Math.abs(dM) > 1e-12) { const s2 = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; s2.push(det(Mk) / dM); } if (s2[2] > 0) sol = s2; } }
-            if (sol[2] > 0) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
+            // The plane is THE ground only if it explains the majority of the columns that have a horizontal run at all.
+            // On the default photograph (estimator depth, not metric) 12 of ~400 such columns fitted one plane — the
+            // water at the woman's feet — and in those 12 columns its bound sat at her own depth and cut everything
+            // behind her; a plane that most horizontal runs reject is not a ground, and there is then no bound.
+            if (sol[2] > 0 && nGroundIn * 2 >= nGroundPicks) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
                 // the texels of the ground's own runs (a thin ground run continues along the fitted plane, not its own noisy line)
                 for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tol[jj]; } if (se / p.len <= 1) { groundCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
@@ -727,7 +731,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     console.log('[S3] far side by the plane law: ' + nR + ' row runs (' + (nR / ph).toFixed(1) + '/row, median length ' + med(runLen[0]) + '), ' + nC + ' column runs (' + (nC / pw).toFixed(1) + '/col, median ' + med(runLen[1]) + '); ' +
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
-        (horizon ? ('ground plane from ' + horizon.nRuns + ' of ' + pw + ' columns (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
+        (horizon ? ('ground plane from ' + horizon.nRuns + ' of ' + pw + ' columns (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : ('no ground (' + nRising + ' rising runs, ' + nHoriz + ' horizontal, ' + nGroundIn + ' of ' + nGroundPicks + ' columns on one plane): no bound, no horizon')) + '; ' + (Date.now() - t0) + 'ms');
     return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
