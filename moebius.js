@@ -599,7 +599,7 @@ function bgFarSidePlane(dQ, pw, ph) {
             if (sol[2] > 0) ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] }; } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
-    let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0];
+    let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0]; const sqDispK = skyOn ? rl.dispAt(sq) : -1;
     // Which run behind the texel is its far side when several lie outward on one side (a leaf, the leaf behind it,
     // the hill, the sky — S15's crown)? The shift law is affine in disparity, shift = e·ppw·(D·disp − 1), so a run
     // whose rim is g texels away and whose line lies Δ = disp_i − v behind the texel starts to show through at the
@@ -636,8 +636,20 @@ function bgFarSidePlane(dQ, pw, ph) {
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
         const row = combine(0, cand(0, y, x, -1, i), cand(0, y, x, +1, i), x, i);
         const colR = combine(1, cand(1, x, y, -1, i), cand(1, x, y, +1, i), y, i);
+        // Two rims that agree on ONE plane (kind 2) are a positive detection of a surface continuing behind the
+        // occluder; an axis whose two rims are different surfaces (kinds 3, 4) only says a boundary lies somewhere
+        // in the gap. So an axis with the same-plane finding wins outright, and the nearer rim decides only when
+        // both or neither have it. Measured on S15's sign (wider than tall): the column axis, nearer, put the sky
+        // above and the hill below the midpoint where the row rims saw the same hill on both sides (1 137 texels
+        // of sky where the truth is a hill); the trunk (taller than wide) was already right by the row axis.
+        // And the sky is what remains when no finite surface intervenes: a finite far side found on one axis beats
+        // the plane at infinity found on the other (S15's sign: the column crossed the sky above with the ground
+        // below at the horizon, the row saw hills on both sides — the hills are there, the sky is not).
         let pick = null, axv = 0;
-        if (row && colR) { if (colR[2] < row[2]) { pick = colR; axv = 2; } else { pick = row; axv = 1; } }
+        if (row && colR) { const rSky = skyOn && row[0] < sqDispK, cSky = skyOn && colR[0] < sqDispK; const rs2 = row[1] === 2, cs2 = colR[1] === 2;
+            if (rSky !== cSky) { if (cSky) { pick = row; axv = 1; } else { pick = colR; axv = 2; } }
+            else if (rs2 !== cs2) { if (rs2) { pick = row; axv = 1; } else { pick = colR; axv = 2; } }
+            else if (colR[2] < row[2]) { pick = colR; axv = 2; } else { pick = row; axv = 1; } }
         else if (row) { pick = row; axv = 1; } else if (colR) { pick = colR; axv = 2; }
         if (!pick) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
         let v = pick[0]; if (v < dispFloor) v = dispFloor; if (v > disp[i]) v = disp[i];
