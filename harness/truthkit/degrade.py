@@ -70,12 +70,24 @@ def main():
     put('q8_linear', np.round(dn * 255) / 255, 8, 'M3 8-bit quantisation of normalised depth (256 steps; terraces on slow gradients)')
     disp = 1.0 / dist; disp = (disp - disp.min()) / max(1e-12, disp.max() - disp.min())
     put('q8_disparity', np.round(disp * 255) / 255, 8, 'M4 relative inverse depth (MiDaS-style affine-invariant disparity) fed to the app as if it were its depth; 8-bit', note='changes the depth law, not just its resolution')
+    # edge-localised ramps: an estimator smooths ACROSS occlusion boundaries, not along plane gradients. The rim set
+    # is the exact one (Depth Pro ratio test t = 1.05 on metric eye distance between 4-neighbours); the blur is applied
+    # within 3 sigma of a rim only. A global blur is kept as the pessimistic control.
+    rim = np.zeros(dn.shape, bool)
+    for ax in (0, 1):
+        arr = np.moveaxis(dist, ax, 0); r_ = np.maximum(arr[1:], arr[:-1]) / np.maximum(1e-9, np.minimum(arr[1:], arr[:-1])) > 1.05
+        m = np.zeros(arr.shape, bool); m[1:] |= r_; m[:-1] |= r_; rim |= np.moveaxis(m, 0, ax)
+    rungs_note = f'{int(rim.sum())} rim px'
+    def edge_blur(s):
+        near = dilate(rim.astype(np.float64), int(np.ceil(3 * s))) > 0
+        return np.where(near, gauss_blur(dn, s), dn)
     for s in (1, 2, 4):
-        put(f'blur_s{s}', gauss_blur(dn, s), 16, 'M1 soft depth edges (estimator smoothing across occlusion boundaries)', sigma_px=s)
+        put(f'blur_s{s}', edge_blur(s), 16, 'M1 soft depth edges: Gaussian ramp within 3 sigma of the exact rims only', sigma_px=s, rims=rungs_note)
+    put('blur_global_s2', gauss_blur(dn, 2), 16, 'M1 pessimistic control: the whole map blurred (plane gradients too)', sigma_px=2)
     for r in (2, 4):
         put(f'halo_dilate_r{r}', dilate(dn, r), 16, 'M2 foreground fattening: near depth bleeds r px over the background', radius_px=r)
     put('halo_erode_r2', erode(dn, 2), 16, 'M2 foreground thinning: near depth retreats 2 px', radius_px=2)
-    put('blur_s2_dilate_r2', dilate(gauss_blur(dn, 2), 2), 16, 'M1+M2 the common combination: soft, fattened edges', sigma_px=2, radius_px=2)
+    put('blur_s2_dilate_r2', dilate(edge_blur(2), 2), 16, 'M1+M2 the common combination: soft, fattened edges', sigma_px=2, radius_px=2)
     put('affine_a08_b01', 0.8 * dn + 0.1, 16, 'M4 unknown scale/shift: depth range compressed to 80 % and lifted', a=0.8, b=0.1)
     put('gamma_15', dn ** 1.5, 16, 'M4 monotone nonlinearity in the estimator (relative ordering kept, spacing wrong)', gamma=1.5)
     put('thin_loss_r1', opening(dn, 1), 16, 'M5 thin near structures under ~2 px vanish (opening)', radius_px=1)

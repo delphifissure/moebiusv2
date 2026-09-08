@@ -121,7 +121,91 @@ def S4_figure_popout(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.1 * W, 'element': 'E1 with pop-out'}
 
 
+def S12_framecut(W=0.16, H=0.09):
+    """E10: objects cut by the frame edge — a sphere straddling the right edge, a box straddling the bottom edge,
+    a pole leaving through the top. Their hidden parts are outpaint of the object itself, not of the background."""
+    depth = 0.8 * W
+    prims = room(W, H, depth)
+    prims.append(Sphere([W / 2, 0.0, -0.2 * W - 0.09 * W], 0.09 * W, lambda p: tex_checker(p, scale=W * 0.02, c1=(0.9, 0.6, 0.3), c2=(0.5, 0.25, 0.1), axes=(1, 2)), THING, 'sphere_right_edge'))
+    b = 0.07 * W
+    prims.append(Box([-0.25 * W, -H / 2 - 0.05 * W, -0.25 * W - b], [-0.25 * W + 1.3 * b, -H / 2 + 0.06 * W, -0.25 * W], lambda p: tex_stripes(p, scale=W * 0.012, c1=(0.4, 0.7, 0.9), c2=(0.2, 0.4, 0.6), axis=0), THING, 'box_bottom_edge'))
+    prims.append(Cylinder([0.1 * W, -H * 0.1, -0.3 * W], [0.1 * W, H, -0.3 * W], 0.012 * W, tex_solid((0.2, 0.2, 0.22)), THING, 'pole_top_edge'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E10 objects cut by the frame edge'}
+
+
+def S15_open(W=0.16, H=0.09):
+    """B3/B4: an open scene — ground plane to the horizon, distant hills, sky (rays that escape), a near tree and a
+    signpost as occluders. No walls: outpaint beside the frame is ground and sky; the far parallax is near zero."""
+    far = 60 * W
+    prims = []
+    prims.append(Quad([0, -H / 2, -far / 2], [1, 0, 0], [0, 0, 1], 60 * W, far / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.3, c1=(0.45, 0.55, 0.3), c2=(0.35, 0.45, 0.25), axes=(0, 2)), STUFF, 'ground'))
+    for k, (x, z, r) in enumerate(((-12 * W, -45 * W, 10 * W), (6 * W, -50 * W, 13 * W), (20 * W, -40 * W, 8 * W), (-2 * W, -25 * W, 4 * W))):
+        prims.append(Sphere([x, -H / 2 - 0.55 * r, z], r, (lambda k: (lambda p: tex_noise(p, scale=W * 0.5, base=(0.5 - 0.05 * k, 0.5, 0.6 + 0.05 * k), amp=0.2, axes=(0, 1))))(k), STUFF, f'hill{k}'))
+    prims.append(Cylinder([-0.15 * W, -H / 2, -0.45 * W], [-0.15 * W, H * 0.1, -0.45 * W], W * 0.014, tex_solid((0.35, 0.25, 0.18)), THING, 'trunk'))
+    prims.append(Canopy([-0.15 * W, H * 0.25, -0.45 * W], [W * 0.18, H * 0.3, W * 0.12], 400, W * 0.014, tex_solid((0.25, 0.5, 0.2)), name='crown'))
+    prims.append(Cylinder([0.25 * W, -H / 2, -0.3 * W], [0.25 * W, H * 0.3, -0.3 * W], W * 0.008, tex_solid((0.3, 0.3, 0.32)), THING, 'signpost'))
+    prims.append(Box([0.25 * W - 0.06 * W, H * 0.15, -0.3 * W - 0.004 * W], [0.25 * W + 0.06 * W, H * 0.3, -0.3 * W + 0.004 * W], lambda p: tex_text_like(p, cell=W * 0.012, axes=(0, 1)), THING, 'sign'))
+    return prims, {'outer': far * 0.9, 'inner': 0.0, 'element': 'B3 sky, B4 distant terrain, open outpaint'}
+
+
+def S16_ridge(W=0.16, H=0.09):
+    """E3: a wall receding at a grazing angle from the left frame edge; in the top half it folds (a crease: continuous
+    surface, direction change), in the bottom half it steps (a jump: a pilaster face 0.06 W deeper). A rim detector must
+    call the crease continuous and the jump a rim."""
+    depth = 1.0 * W
+    prims = []
+    ext = 3.0
+    a0 = np.array([-W / 2, 0, 0.0]); a1 = np.array([0.1 * W, 0, -0.6 * W])          # wall A from the frame's left edge to the fold line
+    def wall(p0, p1, y0, y1, tex, name):
+        c = (p0 + p1) / 2; c[1] = (y0 + y1) / 2; u = p1 - p0; L = np.linalg.norm(u)
+        return Quad(c, u / L, [0, 1, 0], L / 2, (y1 - y0) / 2, tex, STUFF, name)
+    brick = lambda p: tex_bricks(p, bw=W * 0.08, bh=W * 0.04, mortar=W * 0.005, axes=(2, 1))
+    prims.append(wall(a0, a1, -H * ext, H * ext, brick, 'wall_A'))
+    b1 = np.array([0.55 * W, 0, -0.78 * W])                                          # crease continuation (top half)
+    prims.append(wall(a1, b1, 0.0, H * ext, lambda p: tex_bricks(p, bw=W * 0.08, bh=W * 0.04, mortar=W * 0.005, axes=(0, 1)), 'wall_B_crease'))
+    j0 = a1 + np.array([0.0, 0, -0.06 * W]); j1 = b1 + np.array([0.0, 0, -0.06 * W])  # jump: same direction, 0.06 W deeper (bottom half)
+    prims.append(wall(j0, j1, -H * ext, 0.0, lambda p: tex_bricks(p, bw=W * 0.08, bh=W * 0.04, mortar=W * 0.005, axes=(0, 1)), 'wall_B_jump'))
+    # the pilaster's return face closing the jump (perpendicular, faces +x)
+    prims.append(Quad(a1 + np.array([0, -H * ext / 2, -0.03 * W]), [0, 0, -1], [0, 1, 0], 0.03 * W, H * ext / 2, tex_solid((0.6, 0.55, 0.5)), STUFF, 'jump_return'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], W * ext, H * ext, lambda p: tex_noise(p, scale=W * 0.03, base=(0.8, 0.78, 0.7), amp=0.15, axes=(0, 1)), STUFF, 'wall_back'))
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], W * ext, depth / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.08, axes=(0, 2)), STUFF, 'floor'))
+    prims.append(Quad([0, H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], W * ext, depth / 2 + 0.001, lambda p: tex_noise(p, scale=W * 0.05, base=(0.85, 0.85, 0.88), amp=0.1, axes=(0, 2)), STUFF, 'ceiling'))
+    prims.append(Quad([W / 2 * ext, 0, -depth / 2], [0, 0, 1], [0, 1, 0], depth / 2 + 0.001, H * ext, lambda p: tex_stripes(p, scale=W * 0.05, axis=2), STUFF, 'wall_right'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E3 grazing wall: crease (top) vs jump (bottom)'}
+
+
+def S26_overhang(W=0.16, H=0.09):
+    """V2: vertical reveals — a table top with objects on it (its underside and the floor under it), a ceiling beam,
+    a wall shelf; things the vertical sweep exists for."""
+    depth = 0.7 * W
+    prims = room(W, H, depth)
+    t = 0.02 * W; ty = -0.1 * H
+    prims.append(Box([-0.3 * W, ty - t, -0.45 * W], [0.1 * W, ty, -0.2 * W], lambda p: tex_stripes(p, scale=W * 0.02, c1=(0.7, 0.5, 0.3), c2=(0.55, 0.38, 0.22), axis=0), THING, 'table_top'))
+    for (x, z) in ((-0.28 * W, -0.43 * W), (0.08 * W, -0.43 * W), (-0.28 * W, -0.22 * W), (0.08 * W, -0.22 * W)):
+        prims.append(Box([x - 0.008 * W, -H / 2, z - 0.008 * W], [x + 0.008 * W, ty - t, z + 0.008 * W], tex_solid((0.4, 0.3, 0.2)), THING, 'table_leg'))
+    prims.append(Cylinder([-0.15 * W, ty, -0.33 * W], [-0.15 * W, ty + 0.05 * W, -0.33 * W], 0.025 * W, lambda p: tex_checker(p, scale=W * 0.01, c1=(0.9, 0.9, 0.9), c2=(0.2, 0.3, 0.7), axes=(1, 2)), THING, 'mug'))
+    prims.append(Box([-0.02 * W, ty, -0.4 * W], [0.05 * W, ty + 0.035 * W, -0.3 * W], lambda p: tex_noise(p, scale=W * 0.01, base=(0.8, 0.3, 0.3), amp=0.3, axes=(0, 1)), THING, 'book'))
+    prims.append(Box([-W * 3, H / 2 - 0.03 * W, -0.36 * W], [W * 3, H / 2, -0.28 * W], lambda p: tex_stripes(p, scale=W * 0.03, c1=(0.5, 0.4, 0.3), c2=(0.4, 0.3, 0.22), axis=0), THING, 'ceiling_beam'))
+    prims.append(Box([0.22 * W, 0.15 * H, -0.5 * W], [0.5 * W, 0.15 * H + 0.012 * W, -0.32 * W], lambda p: tex_stripes(p, scale=W * 0.02, c1=(0.75, 0.7, 0.6), c2=(0.6, 0.55, 0.45), axis=2), THING, 'shelf'))
+    prims.append(Sphere([0.36 * W, 0.15 * H + 0.012 * W + 0.02 * W, -0.41 * W], 0.02 * W, lambda p: tex_checker(p, scale=W * 0.008, c1=(0.3, 0.7, 0.4), c2=(0.1, 0.4, 0.2), axes=(1, 2)), THING, 'ball_on_shelf'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'V2 vertical reveals: table underside, beam, shelf'}
+
+
+def S30_dolly(W=0.16, H=0.09):
+    """Dolly family: a subject pinned at the window plane (so it keeps its frame position and size for every focal
+    length), a mid box, a fishtank behind. Render with make.py --D for each focal length: D = (W/2)(f/18 mm)."""
+    depth = 1.5 * W
+    prims = room(W, H, depth)
+    r = 0.05 * W
+    prims.append(Cylinder([-0.12 * W, -H / 2, 0.0], [-0.12 * W, H * 0.2, 0.0], r, lambda p: tex_stripes(p, scale=W * 0.02, c1=(0.8, 0.55, 0.45), c2=(0.5, 0.3, 0.3), axis=1), THING, 'subject_body'))
+    prims.append(Sphere([-0.12 * W, H * 0.2 + 0.9 * r, 0.0], 0.9 * r, lambda p: tex_checker(p, scale=W * 0.015, c1=(0.9, 0.7, 0.55), c2=(0.6, 0.4, 0.3), axes=(1, 2)), THING, 'subject_head'))
+    b = 0.1 * W
+    prims.append(Box([0.15 * W, -H / 2, -0.5 * W - b], [0.15 * W + b, -H / 2 + 1.2 * b, -0.5 * W], lambda p: tex_noise(p, scale=W * 0.02, base=(0.75, 0.45, 0.30), amp=0.3, axes=(0, 1)), THING, 'mid_box'))
+    return prims, {'outer': depth, 'inner': r, 'element': 'dolly family: subject at the window plane'}
+
+
 SCENES = {
+    'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
     'S27': S27_fishtank, 'S11': S11_rounded, 'S1': S1_corner, 'S2': S2_contact, 'S3': lambda W=0.16, H=0.09: S2_contact(W, H, floating=True),
     'S5': S5_pole, 'S9': S9_stacked, 'S10': S10_limb, 'S7': S7_canopy, 'S4': S4_figure_popout,
     # S28 = V6 the same room at three diorama depths (0.25, 0.75, 2.0 window widths)

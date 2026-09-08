@@ -45,7 +45,13 @@ def main():
     R = render(prims, plate, (0, 0, a.D), K=a.K)
     print(f'{a.scene}: rest {plate.nx}x{plate.ny} K={a.K} in {time.time() - t0:.1f}s; layers hit: ' + ', '.join(f'k{k}:{int(R["valid"][..., k].sum())}' for k in range(a.K)))
     # save rest products
-    rgb0 = R['rgb'][..., 0, :]; dep0 = R['depth'][..., 0]
+    rgb0 = R['rgb'][..., 0, :].copy(); dep0 = R['depth'][..., 0]
+    # sky: rays that escape get a sky gradient in the photograph (the app must see a picture, not black); depth stays far
+    sky = ~R['valid'][..., 0]
+    if sky.any():
+        yy = np.linspace(1, 0, plate.ny)[:, None]
+        skyc = np.stack([0.45 + 0.15 * yy, 0.62 + 0.15 * yy, 0.85 + 0.1 * yy], axis=-1) * np.ones((1, plate.nx, 1))
+        rgb0[sky] = skyc[sky]
     dn = app_norm_depth(-np.where(np.isfinite(dep0), dep0, outer), a.pn, outer, inner)   # z = -depth
     save_png(os.path.join(out, 'rest_rgb.png'), rgb0)
     save_png(os.path.join(out, 'rest_depth16.png'), dn, bits=16)
