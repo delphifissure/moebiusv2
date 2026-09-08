@@ -550,17 +550,53 @@ function bgFarSidePlane(dQ, pw, ph) {
     // the ground's own point on that ray, so a candidate extrapolation that passes UNDER the ground (a wall or a
     // box front continued below its foot) is cut at the ground, i.e. the surface meets the ground there. The
     // horizon is the plane's zero-disparity line. No ground (no rising run): no bound, no horizon.
-    let ground = null; { let Sxx = 0, Sxy = 0, Syy = 0, Sx = 0, Sy = 0, Sn = 0, Sxv = 0, Syv = 0, Sv = 0, nRunsG = 0;
-        for (let x = 0; x < pw; x++) { let y = 0, bestA = -1, bestB = -1, bestM = Infinity;
+    // Fit: per column the pick's own line (slope m_x, intercept a_x at row 0); c = median m_x; b = median of pairwise
+    // (a_x2 - a_x1)/(x2 - x1) (Theil–Sen); a = median(a_x - b x). Medians because a two-texel pick on a box edge (S2 had
+    // two of them) is a gross outlier with a long lever arm — least squares over 60 k texels tilted the plane by 0.1 %
+    // of slope, four quanta at the wall's foot. Then one least-squares pass over the picks whose mean |residual| to
+    // the robust plane is within tolAt (the runs that ARE the ground), so the result is exact on exact data.
+    // Which rising runs are HORIZONTAL surfaces at all: parallel planes share a vanishing line (H&Z ch. 8), so every
+    // horizontal surface's column line reaches zero disparity on the same row (eye level for a level camera), while a
+    // distant hill or a leaning face rises slightly toward a zero row of its own (S15: the hills' cap lines rise 100×
+    // more slowly than the ground and would have been "the lowest surface" by slope alone). Each rising run has a zero
+    // row z = -v0/m with an error bar from its slope's and intercept's quantisation bounds; the horizon is the row
+    // stabbed by the greatest run-length of error bars, the horizontal runs are those whose bars contain it, and the
+    // ground is the horizontal run of smallest slope in each column.
+    let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; { const picks = []; const rising = [];
+        for (let x = 0; x < pw; x++) { let y = 0;
             while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j]; const len = b - a + 1;
-                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, a); const unc = tol[j] / (2 * Math.max(1, len - 1)); if (f[0] > unc && f[0] < bestM) { bestM = f[0]; bestA = a; bestB = b; } }
-                y = b + 1; }
-            if (bestA >= 0) { nRunsG++; for (let yy = bestA; yy <= bestB; yy++) { const v = disp[yy * pw + x]; Sxx += x * x; Sxy += x * yy; Syy += yy * yy; Sx += x; Sy += yy; Sn++; Sxv += x * v; Syv += yy * v; Sv += v; } } }
-        if (Sn >= 3) { // normal equations for [a, b, c] in v = a + b*x + c*y
-            const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
-            const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-            const dM = det(M); if (Math.abs(dM) > 1e-12) { const sol = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; sol.push(det(Mk) / dM); }
-                if (sol[2] > 0) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nRunsG, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] }; } } } }
+                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tol[j] / (2 * Math.max(1, len - 1));
+                    if (f[0] > unc) { // the zero row and its bar: least-squares standard errors from the run's own residual (floored at the quantisation bound), 3 sigma
+                        let ss = 0; for (let yy = a; yy <= b; yy++) { const e = f[1] + f[0] * yy - disp[yy * pw + x]; ss += e * e; }
+                        const sig = Math.max(Math.sqrt(ss / len), tol[j] / 4), pbar = (a + b) / 2, vbar = f[1] + f[0] * pbar;
+                        const dm = sig * Math.sqrt(12 / (len * (len * len - 1) || 1)), dv = sig / Math.sqrt(len);
+                        const z = -f[1] / f[0], dz = 3 * (dv / f[0] + Math.abs(vbar) * dm / (f[0] * f[0]));
+                        rising.push({ x, a, b, len, m: f[0], v0: f[1], tol: tol[j], z, dz }); } }
+                y = b + 1; } }
+        nRising = rising.length;
+        if (rising.length) { // interval stabbing: the row covered by the most run-length of [z - dz, z + dz] bars
+            const ev = []; for (const r of rising) { ev.push([r.z - r.dz, r.len]); ev.push([r.z + r.dz, -r.len]); }
+            ev.sort((u, v) => u[0] - v[0] || v[1] - u[1]); let cur = 0, best = -1, kBest = -1; for (let k = 0; k < ev.length; k++) { cur += ev[k][1]; if (cur > best) { best = cur; kBest = k; } }
+            const zH = kBest + 1 < ev.length ? 0.5 * (ev[kBest][0] + ev[kBest + 1][0]) : ev[kBest][0];   // the middle of the most-covered stretch, never a bar's own edge
+            const perCol = new Array(pw).fill(null);
+            for (const r of rising) { if (Math.abs(r.z - zH) > r.dz) continue; nHoriz++; if (!perCol[r.x] || r.m < perCol[r.x].m) perCol[r.x] = r; }
+            for (let x = 0; x < pw; x++) if (perCol[x]) picks.push(perCol[x]); }
+        nGroundPicks = picks.length;
+        const med = (arr) => { if (!arr.length) return NaN; const s = Float64Array.from(arr).sort(); return (s.length & 1) ? s[s.length >> 1] : 0.5 * (s[(s.length >> 1) - 1] + s[s.length >> 1]); };
+        if (picks.length >= 2) {
+            const c0 = med(picks.map(p => p.m));
+            const pair = []; const stride = Math.max(1, Math.floor(picks.length * picks.length / 2 / 40000));   // at most ~40 k pairs
+            for (let u = 0, k = 0; u < picks.length; u++) for (let v = u + 1; v < picks.length; v++, k++) if (k % stride === 0) pair.push((picks[v].v0 - picks[u].v0) / (picks[v].x - picks[u].x));
+            const b0 = pair.length ? med(pair) : 0, a0 = med(picks.map(p => p.v0 - b0 * p.x));
+            // inliers: picks whose mean |residual| to the robust plane is within their own bound; least squares over them
+            let Sxx = 0, Sxy = 0, Syy = 0, Sx = 0, Sy = 0, Sn = 0, Sxv = 0, Syv = 0, Sv = 0;
+            for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(a0 + b0 * p.x + c0 * yy - disp[jj]) / tol[jj]; } if (se / p.len > 1) continue; nGroundIn++;   // mean residual in units of each sample's own bound
+                for (let yy = p.a; yy <= p.b; yy++) { const v = disp[yy * pw + p.x], x = p.x; Sxx += x * x; Sxy += x * yy; Syy += yy * yy; Sx += x; Sy += yy; Sn++; Sxv += x * v; Syv += yy * v; Sv += v; } }
+            let sol = [a0, b0, c0];
+            if (Sn >= 3) { const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
+                const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+                const dM = det(M); if (Math.abs(dM) > 1e-12) { const s2 = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; s2.push(det(Mk) / dM); } if (s2[2] > 0) sol = s2; } }
+            if (sol[2] > 0) ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] }; } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0];
@@ -610,8 +646,8 @@ function bgFarSidePlane(dQ, pw, ph) {
     console.log('[S3] far side by the plane law: ' + nR + ' row runs (' + (nR / ph).toFixed(1) + '/row, median length ' + med(runLen[0]) + '), ' + nC + ' column runs (' + (nC / pw).toFixed(1) + '/col, median ' + med(runLen[1]) + '); ' +
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
-        (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
-    return { farField, farDisp, farKind, farAxis, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp };
+        (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
+    return { farField, farDisp, farKind, farAxis, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
