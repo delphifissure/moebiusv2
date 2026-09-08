@@ -600,17 +600,26 @@ function bgFarSidePlane(dQ, pw, ph) {
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0];
+    // Which run behind the texel is its far side when several lie outward on one side (a leaf, the leaf behind it,
+    // the hill, the sky — S15's crown)? The shift law is affine in disparity, shift = e·ppw·(D·disp − 1), so a run
+    // whose rim is g texels away and whose line lies Δ = disp_i − v behind the texel starts to show through at the
+    // head fraction f = g / (e·ppw·D·Δ): the FIRST-ARRIVING run (smallest g/Δ) is what the viewer sees when the
+    // reveal opens, and the fill is right from the onset of the reveal, where the eye spends its time. The first
+    // run behind by more than the bound was tried first and measured (S15 recall 0.80): it named the leaf 2 cm
+    // behind a leaf, which covers three texels of a 54-texel reveal, for the whole reveal.
     const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
         const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
         const xi = i % pw, yi = (i - xi) / pw; const gB = ground ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
-        let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1;
+        let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; let best = null, bestF = Infinity;
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
             const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
             if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; nGroundCut++; }   // the plane continues under the ground: it meets the ground here instead
-            if (disp[i] - v > tol[i]) { nCand++; if (len < g + 1) nThin++; return { g, p, m, v0, w, len, j }; }
+            const dlt = disp[i] - v;
+            if (dlt > tol[i]) { const fa = g / dlt; if (fa < bestF) { bestF = fa; best = { g, p, m, v0, w, len, j, thin: len < g + 1 }; } }
             p = dir > 0 ? b + 1 : a - 1; }
-        return null; };
+        if (best) { nCand++; if (best.thin) nThin++; }
+        return best; };
     const lineAt = (c, p) => c.v0 + c.m * (p - c.p);
     const combine = (ax, cL, cR, x, i) => {   // cL on the -1 side (rim at pL < x), cR on the +1 side (pR > x); returns [value, kind, g]
         if (!cL && !cR) return null;
