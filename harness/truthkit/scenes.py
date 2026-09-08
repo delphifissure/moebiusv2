@@ -165,6 +165,10 @@ def S16_ridge(W=0.16, H=0.09):
     prims.append(wall(a1, b1, 0.0, H * ext, lambda p: tex_bricks(p, bw=W * 0.08, bh=W * 0.04, mortar=W * 0.005, axes=(0, 1)), 'wall_B_crease'))
     j0 = a1 + np.array([0.0, 0, -0.06 * W]); j1 = b1 + np.array([0.0, 0, -0.06 * W])  # jump: same direction, 0.06 W deeper (bottom half)
     prims.append(wall(j0, j1, -H * ext, 0.0, lambda p: tex_bricks(p, bw=W * 0.08, bh=W * 0.04, mortar=W * 0.005, axes=(0, 1)), 'wall_B_jump'))
+    # the ledge closing the step at y = 0 (the crease wall's foot meets the jump wall's top 0.06 W further back);
+    # without it the kit saw the back wall through an open slot from every low eye (S2 report §3)
+    uB = b1 - a1; LB = np.linalg.norm(uB)
+    prims.append(Quad((a1 + b1) / 2 + np.array([0, 0, -0.03 * W]), uB / LB, [0, 0, -1], LB / 2, 0.03 * W, tex_solid((0.6, 0.55, 0.5)), STUFF, 'jump_ledge'))
     # the pilaster's return face closing the jump (perpendicular, faces +x)
     prims.append(Quad(a1 + np.array([0, -H * ext / 2, -0.03 * W]), [0, 0, -1], [0, 1, 0], 0.03 * W, H * ext / 2, tex_solid((0.6, 0.55, 0.5)), STUFF, 'jump_return'))
     prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], W * ext, H * ext, lambda p: tex_noise(p, scale=W * 0.03, base=(0.8, 0.78, 0.7), amp=0.15, axes=(0, 1)), STUFF, 'wall_back'))
