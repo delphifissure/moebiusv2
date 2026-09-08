@@ -621,18 +621,21 @@ function bgFarSidePlane(dQ, pw, ph) {
         if (best) { nCand++; if (best.thin) nThin++; }
         return best; };
     const lineAt = (c, p) => c.v0 + c.m * (p - c.p);
-    const combine = (ax, cL, cR, x, i) => {   // cL on the -1 side (rim at pL < x), cR on the +1 side (pR > x); returns [value, kind, g]
+    // returns [value, kind, g, cL, cR, mixL] — mixL is the weight of the -1 side's rim (1 = that side alone), kept for the band's colour
+    const combine = (ax, cL, cR, x, i) => {   // cL on the -1 side (rim at pL < x), cR on the +1 side (pR > x)
         if (!cL && !cR) return null;
-        if (!cL || !cR) { const c = cL || cR; return [lineAt(c, x), 1, c.g]; }
+        if (!cL || !cR) { const c = cL || cR; return [lineAt(c, x), 1, c.g, cL, cR, cL ? 1 : 0]; }
         const G = cR.p - cL.p, tL = tol[cL.j], tR = tol[cR.j];
         const uL = cL.w > 1 ? G / (2 * (cL.w - 1)) : 0.5, uR = cR.w > 1 ? G / (2 * (cR.w - 1)) : 0.5;
         const same = Math.abs(lineAt(cL, cR.p) - disp[cR.j]) <= tR * (0.5 + uL) || Math.abs(lineAt(cR, cL.p) - disp[cL.j]) <= tL * (0.5 + uR);
         const g = Math.min(cL.g, cR.g);
-        if (same) { const vL = disp[cL.j], vR = disp[cR.j]; return [vL + (vR - vL) * (x - cL.p) / G, 2, g]; }
+        if (same) { const vL = disp[cL.j], vR = disp[cR.j]; return [vL + (vR - vL) * (x - cL.p) / G, 2, g, cL, cR, (cR.p - x) / G]; }
         const dm = cL.m - cR.m;
         if (Math.abs(dm) > 1e-30) { const k = (cR.v0 - cR.m * cR.p - cL.v0 + cL.m * cL.p) / dm;
-            if (k > cL.p && k < cR.p) return [x < k ? lineAt(cL, x) : lineAt(cR, x), 3, g]; }
-        const mid = (cL.p + cR.p) / 2; return [x <= mid ? lineAt(cL, x) : lineAt(cR, x), 4, g]; };
+            if (k > cL.p && k < cR.p) return [x < k ? lineAt(cL, x) : lineAt(cR, x), 3, g, cL, cR, x < k ? 1 : 0]; }
+        const mid = (cL.p + cR.p) / 2; return [x <= mid ? lineAt(cL, x) : lineAt(cR, x), 4, g, cL, cR, x <= mid ? 1 : 0]; };
+    // the rims each texel continues from (for the band's colour): rim texel and window length per side of the winning axis, and the -1 side's weight
+    const farRimJ = new Int32Array(2 * N).fill(-1), farRimW = new Int32Array(2 * N), farMix = new Float32Array(N);
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
         const row = combine(0, cand(0, y, x, -1, i), cand(0, y, x, +1, i), x, i);
         const colR = combine(1, cand(1, x, y, -1, i), cand(1, x, y, +1, i), y, i);
@@ -652,6 +655,7 @@ function bgFarSidePlane(dQ, pw, ph) {
             else if (colR[2] < row[2]) { pick = colR; axv = 2; } else { pick = row; axv = 1; } }
         else if (row) { pick = row; axv = 1; } else if (colR) { pick = colR; axv = 2; }
         if (!pick) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
+        if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
         let v = pick[0]; if (v < dispFloor) v = dispFloor; if (v > disp[i]) v = disp[i];
         farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
@@ -668,7 +672,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
         (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
-    return { farField, farDisp, farKind, farAxis, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8433,7 +8437,7 @@ window._plugGeoBand = function (opts) {
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
     let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
-    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null;
+    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
@@ -8474,6 +8478,7 @@ window._plugGeoBand = function (opts) {
         if (planeFS) {   // S3: no membrane — every texel is a boundary value: its plane far side where free, itself elsewhere
             for (let i = 0; i < N; i++) { fixedFF[i] = 1; if (free[i]) valFF[i] = planeFS.farField[i]; }
             window._geoFarKind = planeFS.farKind; window._geoFarAxis = planeFS.farAxis;
+            window._geoFarRim = { j: planeFS.farRimJ, w: planeFS.farRimW, mix: planeFS.farMix, axis: planeFS.farAxis };   // S3: the rims each band texel continues from (its colour)
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
             console.log('[S3] reach under the plane law: ' + nReach + ' free texels (single ' + kc[1] + ', same plane ' + kc[2] + ', crossing ' + kc[3] + ', midpoint ' + kc[4] + ', none ' + kc[0] + '; row axis ' + ac[1] + ', column axis ' + ac[2] + ')' + (skyOnR ? ('; sky behind ' + nSkyClass) : '')); }
         else for (let i = 0; i < N; i++) { if (skyClass[i]) { fixedFF[i] = 1; valFF[i] = 0; } else fixedFF[i] = free[i] ? 0 : 1; }
@@ -14755,6 +14760,53 @@ function bgBuildBackgroundLayerCore() {
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
                     console.log('[QUICK-BAKE] depth-consistent plate colours: ' + nRow + ' row / ' + nCol + ' col / ' + nMiss + ' miss (' + (Date.now() - tCR0) + 'ms)');
                 } catch (eCR) { console.warn('[QUICK-BAKE] plate row-colour pass failed, wash kept:', eCR); plateColorTex = null; }
+            }
+            // ===== S3 PLANE COLOUR (the plane far side, rim law) =====
+            // The A242 membrane seeds its colours from non-band texels whose SOURCE depth is within fgTearStep
+            // (0.06 normalised) of the band texel's plate depth. That gate's units are the depth volume's: on the
+            // 8.64 m open scene 0.06 spans half a metre at the trunk, so the trunk seeded the ground behind it and
+            // the wedge it uncovers was brown (both arms of the S15 shots). Under the plane far side every band
+            // texel already knows WHICH rims it continues from (the same rims that fixed its depth, on the axis
+            // that won): its colour is the mean over each rim's window (a wash of that surface, no single texel
+            // cloned), mixed by the same weight as the depth (the line through two rims, or one side). The band's
+            // outer ring takes those colours as Dirichlet values and the interior is the harmonic membrane between
+            // them (Perez, Gangnet & Blake 2003), so the fill is smooth in 2D and made only of far-surface colours.
+            if (!plateColorTex && bgFarRuleOn() && window._geoFarRim && window._geoFarRim.j && window._geoFarRim.j.length === 2 * PNq) {
+                try {
+                    const tPC0 = Date.now(); const FR = window._geoFarRim;
+                    const cImgC = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvC = document.createElement('canvas'); cvC.width = pw; cvC.height = ph;
+                    const cxC = cvC.getContext('2d', { willReadFrequently: true });
+                    cxC.drawImage(cImgC, 0, 0, pw, ph);
+                    const pxC = cxC.getImageData(0, 0, pw, ph); const cd = pxC.data;
+                    const acc = [0, 0, 0];
+                    const winMean = (j, w, ax, side) => { const st = ax === 1 ? 1 : pw; const jx = j % pw, jy = (j - jx) / pw; const lim = ax === 1 ? (side > 0 ? pw - jx : jx + 1) : (side > 0 ? ph - jy : jy + 1);
+                        const n = Math.max(1, Math.min(w, lim)); let r = 0, g = 0, b = 0; for (let k = 0; k < n; k++) { const t = j + side * k * st; r += cd[t * 4]; g += cd[t * 4 + 1]; b += cd[t * 4 + 2]; } acc[0] = r / n; acc[1] = g / n; acc[2] = b / n; return n; };
+                    const col = new Float32Array(PNq * 3), hasC = new Uint8Array(PNq); let nCol = 0;
+                    for (let i = 0; i < PNq; i++) { if (!disocc[i]) continue; const jA = FR.j[2 * i], jB = FR.j[2 * i + 1], ax = FR.axis[i]; if (!ax || (jA < 0 && jB < 0)) continue;
+                        let mA = jA >= 0 ? (jB >= 0 ? FR.mix[i] : 1) : 0, r = 0, g = 0, b = 0;
+                        if (jA >= 0 && mA > 0) { winMean(jA, FR.w[2 * i], ax, -1); r += mA * acc[0]; g += mA * acc[1]; b += mA * acc[2]; }
+                        if (jB >= 0 && mA < 1) { winMean(jB, FR.w[2 * i + 1], ax, +1); r += (1 - mA) * acc[0]; g += (1 - mA) * acc[1]; b += (1 - mA) * acc[2]; }
+                        col[i * 3] = r; col[i * 3 + 1] = g; col[i * 3 + 2] = b; hasC[i] = 1; nCol++; }
+                    // ring (band texels touching a non-band texel) = Dirichlet; interior = membrane unknowns
+                    const ring = new Uint8Array(PNq); let nRing = 0;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!disocc[i] || !hasC[i]) continue;
+                        if ((x > 0 && !disocc[i - 1]) || (x < pw - 1 && !disocc[i + 1]) || (y > 0 && !disocc[i - pw]) || (y < ph - 1 && !disocc[i + pw])) { ring[i] = 1; nRing++; } }
+                    const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (disocc[i] && hasC[i] && !ring[i]) uIdx[i] = nU++;
+                    const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1), dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU), vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
+                    for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y; lv.vR[u] = col[i * 3]; lv.vG[u] = col[i * 3 + 1]; lv.vB[u] = col[i * 3 + 2];
+                        const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+                        for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0 || !disocc[j] || !hasC[j]) continue; if (ring[j]) { lv.dR[u] += col[j * 3]; lv.dG[u] += col[j * 3 + 1]; lv.dB[u] += col[j * 3 + 2]; lv.dW[u]++; } else lv.nb[u * 4 + s] = uIdx[j]; } }
+                    let mgC = { sweeps: [[nU, 0, 0]], residual: 0 }; if (nU > 0) mgC = bgMembraneSolve(lv, 0.5, 60);
+                    for (let i = 0; i < PNq; i++) { if (!disocc[i] || !hasC[i]) continue; const u = uIdx[i]; const r = u >= 0 ? lv.vR[u] : col[i * 3], g = u >= 0 ? lv.vG[u] : col[i * 3 + 1], b = u >= 0 ? lv.vB[u] : col[i * 3 + 2];
+                        cd[i * 4] = Math.max(0, Math.min(255, r)); cd[i * 4 + 1] = Math.max(0, Math.min(255, g)); cd[i * 4 + 2] = Math.max(0, Math.min(255, b)); }
+                    cxC.putImageData(pxC, 0, 0);
+                    if (window._plugSweepCapture) window._qbPlateColor = cd.slice();
+                    plateColorTex = new THREE.CanvasTexture(cvC);
+                    plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
+                    if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
+                    console.log('[S3] plane colour: ' + nCol + ' band texels coloured from their own rims (' + nRing + ' ring as Dirichlet, ' + nU + ' interior by the membrane, ' + mgC.sweeps[0][1] + ' cycles, err ' + (mgC.residual).toFixed(2) + '/255); ' + (Date.now() - tPC0) + 'ms');
+                } catch (ePC) { console.warn('[S3] plane colour failed, falling back to the membrane:', ePC); plateColorTex = null; }
             }
             // ===== A213 DEPTH-GATED BAND FILL (default) =====
             // The a212 attribution chain convicted the wash: it is one-sided

@@ -34,11 +34,11 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
     }, { flush: !!process.env.FLUSH, obs: !!process.env.OBS, gateA: !!process.env.GATEA, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
          depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(meta));
-    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc', geoClass: '_geoClass', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', fgTorn: '_qbFgTorn', farKind: '_geoFarKind', farAxis: '_geoFarAxis', skyClass: '_geoSkyClass' };   // S3: farKind/farAxis from the plane far side
+    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc', geoClass: '_geoClass', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', fgTorn: '_qbFgTorn', farKind: '_geoFarKind', farAxis: '_geoFarAxis', skyClass: '_geoSkyClass', plateColor: '_qbPlateColor' };   // S3: farKind/farAxis from the plane far side
     for (const [name, key] of Object.entries(arrays)) {
         const b64 = await page.evaluate((k) => { const a = window[k]; if (!a) return null; const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return { b64: btoa(s), type: a.constructor.name }; }, key);
         if (!b64) { console.log('  missing ' + key); continue; }
-        const ext = { Float32Array: 'f32', Uint8Array: 'u8', Int32Array: 'i32', Int16Array: 'i16', Uint16Array: 'u16' }[b64.type] || 'bin';
+        const ext = { Float32Array: 'f32', Uint8Array: 'u8', Uint8ClampedArray: 'u8', Int32Array: 'i32', Int16Array: 'i16', Uint16Array: 'u16' }[b64.type] || 'bin';
         fs.writeFileSync(path.join(OUT, name + '.' + ext), Buffer.from(b64.b64, 'base64')); console.log('  wrote ' + name + '.' + ext);
     }
     // S2b per-pose class maps: POSES="fx:fy,fx:fy" (fractions of the rim); each pose's cell classes + reveal texels
