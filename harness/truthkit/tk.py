@@ -93,6 +93,9 @@ class Quad(Prim):
         super().__init__(tex, label, name)
         self.c = np.array(c, float); self.u = np.array(u, float) / np.linalg.norm(u); self.v = np.array(v, float) / np.linalg.norm(v)
         self.n = np.cross(self.u, self.v); self.n /= np.linalg.norm(self.n); self.hu = hu; self.hv = hv
+        # non-orthogonal axes make a parallelogram (S16's ledge between two parallel wall lines offset in z);
+        # the in-plane coordinates come from the Gram system, which is the identity for the usual rectangle
+        self._uv = float(self.u @ self.v); self._det = 1.0 - self._uv * self._uv
 
     def hits(self, o, d):
         denom = d @ self.n
@@ -100,7 +103,9 @@ class Quad(Prim):
             t = ((self.c - o) @ self.n) / denom
             p = o + t[:, None] * d
             rel = p - self.c
-            a = rel @ self.u; b = rel @ self.v
+            a0 = rel @ self.u; b0 = rel @ self.v
+            if self._uv != 0.0: a = (a0 - self._uv * b0) / self._det; b = (b0 - self._uv * a0) / self._det
+            else: a = a0; b = b0
         ok = (np.abs(denom) > 1e-12) & (t > 1e-9) & (np.abs(a) <= self.hu) & (np.abs(b) <= self.hv)
         return [np.where(ok, t, INF)]
 

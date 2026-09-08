@@ -329,7 +329,8 @@ function bgShiftLUTFor(pwArg, phArg, exArg) {
     const D = Math.max(1e-3, Math.abs(_cz - _pz));
     const key = pwv + 'x' + phv + '|' + bgViewFadeEndDeg + '|' + innerVolumeDepth + '|' +
                 outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' +
-                ((typeof exArg === 'number') ? exArg.toFixed(5) : 'fade');
+                ((typeof exArg === 'number') ? exArg.toFixed(5) : 'fade') +
+                '|sky' + (bgSkyInfOn() ? bgSkyQ().toExponential(3) : '0');   // S2c
     if (_bgShiftLUT && _bgShiftLUT.key === key) return _bgShiftLUT;
     if (_bgShiftLUTAlt && _bgShiftLUTAlt.key === key) return _bgShiftLUTAlt;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
@@ -355,11 +356,15 @@ function bgShiftLUTFor(pwArg, phArg, exArg) {
         const f = (b > a) ? (target - a) / (b - a) : 0;
         inv[i] = Math.min(1, (j + f) / N);
     }
-    const built = { key, fwd, inv, N, M, m0, m1, span: m1 - m0 };
+    // S2c: a sky texel shifts by the plane-at-infinity law (z = -Z_sky), outside the volume's LUT
+    const skyOn = bgSkyInfOn(); const skyZ = skyOn ? bgSkyZ().Z : 0;
+    const skyPx = skyOn ? (ex * (-skyZ) / (D + skyZ)) * pxPerWorld : 0;
+    const built = { key, fwd, inv, N, M, m0, m1, span: m1 - m0, skyOn, skyQ: skyOn ? bgSkyQ() : -1, skyPx, pxPerWorld, ex, D };
     if (typeof exArg === 'number') _bgShiftLUTAlt = built; else _bgShiftLUT = built;
     return built;
 }
 function bgShiftPxAt(L, d) {
+    if (L.skyOn && d < L.skyQ) return L.skyPx;   // S2c
     const t = Math.min(1, Math.max(0, d)) * L.N, i = t | 0;
     return (i >= L.N) ? L.fwd[L.N] : L.fwd[i] + (L.fwd[i + 1] - L.fwd[i]) * (t - i);
 }
@@ -397,7 +402,8 @@ function bgRimLawFor(pwArg, phArg) {
     const _cz = (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2;
     const D = Math.max(1e-3, Math.abs(_cz - _pz));
     const gmin = (typeof window._rimGrazeDeg === 'number' && window._rimGrazeDeg > 0) ? window._rimGrazeDeg : 2;
-    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin;
+    const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;   // S2c: sky is joined to nothing but sky
+    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|sky' + (skyOn ? sq.toExponential(3) : '0');
     if (_bgRimLaw && _bgRimLaw.key === key) return _bgRimLaw;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
     const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
@@ -412,12 +418,40 @@ function bgRimLawFor(pwArg, phArg) {
         ze[i] = Math.max(1e-4, D - z);
     }
     const zeAt = (d) => { const x = Math.min(1, Math.max(0, d)) * N, i = x | 0; return (i >= N) ? ze[N] : ze[i] + (ze[i + 1] - ze[i]) * (x - i); };
-    const joined = (dA, dB) => { const a = zeAt(dA), b = zeAt(dB); return (a > b ? a / b : b / a) <= t; };
+    const joined = (dA, dB) => { if (skyOn) { const sA = dA < sq, sB = dB < sq; if (sA || sB) return sA && sB; } const a = zeAt(dA), b = zeAt(dB); return (a > b ? a / b : b / a) <= t; };
     _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined };
     console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
     return _bgRimLaw;
 }
 function bgRimLawOn() { return window._tearLaw === 'rim'; }
+// =====================================================================================
+// S2c SKY AT INFINITY (window._skyInf; R3 §1–§2, decision D1)
+// =====================================================================================
+// The estimators put sky at disparity 0 by segmentation (Depth Anything) and view synthesis
+// renders it by the plane-at-infinity law (InfiniteNature-Zero): sky is a direction, not a
+// depth. Under the app's shift law x = x0 + e*z/(D - z) the coefficient tends to -1 as
+// z -> -inf, so sky moves across the window by exactly -e, independent of D and of the depth
+// volume. The finite volume maps the far end to z = -outer and under-moves the sky by
+// outer/(D + outer) (9 % of its rate at the 0.02 default: the "glued to the sky" relief).
+// With the flag on, a sky texel (source depth at the far end within half a source quantum:
+// the estimator's zero) and a plate texel whose far field is sky are displaced to z = -Z_sky,
+// the depth whose under-move e*D/(D + Z) is below one display pixel at the envelope rim
+// (derived per bake; capped at half the camera's far plane and logged when the cap binds).
+// The shift LUT, the rim law (sky is joined to nothing but sky) and the reach carry the same
+// rule, so the sweep and the render agree.
+function bgSkyInfOn() { return !!window._skyInf; }
+function bgSkyQ() { const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255); return 0.5 * q; }
+function bgSkyZ() {
+    const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    const _cz = (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2;
+    const D = Math.max(1e-3, Math.abs(_cz - _pz));
+    const ex = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    const dispW = (typeof renderer !== 'undefined' && renderer && renderer.domElement && renderer.domElement.width) ? renderer.domElement.width : 1920;
+    const ppw = dispW / Math.max(1e-6, terrariumWidth);          // display pixels per metre across the window
+    const Zneed = ex * D * ppw;                                    // e*D/Z < 1 display px  <=>  Z > e*D*ppw
+    const Zcap = ((typeof camera !== 'undefined' && camera && camera.far) ? camera.far : 1000) * 0.5;
+    return { Z: Math.min(Zneed, Zcap), Zneed, Zcap, capped: Zneed > Zcap, D, ex };
+}
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
@@ -2374,6 +2408,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_worldOuterVolumeDepth: { value: outerVolumeDepth },
         u_worldInnerVolumeDepth: { value: innerVolumeDepth },
         displacementBias: { value: 0.0 },
+        u_skyInf: { value: 0.0 }, u_skyQ: { value: 0.0 },   // S2c (set by the quick bake when window._skyInf)
         // A167: slides the whole depth volume back so its NEAREST extent lands
         // on the viewport surface — nothing protrudes through the glass. See
         // bgEmbedVolume — A209: OFF by default (user decision); the uniform
@@ -2879,6 +2914,8 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_embedOffset;
         uniform bool  u_useRayReproject;
         uniform vec3  u_refEye;
+        uniform float u_skyInf;        // S2c: > 0 = sky texels (depth < u_skyQ) sit at z = -u_skyInf (plane at infinity)
+        uniform float u_skyQ;
         // A174: the tapered pop-out. Declared here as well as in the fragment
         // head — same uniforms object, two stages.
         uniform float u_popExtra;      // 0 = no pop-out
@@ -2903,6 +2940,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             // is the whole reason a172 rejected translating the volume.
             displacement = mix(0.0, u_worldInnerVolumeDepth + u_popExtra, t);
         }
+        if (u_skyInf > 0.0 && vNormalizedDepth < u_skyQ) displacement = -u_skyInf;   // S2c: sky at infinity
         // A167: a pure translation along z. The volume keeps its depth and the
         // parallax law is untouched; only the plane it hangs from moves.
         float zOff = displacement + displacementBias + u_embedOffset;
@@ -14794,6 +14832,7 @@ function bgBuildBackgroundLayerCore() {
                 } catch (eBF) { console.warn('[QUICK-BAKE] A215 band fill failed, wash kept:', eBF); plateColorTex = null; }
             }
             const matQ = L.mesh.material.clone();
+            if (matQ.uniforms.u_skyInf) { matQ.uniforms.u_skyInf.value = bgSkyInfOn() ? bgSkyZ().Z : 0; matQ.uniforms.u_skyQ.value = bgSkyQ(); }   // S2c: plate texels whose far field is sky
             matQ.uniforms.displacementMap.value = plateDT;
             matQ.uniforms.map.value = plateColorTex || bgColorTarget.texture;
             // A250 (mirrored-repeat wrapping for the A245 ring) was built and REMOVED (rule 7): over the whole-window
@@ -14921,6 +14960,12 @@ function bgBuildBackgroundLayerCore() {
                 L.mesh.material.uniforms.u_useBandCut.value = false;
                 if (L.mesh.material.uniforms.u_bandCutAll) L.mesh.material.uniforms.u_bandCutAll.value = false;
                 console.log('[S2b] rim law: foreground stretch net disarmed (joined surfaces render at any stretch; rims are geometric tears)');
+            }
+            // S2c: sky at infinity (window._skyInf) — the foreground's sky texels; the plate clone below inherits
+            if (L.mesh.material.uniforms.u_skyInf) {
+                if (bgSkyInfOn()) { const szk = bgSkyZ(); L.mesh.material.uniforms.u_skyInf.value = szk.Z; L.mesh.material.uniforms.u_skyQ.value = bgSkyQ();
+                    console.log('[S2c] sky at infinity: Z_sky = ' + szk.Z.toFixed(1) + ' m (one display px at the rim needs ' + szk.Zneed.toFixed(1) + '; far-plane cap ' + szk.Zcap.toFixed(0) + (szk.capped ? ' BINDS' : '') + '); sky = source depth < ' + bgSkyQ().toExponential(2) + '; sky shift at the rim ' + bgShiftLUTFor(pw, ph).skyPx.toFixed(1) + ' px vs far end ' + bgShiftLUTFor(pw, ph).m0.toFixed(1)); }
+                else L.mesh.material.uniforms.u_skyInf.value = 0;
             }
             // A50: the plate must render SOLID, but sharing the FG geometry
             // AFTER the pre-tear inherits every cliff hole — and lifted ink
