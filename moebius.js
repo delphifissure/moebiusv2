@@ -8192,7 +8192,29 @@ window._plugGeoBand = function (opts) {
             for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue;
                 if (fixed[j]) { if (optsF && optsF.neumann && optsF.neumann(i, j)) continue;   // S2b.4: a joined fixed neighbour is the same surface — no boundary value, the far side continues at its own depth
                     const v = val[j] * 255; lv.dR[u] += v; lv.dG[u] += v; lv.dB[u] += v; lv.dW[u]++; } else lv.nb[u * 4 + s2] = uIdx[j]; } }
-        const mg = bgMembraneSolve(lv, 0.5, 60);
+        // S2b.4: with Neumann boundaries an unknown may have no boundary value at all. An unknown with neither a
+        // Dirichlet neighbour nor an unknown neighbour is its own far side (fixed at val); and if the multigrid
+        // still diverges (S16: residual 6e6 → every texel clamped to the source → no band) the solve falls back
+        // to Dirichlet at every fixed neighbour and says so, rather than shipping a field that is the source.
+        if (optsF && optsF.neumann) { let nIso = 0; for (let i = 0; i < N; i++) { const u = uIdx[i]; if (u < 0) continue; if (lv.dW[u] === 0 && lv.nb[u * 4] < 0 && lv.nb[u * 4 + 1] < 0 && lv.nb[u * 4 + 2] < 0 && lv.nb[u * 4 + 3] < 0) { lv.vR[u] = lv.vG[u] = lv.vB[u] = val[i] * 255; lv.dW[u] = 1; lv.dR[u] = lv.dG[u] = lv.dB[u] = val[i] * 255; nIso++; } }
+            if (nIso) console.log('[S2b] far field: ' + nIso + ' reach texels had no boundary value at all (own far side)');
+            // A pure-Neumann component (a connected reach region with no far-rim value anywhere on its boundary) has a
+            // constant null space; the aggregated coarse operators then lose diagonal dominance under TAU = 1.6 and the
+            // multigrid diverged (S16: residual 6e6). Such a component has no far side but itself: label the unknown
+            // components, and fix every member of a component whose boundary weight is zero at its own depth. Exact,
+            // no regulariser — a Tikhonov anchor of 1e-3 was tried first and its screening length (63 texels) pulled
+            // every wide reach back toward the source (S15 depth 0.14 → 1.47 m); removed (rule 7).
+            { const comp = new Int32Array(nU).fill(-1); let nComp = 0; const stack = new Int32Array(nU); let nFixedComp = 0, nFixedTex = 0;
+              for (let s0 = 0; s0 < nU; s0++) { if (comp[s0] >= 0) continue; let sp = 0; stack[sp++] = s0; comp[s0] = nComp; let wSum = 0; const members = [];
+                  while (sp > 0) { const u = stack[--sp]; members.push(u); wSum += lv.dW[u]; for (let s2 = 0; s2 < 4; s2++) { const v = lv.nb[u * 4 + s2]; if (v >= 0 && comp[v] < 0) { comp[v] = nComp; stack[sp++] = v; } } }
+                  if (wSum === 0) { nFixedComp++; nFixedTex += members.length; for (const u of members) { const i = (lv.y[u] * pw) + lv.x[u]; const v = val[i] * 255; lv.vR[u] = lv.vG[u] = lv.vB[u] = v; lv.dW[u] = 1; lv.dR[u] = lv.dG[u] = lv.dB[u] = v; } }
+                  nComp++; }
+              if (nFixedComp) console.log('[S2b] far field: ' + nFixedComp + ' reach components (' + nFixedTex + ' texels) touch no far rim and keep their own depth'); } }
+        let mg = bgMembraneSolve(lv, 0.5, 60);
+        if (optsF && optsF.neumann && !(isFinite(mg.residual) && mg.residual / 255 < 0.05)) {
+            console.warn('[S2b] far field: the Neumann solve did not converge (residual ' + (mg.residual / 255).toFixed(4) + '); falling back to Dirichlet at every fixed neighbour for this bake');
+            return solveField(fixed, val, Object.assign({}, optsF, { neumann: null }));
+        }
         const field = new Float32Array(N);
         for (let i = 0; i < N; i++) { const u = uIdx[i]; field[i] = u < 0 ? val[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
         // S2c: a membrane value within one source quantum of the far end IS the far end (sky under the flag); the solver's residual must not keep sky off the plane at infinity
