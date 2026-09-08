@@ -562,7 +562,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     // row z = -v0/m with an error bar from its slope's and intercept's quantisation bounds; the horizon is the row
     // stabbed by the greatest run-length of error bars, the horizontal runs are those whose bars contain it, and the
     // ground is the horizontal run of smallest slope in each column.
-    let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; { const picks = []; const rising = [];
+    let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; const groundTex = new Uint8Array(N); { const picks = []; const rising = [];
         for (let x = 0; x < pw; x++) { let y = 0;
             while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j]; const len = b - a + 1;
                 if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tol[j] / (2 * Math.max(1, len - 1));
@@ -596,7 +596,9 @@ function bgFarSidePlane(dQ, pw, ph) {
             if (Sn >= 3) { const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
                 const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
                 const dM = det(M); if (Math.abs(dM) > 1e-12) { const s2 = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; s2.push(det(Mk) / dM); } if (s2[2] > 0) sol = s2; } }
-            if (sol[2] > 0) ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] }; } }
+            if (sol[2] > 0) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
+                // the texels of the ground's own runs (a thin ground run continues along the fitted plane, not its own noisy line)
+                for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tol[jj]; } if (se / p.len <= 1) for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0]; const sqDispK = skyOn ? rl.dispAt(sq) : -1;
@@ -614,9 +616,16 @@ function bgFarSidePlane(dQ, pw, ph) {
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
             const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
+            const thin = len < g + 1;
+            // THIN EVIDENCE: a run shorter than the gap it is asked to cross has a slope uncertain by more than a
+            // quantum at the far end. Extrapolating it drew ramps from every leaf of S15's crown toward the hill or
+            // the sky — affine by construction, so the plate's tear test kept them, and they rendered as the
+            // horizontal streaks (plate-only shot). A thin run continues along the fitted ground plane if it is one
+            // of the ground's own runs (S32's 44-row floor in front of a 180-row gap), otherwise at constant depth.
+            if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
             if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; nGroundCut++; }   // the plane continues under the ground: it meets the ground here instead
             const dlt = disp[i] - v;
-            if (dlt > tol[i]) { const fa = g / dlt; if (fa < bestF) { bestF = fa; best = { g, p, m, v0, w, len, j, thin: len < g + 1 }; } }
+            if (dlt > tol[i]) { const fa = g / dlt; if (fa < bestF) { bestF = fa; best = { g, p, m, v0, w, len, j, thin }; } }
             p = dir > 0 ? b + 1 : a - 1; }
         if (best) { nCand++; if (best.thin) nThin++; }
         return best; };
