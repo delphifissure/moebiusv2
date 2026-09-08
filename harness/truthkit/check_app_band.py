@@ -54,6 +54,24 @@ if ff is not None:
         d_pl = -app_z_of_d(pf, pn, outer, inner); errp = (d_pl - d_true)[m]
         res['plate_depth_err_m'] = {'n': int(m.sum()), 'mean': float(errp.mean()) if m.any() else None, 'median_abs': float(np.median(np.abs(errp))) if m.any() else None,
                                     'p90_abs': float(np.percentile(np.abs(errp), 90)) if m.any() else None}
+    # S4: the second layer — the app's plate 2 (farField2, -1 = none) against the kit's SECOND ever-visible hidden
+    # layer where both exist, and the better of the app's two layers against the kit's first
+    f2p = os.path.join(probe, 'farField2.f32')
+    if os.path.exists(f2p):
+        ff2 = np.fromfile(f2p, np.float32).reshape(ph, pw); has_app2 = ff2 >= 0
+        order = np.argsort(~vis_hidden, axis=-1, kind='stable'); n_vis = vis_hidden.sum(-1)
+        k2 = order[..., 1]; has_kit2 = n_vis >= 2
+        d_true2 = np.take_along_axis(dep_c, k2[..., None], axis=-1)[..., 0]
+        d_app2 = -app_z_of_d(np.clip(ff2, 0, 1), pn, outer, inner)
+        m2 = dis & has_kit2 & has_app2 & np.isfinite(d_true2); err2 = np.abs(d_app2 - d_true2)[m2]
+        m1 = dis & has & np.isfinite(d_true); e1 = np.abs(d_app - d_true); ea = np.abs(d_app2 - d_true); best = np.where(has_app2, np.minimum(e1, ea), e1)
+        # app layer 2 against the kit's first layer (is the second layer sometimes the kit's first?)
+        m21 = dis & has & has_app2 & np.isfinite(d_true)
+        res['layer2'] = {'app_px': int((dis & has_app2).sum()), 'kit_px': int((dis & has_kit2).sum()), 'both_px': int(m2.sum()),
+                         'median_abs_m': float(np.median(err2)) if m2.any() else None, 'p90_abs_m': float(np.percentile(err2, 90)) if m2.any() else None,
+                         'best_of_two_vs_first_median_m': float(np.median(best[m1])) if m1.any() else None, 'best_of_two_vs_first_p90_m': float(np.percentile(best[m1], 90)) if m1.any() else None,
+                         'layer1_vs_first_p90_m': float(np.percentile(e1[m1], 90)) if m1.any() else None,
+                         'app2_matches_kit1_frac': float((ea[m21] < e1[m21]).mean()) if m21.any() else None}
 print(json.dumps(res, indent=1))
 rgb = np.array(Image.open(sys.argv[3]).convert('RGB').resize((pw, ph))).astype(float) / 255
 col = np.zeros(rgb.shape); col[dis & hidden] = (0.2, 0.9, 0.2); col[dis & ~hidden] = (1, 0.5, 0); col[~dis & hidden] = (0.3, 0.5, 1)

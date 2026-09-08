@@ -641,7 +641,14 @@ function bgFarSidePlane(dQ, pw, ph) {
         // (S15's sign: the hill behind it passes in 15 % of the envelope, the sky covers the rest). One texel holds one
         // depth; both are kept for the live pass — window._farPick = 'coverage' selects the second, default the first.
         // The complete answer is a second layer (report §6).
-        if (window._farPick !== 'coverage') { let first = null, firstF = Infinity; for (const c of list) if (c.f0 < firstF) { firstF = c.f0; first = c; } nCand++; if (first.thin) nThin++; return first; }
+        // S4 THE SECOND LAYER: what is seen at this texel once the chosen run has passed (its exit pose f1 < 1) —
+        // the nearest run covering that moment, else the next to arrive. Plate 2 carries it (a layered depth image
+        // read off the arrival order; Shade, Gortler, He & Szeliski 1998). None if the chosen run never passes.
+        const withNext = (c) => { c.next = null; if (!(c.f1 < 1)) return c; let bn = null;
+            for (const o of list) { if (o === c) continue; if (o.f0 <= c.f1 && o.f1 > c.f1 && (!bn || o.dlt < bn.dlt)) bn = o; }
+            if (!bn) { let fm = Infinity; for (const o of list) if (o !== c && o.f0 > c.f1 && o.f0 < fm) { fm = o.f0; bn = o; } }
+            c.next = bn; return c; };
+        if (window._farPick !== 'coverage') { let first = null, firstF = Infinity; for (const c of list) if (c.f0 < firstF) { firstF = c.f0; first = c; } nCand++; if (first.thin) nThin++; return withNext(first); }
         // nearest first; each takes the part of its interval no nearer run has taken; the largest share wins
         list.sort((u, v) => u.dlt - v.dlt);   // dlt = disp_i - v: the smallest gap is the nearest run, in front of the others
         const taken = []; let best = null, bestCov = 0, first = null, firstF = Infinity;
@@ -652,7 +659,7 @@ function bgFarSidePlane(dQ, pw, ph) {
             let lo = a0, hi = a1; const rest = []; for (const t of taken) { if (t[1] < lo || t[0] > hi) rest.push(t); else { lo = Math.min(lo, t[0]); hi = Math.max(hi, t[1]); } } rest.push([lo, hi]); taken.length = 0; taken.push(...rest); }
         if (!best) best = first;   // nothing arrives inside the envelope: the first to arrive at all (the texel will not be free anyway)
         nCand++; if (best.thin) nThin++;
-        return best; };
+        return withNext(best); };
     const lineAt = (c, p) => c.v0 + c.m * (p - c.p);
     // returns [value, kind, g, cL, cR, mixL] — mixL is the weight of the -1 side's rim (1 = that side alone), kept for the band's colour
     const combine = (ax, cL, cR, x, i) => {   // cL on the -1 side (rim at pL < x), cR on the +1 side (pR > x)
@@ -669,6 +676,8 @@ function bgFarSidePlane(dQ, pw, ph) {
         const mid = (cL.p + cR.p) / 2; return [x <= mid ? lineAt(cL, x) : lineAt(cR, x), 4, g, cL, cR, x <= mid ? 1 : 0]; };
     // the rims each texel continues from (for the band's colour): rim texel and window length per side of the winning axis, and the -1 side's weight
     const farRimJ = new Int32Array(2 * N).fill(-1), farRimW = new Int32Array(2 * N), farMix = new Float32Array(N);
+    // S4: the second layer per texel — its disparity, the rim run it comes from (texel, window, side along the axis)
+    const farDisp2 = new Float32Array(N).fill(-1), farField2 = new Float32Array(N).fill(-1), farRimJ2 = new Int32Array(N).fill(-1), farRimW2 = new Int32Array(N), farSide2 = new Int8Array(N); let nLayer2 = 0;
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
         const row = combine(0, cand(0, y, x, -1, i), cand(0, y, x, +1, i), x, i);
         const colR = combine(1, cand(1, x, y, -1, i), cand(1, x, y, +1, i), y, i);
@@ -693,6 +702,10 @@ function bgFarSidePlane(dQ, pw, ph) {
         // far end of the volume) is no far side at all: the texel is its own, with no rims to colour it from
         if (disp[i] - v <= tol[i]) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
         if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
+        // S4: the second layer comes from the side that gave the value (same plane: the nearer rim's side)
+        { const sideL = pick[3] && (!pick[4] || (pick[1] === 2 ? pick[3].g <= pick[4].g : pick[5] >= 0.5)); const cs = sideL ? pick[3] : pick[4];
+            if (cs && cs.next) { const nx = cs.next; const pos = axv === 1 ? x : y; let v2 = isSky[nx.j] ? 0 : (nx.v0 + nx.m * (pos - nx.p)); if (v2 < dispFloor) v2 = dispFloor; if (v2 > disp[i]) v2 = disp[i];
+                if (Math.abs(v2 - pick[0]) > tol[i]) { farDisp2[i] = v2; farRimJ2[i] = nx.j; farRimW2[i] = nx.w; farSide2[i] = sideL ? -1 : 1; nLayer2++; } } }
         farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
     const sqDisp = skyOn ? rl.dispAt(sq) : -1;
@@ -700,6 +713,10 @@ function bgFarSidePlane(dQ, pw, ph) {
         if (skyOn && v < sqDisp) { farField[i] = 0; continue; }
         let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rl.dispAt(md) < v) lo = md; else hi = md; }
         farField[i] = Math.min(dQ[i], 0.5 * (lo + hi)); }
+    for (let i = 0; i < N; i++) { const v = farDisp2[i]; if (v < 0) continue;
+        if (skyOn && v < sqDisp) { farField2[i] = 0; continue; }
+        let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rl.dispAt(md) < v) lo = md; else hi = md; }
+        farField2[i] = Math.min(dQ[i], 0.5 * (lo + hi)); }
     // the horizon: the ground plane's zero-disparity line (row at the left edge, centre and right edge)
     const horizon = ground ? { rowL: ground.rowZeroAt(0), rowC: ground.rowZeroAt(pw / 2), rowR: ground.rowZeroAt(pw - 1), nRuns: ground.nRuns, nTex: ground.nTex, a: ground.a, b: ground.b, c: ground.c } : null;
     window._geoHorizon = horizon;
@@ -708,7 +725,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
         (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
-    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8473,7 +8490,7 @@ window._plugGeoBand = function (opts) {
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
     let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
-    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null;
+    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
@@ -8515,6 +8532,8 @@ window._plugGeoBand = function (opts) {
             for (let i = 0; i < N; i++) { fixedFF[i] = 1; if (free[i]) valFF[i] = planeFS.farField[i]; }
             window._geoFarKind = planeFS.farKind; window._geoFarAxis = planeFS.farAxis;
             window._geoFarRim = { j: planeFS.farRimJ, w: planeFS.farRimW, mix: planeFS.farMix, axis: planeFS.farAxis };   // S3: the rims each band texel continues from (its colour)
+            window._geoFarField2 = planeFS.farField2; window._geoFarRim2 = { j: planeFS.farRimJ2, w: planeFS.farRimW2, side: planeFS.farSide2, axis: planeFS.farAxis };   // S4: the second layer
+            { let n2 = 0; for (let i = 0; i < N; i++) if (free[i] && planeFS.farField2[i] >= 0) n2++; console.log('[S4] second layer: ' + planeFS.nLayer2 + ' texels have one (' + n2 + ' of them free): what shows once the first-arriving surface has passed'); }
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
             console.log('[S3] reach under the plane law: ' + nReach + ' free texels (single ' + kc[1] + ', same plane ' + kc[2] + ', crossing ' + kc[3] + ', midpoint ' + kc[4] + ', none ' + kc[0] + '; row axis ' + ac[1] + ', column axis ' + ac[2] + ')' + (skyOnR ? ('; sky behind ' + nSkyClass) : '')); }
         else for (let i = 0; i < N; i++) { if (skyClass[i]) { fixedFF[i] = 1; valFF[i] = 0; } else fixedFF[i] = free[i] ? 0 : 1; }
@@ -14448,6 +14467,7 @@ function bgBuildBackgroundLayerCore() {
             // quick mode replaces any prior stack
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) { const sM = bgLayerMesh.userData.sky; scene.remove(sM); sM.geometry.dispose(); if (sM.material.map) sM.material.map.dispose(); sM.material.dispose(); bgLayerMesh.userData.sky = null; }   // S2c sky layer
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) { const p2 = bgLayerMesh.userData.plate2; scene.remove(p2); p2.geometry.dispose(); try { const u = p2.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} p2.material.dispose(); bgLayerMesh.userData.plate2 = null; }   // S4 plate 2
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
@@ -16099,6 +16119,43 @@ function bgBuildBackgroundLayerCore() {
                     console.log('[S2c] sky layer: plane at z = -' + Zs.toFixed(1) + ' m, ' + (w0s * scS * EXT).toFixed(1) + ' x ' + (h0s * scS * EXT).toFixed(1) + ' m (scale ' + scS.toFixed(1) + ' x ' + EXT + '); texture ' + nSkyPx + ' sky px of ' + PNq + ' (' + (100 * nSkyPx / PNq).toFixed(1) + '%), ' + nNoSky + ' columns without sky took a neighbour');
                 } catch (eS) { console.warn('[S2c] sky layer failed (no layer):', eS); }
             }
+            // S4 PLATE 2 (the plane far side's second layer). One rest texel can have two far sides in turn: the
+            // first-arriving surface, and what shows once it has passed (S15's sign: the hill for 15 % of the
+            // envelope, then the sky). Plate 1 carries the first; plate 2 carries the second on the same grid,
+            // torn at its own rims, coloured from its own rim window, depth-tested against plate 1 and the
+            // foreground — a layered depth image rendered as two opaque surfaces (Shade et al. 1998), no blend.
+            if (bgFarRuleOn() && window._geoFarField2 && window._geoFarField2.length === PNq && window._geoFarRim2) {
+                try {
+                    const t20 = Date.now(); const ff2 = window._geoFarField2, FR2 = window._geoFarRim2;
+                    const q2x = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+                    const has2 = new Uint8Array(PNq); let n2 = 0;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (disocc[i] && ff2[i] >= 0 && plateF[(ph - 1 - y) * pw + x] < dQ[i] - q2x) { has2[i] = 1; n2++; } }
+                    window._qbPlateF2 = null; window._qbPlateColor2 = null;
+                    if (n2 > 0 && L.mesh.geometry.index) {
+                        const plateF2 = new Float32Array(plateF);
+                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (has2[i]) plateF2[(ph - 1 - y) * pw + x] = ff2[i]; }
+                        const plateDT2 = new THREE.DataTexture(plateF2, pw, ph, THREE.RedFormat, THREE.FloatType); plateDT2.needsUpdate = true; plateDT2.flipY = false; plateDT2.minFilter = THREE.NearestFilter; plateDT2.magFilter = THREE.NearestFilter; plateDT2.generateMipmaps = false;
+                        const g2 = L.mesh.geometry.clone(); const src2 = L.mesh.geometry.index.array; const gp2 = L.mesh.geometry.parameters || {}; const vw2 = (gp2.widthSegments || 0) + 1, vh2 = (gp2.heightSegments || 0) + 1;
+                        const pS2 = new Float32Array(PNq); for (let i = 0; i < PNq; i++) pS2[i] = has2[i] ? ff2[i] : dQ[i];
+                        const rl2 = bgRimLawFor(pw, ph); const sx2 = (pw - 1) / (vw2 - 1), sy2 = (ph - 1) / (vh2 - 1); const ti2 = (vi) => Math.round(((vi / vw2) | 0) * sy2) * pw + Math.round((vi % vw2) * sx2);
+                        const out2 = new src2.constructor(src2.length); let nK2 = 0; const skyOn2 = bgSkyInfOn(), sq2 = bgSkyQ();
+                        for (let t = 0; t < src2.length; t += 3) { const a = ti2(src2[t]), b = ti2(src2[t + 1]), c = ti2(src2[t + 2]); if (!(has2[a] && has2[b] && has2[c])) continue;
+                            if (skyOn2 && pS2[a] < sq2 && pS2[b] < sq2 && pS2[c] < sq2) continue;   // sky is the sky layer's
+                            if (rl2.joinedIdx(a, b, pS2, pw) && rl2.joinedIdx(b, c, pS2, pw) && rl2.joinedIdx(a, c, pS2, pw)) { out2[nK2++] = src2[t]; out2[nK2++] = src2[t + 1]; out2[nK2++] = src2[t + 2]; } }
+                        g2.setIndex(new THREE.BufferAttribute(out2.slice(0, nK2), 1));
+                        const cImg2 = (L.elements && L.elements.color) || L.textures.color.image; const cv2 = document.createElement('canvas'); cv2.width = pw; cv2.height = ph; const cx2 = cv2.getContext('2d', { willReadFrequently: true }); cx2.drawImage(cImg2, 0, 0, pw, ph); const px2 = cx2.getImageData(0, 0, pw, ph); const c2 = px2.data; const s2c = c2.slice();
+                        for (let i = 0; i < PNq; i++) { if (!has2[i]) continue; const j = FR2.j[i], w = FR2.w[i], ax = FR2.axis[i], side = FR2.side[i]; if (j < 0 || !ax || !side) continue; const st = ax === 1 ? 1 : pw; const jx = j % pw, jy = (j - jx) / pw;
+                            const lim = ax === 1 ? (side > 0 ? pw - jx : jx + 1) : (side > 0 ? ph - jy : jy + 1); const n = Math.max(1, Math.min(w, lim)); let r = 0, g = 0, b = 0;
+                            for (let k = 0; k < n; k++) { const tt = j + side * k * st; r += s2c[tt * 4]; g += s2c[tt * 4 + 1]; b += s2c[tt * 4 + 2]; } c2[i * 4] = r / n; c2[i * 4 + 1] = g / n; c2[i * 4 + 2] = b / n; }
+                        cx2.putImageData(px2, 0, 0); const tex2 = new THREE.CanvasTexture(cv2); tex2.minFilter = THREE.LinearFilter; tex2.magFilter = THREE.LinearFilter; if ('colorSpace' in tex2 && L.textures.color && 'colorSpace' in L.textures.color) tex2.colorSpace = L.textures.color.colorSpace;
+                        const mat2 = matQ.clone(); mat2.uniforms.displacementMap.value = plateDT2; mat2.uniforms.map.value = tex2;
+                        const m2 = new THREE.Mesh(g2, mat2); m2.position.copy(L.mesh.position); m2.rotation.copy(L.mesh.rotation); m2.scale.copy(L.mesh.scale); m2.renderOrder = bgLayerMesh.renderOrder;
+                        bgLayerMesh.userData.plate2 = m2;
+                        if (window._plugSweepCapture) { window._qbPlateF2 = plateF2; window._qbPlateColor2 = c2.slice(); }
+                        console.log('[S4] plate 2: ' + n2 + ' band texels carry a second layer; ' + ((nK2 / 3) | 0) + ' of ' + ((src2.length / 3) | 0) + ' triangles kept; ' + (Date.now() - t20) + 'ms');
+                    } else console.log('[S4] plate 2: no band texel has a second layer');
+                } catch (e2) { console.warn('[S4] plate 2 failed (none):', e2); }
+            }
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
@@ -16193,6 +16250,7 @@ function bgBuildBackgroundLayerCore() {
             scene.add(bgLayerMesh);
             if (bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) scene.add(m);   // A245 ring
             if (bgLayerMesh.userData && bgLayerMesh.userData.sky) { bgLayerMesh.userData.sky.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.sky); }   // S2c sky layer
+            if (bgLayerMesh.userData && bgLayerMesh.userData.plate2) { bgLayerMesh.userData.plate2.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.plate2); }   // S4 plate 2
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;

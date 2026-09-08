@@ -19,7 +19,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (/\[S2[bc]\]|\[S3\]|A245 plug margin|QUICK-BAKE\] A21[26]/.test(t)) console.log('  [page:log] ' + t.slice(0, 300)); });
+    page.on('console', m => { const t = m.text(); if (/\[S2[bc]\]|\[S3\]|\[S4\]|A245 plug margin|QUICK-BAKE\] A21[26]/.test(t)) console.log('  [page:log] ' + t.slice(0, 300)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const POSES = (process.env.POSES || '0:0,0.1:0,0:0.1').split(',').map(s => s.split(':').map(Number));
@@ -36,6 +36,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
             if (o.hide.includes('fg') && L0 && L0.mesh) L0.mesh.visible = false;
             if (o.hide.includes('plate') && typeof bgLayerMesh !== 'undefined' && bgLayerMesh) bgLayerMesh.visible = false;
             if (o.hide.includes('sky') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) bgLayerMesh.userData.sky.visible = false;
+            if (o.hide.includes('plate2') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) bgLayerMesh.userData.plate2.visible = false;
             if (o.hide.includes('ring') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) m.visible = false; }
         const D = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2, exR = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180), asp = bgEnvAspect();
         const out = { meta: { D, exR, asp, terrariumWidth, terrariumHeight, outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, W: renderer.domElement.width, H: renderer.domElement.height, sky: window._skyInf ? bgSkyZ() : null }, shots: {} };
