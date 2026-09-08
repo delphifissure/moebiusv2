@@ -195,6 +195,30 @@ def S26_overhang(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'V2 vertical reveals: table underside, beam, shelf'}
 
 
+def S31_hedge(W=0.16, H=0.09):
+    """S3 column rule: a low box spanning the whole frame width (and beyond) on the floor of a room. No row rim exists
+    inside the frame; behind the hedge, per column, the truth is the back wall down to its foot and the floor below
+    that. The far side must come from the floor's line (from below) crossing the wall's line (from above)."""
+    depth = 0.8 * W
+    prims = room(W, H, depth)
+    ext = 3.0; hz = -0.3 * W; hh = 0.35 * H
+    prims.append(Box([-W * ext / 2, -H / 2, hz - 0.06 * W], [W * ext / 2, -H / 2 + hh, hz], lambda p: tex_noise(p, scale=W * 0.015, base=(0.3, 0.5, 0.25), amp=0.3, axes=(0, 1)), THING, 'hedge'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'S3 column rule: full-width occluder, floor meets wall behind it'}
+
+
+def S32_hedge_open(W=0.16, H=0.09):
+    """S3 horizon: the same hedge on an open ground plane with sky and nothing else. Behind the hedge, per column, the
+    truth is the ground up to the horizon (the ground line's zero disparity: eye level) and sky above. The ground
+    extends 300 W (48 m) so its finite edge sits within one row of the true horizon at 800 px. The hedge is taller
+    than eye level (0.7 H on a floor at -H/2) so that both the ground and the sky lie behind it."""
+    far = 300 * W
+    prims = []
+    prims.append(Quad([0, -H / 2, -far / 2], [1, 0, 0], [0, 0, 1], 300 * W, far / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.3, c1=(0.45, 0.55, 0.3), c2=(0.35, 0.45, 0.25), axes=(0, 2)), STUFF, 'ground'))
+    ext = 3.0; hz = -0.3 * W; hh = 0.7 * H
+    prims.append(Box([-W * ext / 2, -H / 2, hz - 0.06 * W], [W * ext / 2, -H / 2 + hh, hz], lambda p: tex_noise(p, scale=W * 0.015, base=(0.3, 0.5, 0.25), amp=0.3, axes=(0, 1)), THING, 'hedge'))
+    return prims, {'outer': far * 0.9, 'inner': 0.0, 'element': 'S3 horizon: full-width occluder, ground meets sky behind it'}
+
+
 def S30_dolly(W=0.16, H=0.09):
     """Dolly family: a subject pinned at the window plane (so it keeps its frame position and size for every focal
     length), a mid box, a fishtank behind. Render with make.py --D for each focal length: D = (W/2)(f/18 mm)."""
@@ -210,6 +234,7 @@ def S30_dolly(W=0.16, H=0.09):
 
 SCENES = {
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
+    'S31': S31_hedge, 'S32': S32_hedge_open,
     'S27': S27_fishtank, 'S11': S11_rounded, 'S1': S1_corner, 'S2': S2_contact, 'S3': lambda W=0.16, H=0.09: S2_contact(W, H, floating=True),
     'S5': S5_pole, 'S9': S9_stacked, 'S10': S10_limb, 'S7': S7_canopy, 'S4': S4_figure_popout,
     # S28 = V6 the same room at three diorama depths (0.25, 0.75, 2.0 window widths)

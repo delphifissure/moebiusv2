@@ -20,7 +20,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (/A25[2-7]\]|A246\]|A244\]/.test(t)) console.log('  [page:log] ' + t.slice(0, 400)); });
+    page.on('console', m => { const t = m.text(); if (/A25[2-7]\]|A246\]|A244\]|\[S3\]|\[S2[bc]\]/.test(t)) console.log('  [page:log] ' + t.slice(0, 400)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const meta = await page.evaluate(async (o) => {
@@ -34,7 +34,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
     }, { flush: !!process.env.FLUSH, obs: !!process.env.OBS, gateA: !!process.env.GATEA, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
          depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(meta));
-    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc', geoClass: '_geoClass', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', fgTorn: '_qbFgTorn' };
+    const arrays = { backDepth: '_geoBackDepth', backMode: '_geoBackMode', backPlane: '_geoBackPlane', backH: '_geoBackH', backDist: '_geoBackDist', dQ: '_qbDQ', farField: '_geoFarField', objId: '_geoObjId', plateF: '_qbPlateF', disocc: '_qbDisocc', geoClass: '_geoClass', obsDepth: '_geoObsDepth', obsCount: '_geoObsCount', lipDeep: '_geoLipDeep', lipNear: '_geoLipNear', fgTorn: '_qbFgTorn', farKind: '_geoFarKind', farAxis: '_geoFarAxis', skyClass: '_geoSkyClass' };   // S3: farKind/farAxis from the plane far side
     for (const [name, key] of Object.entries(arrays)) {
         const b64 = await page.evaluate((k) => { const a = window[k]; if (!a) return null; const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return { b64: btoa(s), type: a.constructor.name }; }, key);
         if (!b64) { console.log('  missing ' + key); continue; }

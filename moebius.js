@@ -477,6 +477,142 @@ function bgSkyZ() {
     const Zcap = ((typeof camera !== 'undefined' && camera && camera.far) ? camera.far : 1000) * 0.5;
     return { Z: Math.min(Zneed, Zcap), Zneed, Zcap, capped: Zneed > Zcap, D, ex };
 }
+// =====================================================================================
+// S3 THE FAR SIDE BY THE PLANE LAW (window._farRule === 'plane' on the rim-law arm; Sprint 3 plan §2)
+// =====================================================================================
+// The far side of an occluder is not a smooth function anchored at its rims (the S2b membrane
+// blended floor with wall, and its reach carried one far depth down a whole box: the foot strip),
+// it is the scene's own surfaces continued behind the occluder. A plane is affine in DISPARITY
+// (1/ze) along any image line (Hartley & Zisserman ch. 13; S2b.3 uses the same fact), so:
+//   - every row and every column is cut into RUNS, maximal segments whose interior second
+//     differences of disparity stay within the quantisation bound (three samples each within q/2
+//     put the second difference within |disp(d+q) - disp(d-q)| = tolAt); a run ends at a jump OR a
+//     crease. A two-sample segment must also pass the ratio test (no third sample to vouch for it).
+//   - for a texel, on each of its four sides, the CANDIDATE is the first run outward whose line
+//     (least squares over the g samples nearest the texel, g = the rim distance, capped by the run:
+//     the extrapolation never reaches further than the evidence under it unless it must, and then
+//     it is counted) extrapolates to a disparity BEHIND the texel by more than the bound. A crease
+//     neighbour that extrapolates nearer (a box's top face from its front) is passed over; one that
+//     extrapolates behind (the floor under the foot, continued up the column) is the far side —
+//     the only way the ground gets behind the things standing on it.
+//   - two candidates on one axis: the SAME PLANE (either line predicts the other rim within
+//     tolAt*(1/2 + G/(2(w-1)))) gives the line through both rims (exact for floor, wall, ceiling);
+//     two planes that CROSS inside the gap switch at the crossing (floor meets the wall's foot;
+//     ground meets the sky, i.e. the horizon, since the sky is the plane at disparity 0); two that
+//     do not cross switch at the midpoint (median of a uniform position prior). Never a blend.
+//   - two axes: the axis whose nearer rim is nearer wins — the one prior here (local coherence
+//     decays with distance), moved from the 2D nearest-rim VALUE rule to the axis.
+// Constants: q (the source quantum), tolAt (S2b.3). Nothing tuned. The horizon is not estimated:
+// it is where the ground's column line reaches zero disparity, logged per bake.
+function bgFarRuleOn() { return bgRimLawOn() && window._farRule === 'plane'; }
+function bgFarSidePlane(dQ, pw, ph) {
+    const N = pw * ph, rl = bgRimLawFor(pw, ph), skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
+    const t0 = Date.now();
+    const disp = new Float32Array(N), tol = new Float32Array(N), isSky = new Uint8Array(N);
+    for (let i = 0; i < N; i++) { const d = dQ[i]; const s = skyOn && d < sq; isSky[i] = s ? 1 : 0; disp[i] = s ? 0 : rl.dispAt(d); tol[i] = rl.tolAt(d); }
+    const dispFloor = skyOn ? 0 : rl.dispAt(0);
+    // runs per axis: rs/re = start/end POSITION along the line of the run containing texel i; prefix sums for O(1) line fits
+    const L = [pw, ph], nL = [ph, pw], stepA = [1, pw];
+    const rs = [new Int32Array(N), new Int32Array(N)], re = [new Int32Array(N), new Int32Array(N)];
+    const P1 = [new Float64Array(N + ph), new Float64Array(N + pw)], P2 = [new Float64Array(N + ph), new Float64Array(N + pw)];   // per line: cumulative disp and p*disp, L+1 slots per line, index = line*(L+1) + p + 1
+    const nRuns = [0, 0], runLen = [[], []];
+    for (let ax = 0; ax < 2; ax++) { const Lx = L[ax], st = stepA[ax];
+        for (let l = 0; l < nL[ax]; l++) { const base = ax === 0 ? l * pw : l; const pb = l * (Lx + 1);
+            const at = (p) => base + p * st;
+            let s = 0;
+            for (let t = 1; t <= Lx; t++) {
+                let brk = (t === Lx);
+                if (!brk) { const a = at(t - 1), b = at(t);
+                    if (isSky[a] !== isSky[b]) brk = true;
+                    else if (t - 1 === s) { // first pair: the ratio test, or the third sample vouching for the line
+                        let ok = rl.joined(dQ[a], dQ[b]);
+                        if (!ok && t + 1 < Lx) { const c = at(t + 1); ok = Math.abs(disp[c] - 2 * disp[b] + disp[a]) <= tol[b]; }
+                        brk = !ok;
+                    } else { const c = at(t - 2); brk = Math.abs(disp[b] - 2 * disp[a] + disp[c]) > tol[a]; } }
+                if (brk) { for (let p = s; p < t; p++) { rs[ax][at(p)] = s; re[ax][at(p)] = t - 1; } runLen[ax].push(t - s); nRuns[ax]++; s = t; }
+            }
+            let c1 = 0, c2 = 0; P1[ax][pb] = 0; P2[ax][pb] = 0;
+            for (let p = 0; p < Lx; p++) { const v = disp[at(p)]; c1 += v; c2 += p * v; P1[ax][pb + p + 1] = c1; P2[ax][pb + p + 1] = c2; }
+        } }
+    // least-squares line over positions a..b of line l on axis ax: returns [slope, value at position p0]
+    const fit = (ax, l, a, b, p0) => { const Lx = L[ax], pb = l * (Lx + 1); const w = b - a + 1;
+        const Sv = P1[ax][pb + b + 1] - P1[ax][pb + a], Spv = P2[ax][pb + b + 1] - P2[ax][pb + a];
+        if (w < 2) return [0, Sv];
+        const Sp = w * (a + b) / 2, Spp = (b * (b + 1) * (2 * b + 1) - (a - 1) * a * (2 * a - 1)) / 6;
+        const den = w * Spp - Sp * Sp; const m = den > 0 ? (w * Spv - Sp * Sv) / den : 0;
+        return [m, Sv / w + m * (p0 - Sp / w)]; };
+    // THE GROUND. Along a column a horizontal surface below the eye has disparity rising downward, with slope 1/(h*D)
+    // per unit of window height for a surface h below the eye: the lowest surface (the ground) is the rising run
+    // with the SMALLEST slope. Per column that run is taken (among rising runs whose rise exceeds their own slope
+    // uncertainty, tolAt/(2(len-1)) per texel: a run that rises at all), and one plane a + b*x + c*y is fitted to
+    // all of them in disparity (least squares; a plane is affine in disparity, so the fit is exact on the kit).
+    // The ground bounds the world from below: along any rest ray below the horizon no real surface lies beyond
+    // the ground's own point on that ray, so a candidate extrapolation that passes UNDER the ground (a wall or a
+    // box front continued below its foot) is cut at the ground, i.e. the surface meets the ground there. The
+    // horizon is the plane's zero-disparity line. No ground (no rising run): no bound, no horizon.
+    let ground = null; { let Sxx = 0, Sxy = 0, Syy = 0, Sx = 0, Sy = 0, Sn = 0, Sxv = 0, Syv = 0, Sv = 0, nRunsG = 0;
+        for (let x = 0; x < pw; x++) { let y = 0, bestA = -1, bestB = -1, bestM = Infinity;
+            while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j]; const len = b - a + 1;
+                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, a); const unc = tol[j] / (2 * Math.max(1, len - 1)); if (f[0] > unc && f[0] < bestM) { bestM = f[0]; bestA = a; bestB = b; } }
+                y = b + 1; }
+            if (bestA >= 0) { nRunsG++; for (let yy = bestA; yy <= bestB; yy++) { const v = disp[yy * pw + x]; Sxx += x * x; Sxy += x * yy; Syy += yy * yy; Sx += x; Sy += yy; Sn++; Sxv += x * v; Syv += yy * v; Sv += v; } } }
+        if (Sn >= 3) { // normal equations for [a, b, c] in v = a + b*x + c*y
+            const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
+            const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+            const dM = det(M); if (Math.abs(dM) > 1e-12) { const sol = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; sol.push(det(Mk) / dM); }
+                if (sol[2] > 0) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nRunsG, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] }; } } } }
+    // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
+    const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
+    let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0];
+    const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
+        const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
+        const xi = i % pw, yi = (i - xi) / pw; const gB = ground ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
+        let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1;
+        while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
+            const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
+            const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
+            if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; nGroundCut++; }   // the plane continues under the ground: it meets the ground here instead
+            if (disp[i] - v > tol[i]) { nCand++; if (len < g + 1) nThin++; return { g, p, m, v0, w, len, j }; }
+            p = dir > 0 ? b + 1 : a - 1; }
+        return null; };
+    const lineAt = (c, p) => c.v0 + c.m * (p - c.p);
+    const combine = (ax, cL, cR, x, i) => {   // cL on the -1 side (rim at pL < x), cR on the +1 side (pR > x); returns [value, kind, g]
+        if (!cL && !cR) return null;
+        if (!cL || !cR) { const c = cL || cR; return [lineAt(c, x), 1, c.g]; }
+        const G = cR.p - cL.p, tL = tol[cL.j], tR = tol[cR.j];
+        const uL = cL.w > 1 ? G / (2 * (cL.w - 1)) : 0.5, uR = cR.w > 1 ? G / (2 * (cR.w - 1)) : 0.5;
+        const same = Math.abs(lineAt(cL, cR.p) - disp[cR.j]) <= tR * (0.5 + uL) || Math.abs(lineAt(cR, cL.p) - disp[cL.j]) <= tL * (0.5 + uR);
+        const g = Math.min(cL.g, cR.g);
+        if (same) { const vL = disp[cL.j], vR = disp[cR.j]; return [vL + (vR - vL) * (x - cL.p) / G, 2, g]; }
+        const dm = cL.m - cR.m;
+        if (Math.abs(dm) > 1e-30) { const k = (cR.v0 - cR.m * cR.p - cL.v0 + cL.m * cL.p) / dm;
+            if (k > cL.p && k < cR.p) return [x < k ? lineAt(cL, x) : lineAt(cR, x), 3, g]; }
+        const mid = (cL.p + cR.p) / 2; return [x <= mid ? lineAt(cL, x) : lineAt(cR, x), 4, g]; };
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
+        const row = combine(0, cand(0, y, x, -1, i), cand(0, y, x, +1, i), x, i);
+        const colR = combine(1, cand(1, x, y, -1, i), cand(1, x, y, +1, i), y, i);
+        let pick = null, axv = 0;
+        if (row && colR) { if (colR[2] < row[2]) { pick = colR; axv = 2; } else { pick = row; axv = 1; } }
+        else if (row) { pick = row; axv = 1; } else if (colR) { pick = colR; axv = 2; }
+        if (!pick) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
+        let v = pick[0]; if (v < dispFloor) v = dispFloor; if (v > disp[i]) v = disp[i];
+        farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; }
+    // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
+    const sqDisp = skyOn ? rl.dispAt(sq) : -1;
+    for (let i = 0; i < N; i++) { if (!farAxis[i]) continue; const v = farDisp[i];
+        if (skyOn && v < sqDisp) { farField[i] = 0; continue; }
+        let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rl.dispAt(md) < v) lo = md; else hi = md; }
+        farField[i] = Math.min(dQ[i], 0.5 * (lo + hi)); }
+    // the horizon: the ground plane's zero-disparity line (row at the left edge, centre and right edge)
+    const horizon = ground ? { rowL: ground.rowZeroAt(0), rowC: ground.rowZeroAt(pw / 2), rowR: ground.rowZeroAt(pw - 1), nRuns: ground.nRuns, nTex: ground.nTex, a: ground.a, b: ground.b, c: ground.c } : null;
+    window._geoHorizon = horizon;
+    const nR = nRuns[0], nC = nRuns[1]; const med = (arr) => { if (!arr.length) return 0; const s = arr.slice().sort((a, b) => a - b); return s[s.length >> 1]; };
+    console.log('[S3] far side by the plane law: ' + nR + ' row runs (' + (nR / ph).toFixed(1) + '/row, median length ' + med(runLen[0]) + '), ' + nC + ' column runs (' + (nC / pw).toFixed(1) + '/col, median ' + med(runLen[1]) + '); ' +
+        'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
+        nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
+        (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
+    return { farField, farDisp, farKind, farAxis, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp };
+}
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
@@ -8239,11 +8375,19 @@ window._plugGeoBand = function (opts) {
     // along the axis, for that many texels or until the next unjoined edge; those texels are free
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
-    let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0;
+    let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
+    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
         const free = new Uint8Array(N);
+        // S3: the far side of every texel from the plane law (rows and columns), before any walk; the reach
+        // then asks, per texel, whether ITS far side slides past the edge — not the edge's far depth
+        planeFS = bgFarRuleOn() ? bgFarSidePlane(dQ, pw, ph) : null;
+        const walkP = planeFS ? ((iNear, step, dEdge, limit, vert) => { const sE = bgShiftPxAt(lutR, dEdge); let i = iNear, k = 0, prev = -1;
+            while (k < limit) { if (prev >= 0 && !rl.joinedIdx(prev, i, dQ, pw)) break;
+                const span = (sE - bgShiftPxAt(lutR, planeFS.farField[i])) * (vert ? aspR : 1);   // > 0 iff this texel's far side is behind the occluding edge
+                if (!(k < span)) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } }) : null;
         // S2c: the far side's CLASS. Every walk remembers how far it came from a sky rim and from a non-sky
         // rim; a free texel nearer to a sky rim than to any other far rim has sky behind it (R3 D2's
         // "above the horizon", with the nearest rim standing in for the horizon estimator until one exists).
@@ -8255,29 +8399,38 @@ window._plugGeoBand = function (opts) {
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
             if (x < pw - 1) { const j = i + 1; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])), fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
-                if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1, fs); else walk(j, 1, span, pw - 1 - x, fs); } }
+                if (walkP) { if (dQ[i] > dQ[j]) walkP(i, -1, dQ[i], x + 1, false); else walkP(j, 1, dQ[j], pw - 1 - x, false); }
+                else if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1, fs); else walk(j, 1, span, pw - 1 - x, fs); } }
             if (y < ph - 1) { const j = i + pw; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR, fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
-                if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1, fs); else walk(j, pw, span, ph - 1 - y, fs); } } }
+                if (walkP) { if (dQ[i] > dQ[j]) walkP(i, -pw, dQ[i], y + 1, true); else walkP(j, pw, dQ[j], ph - 1 - y, true); }
+                else if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1, fs); else walk(j, pw, span, ph - 1 - y, fs); } } }
         // S2c: sky-class texels are sky (fixed at the far end, rendered at infinity); ground-class unknowns never
         // take a sky boundary value. A harmonic blend of a hill at 8 m and the sky at infinity is a tilted sheet
         // that exists nowhere — measured on S15 as the far field ramping from the hill depth at the sign's side
         // rims toward the sky at its top rim, i.e. the plate skirt the user saw as "tunneling".
         const skyClass = new Uint8Array(N);
-        if (skyOnR) for (let i = 0; i < N; i++) if (free[i] && dSky[i] < dGnd[i]) { skyClass[i] = 1; nSkyClass++; }
+        if (planeFS) { if (skyOnR) for (let i = 0; i < N; i++) if (free[i] && planeFS.farField[i] < sqR) { skyClass[i] = 1; nSkyClass++; } }   // S3: sky is the far side at infinity, not the nearest rim
+        else if (skyOnR) for (let i = 0; i < N; i++) if (free[i] && dSky[i] < dGnd[i]) { skyClass[i] = 1; nSkyClass++; }
         window._geoSkyClass = skyOnR ? skyClass : null;
         fixedFF = new Uint8Array(N); valFF = new Float32Array(dQ);
-        for (let i = 0; i < N; i++) { if (skyClass[i]) { fixedFF[i] = 1; valFF[i] = 0; } else fixedFF[i] = free[i] ? 0 : 1; }
+        if (planeFS) {   // S3: no membrane — every texel is a boundary value: its plane far side where free, itself elsewhere
+            for (let i = 0; i < N; i++) { fixedFF[i] = 1; if (free[i]) valFF[i] = planeFS.farField[i]; }
+            window._geoFarKind = planeFS.farKind; window._geoFarAxis = planeFS.farAxis;
+            let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
+            console.log('[S3] reach under the plane law: ' + nReach + ' free texels (single ' + kc[1] + ', same plane ' + kc[2] + ', crossing ' + kc[3] + ', midpoint ' + kc[4] + ', none ' + kc[0] + '; row axis ' + ac[1] + ', column axis ' + ac[2] + ')' + (skyOnR ? ('; sky behind ' + nSkyClass) : '')); }
+        else for (let i = 0; i < N; i++) { if (skyClass[i]) { fixedFF[i] = 1; valFF[i] = 0; } else fixedFF[i] = free[i] ? 0 : 1; }
         // S2b.4: only the far rims are boundary values. A fixed texel JOINED to a free one is the near surface
         // continuing past the reach limit (or the floor a box stands on): the far side does not ramp down to
         // it — it keeps the far surface's depth (Neumann). With the ramp, S15's fill behind the tree ran from
         // the sky rim to the crown's own depth and drew the near-to-far skirt in every reveal.
-        ffNeumann = skyOnR ? ((i, j) => rl.joinedIdx(i, j, dQ, pw) || skyClass[j] === 1 || dQ[j] < sqR)
+        ffNeumann = planeFS ? null : skyOnR ? ((i, j) => rl.joinedIdx(i, j, dQ, pw) || skyClass[j] === 1 || dQ[j] < sqR)
                            : ((i, j) => rl.joinedIdx(i, j, dQ, pw));
-        if (skyOnR) console.log('[S2c] far-side class: ' + nSkyClass + ' reach texels have sky behind them (nearest far rim is sky), ' + (nReach - nSkyClass) + ' have a surface');
+        if (skyOnR && !planeFS) console.log('[S2c] far-side class: ' + nSkyClass + ' reach texels have sky behind them (nearest far rim is sky), ' + (nReach - nSkyClass) + ' have a surface');
         console.log('[S2b] reach: ' + nEdgeU + ' unjoined edges, ' + nReach + ' texels within the far side\'s slide at the envelope rim (' + (100 * nReach / N).toFixed(2) + '% of the plate); pass-1 band was ' + (100 * (() => { let c = 0; for (let i = 0; i < N; i++) c += dis1[i] ? 1 : 0; return c; })() / N).toFixed(2) + '%');
     }
-    const ffRes = solveField(fixedFF, valFF || dQ, ffNeumann ? { neumann: ffNeumann } : undefined);
+    const ffRes = planeFS ? { field: valFF, nU: nReach, cycles: 0, err: 0, nClamp: 0, clampMask: new Uint8Array(N) }   // S3: the field is the plane law's, nothing to solve
+                          : solveField(fixedFF, valFF || dQ, ffNeumann ? { neumann: ffNeumann } : undefined);
     const farField = ffRes.field, nU = ffRes.nU, nClampF = ffRes.nClamp, mgF = { sweeps: [[0, ffRes.cycles]], residual: ffRes.err * 255 };
     // A244h (refined far field: source texels at or behind the field join its boundary) was built, measured
     // and REMOVED (rule 7): against the gate fix alone it changed nothing the instruments or the screen
