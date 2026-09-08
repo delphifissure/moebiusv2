@@ -646,7 +646,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         // read off the arrival order; Shade, Gortler, He & Szeliski 1998). None if the chosen run never passes.
         const withNext = (c) => { c.next = null; if (!(c.f1 < 1)) return c; let bn = null;
             for (const o of list) { if (o === c) continue; if (o.f0 <= c.f1 && o.f1 > c.f1 && (!bn || o.dlt < bn.dlt)) bn = o; }
-            if (!bn) { let fm = Infinity; for (const o of list) if (o !== c && o.f0 > c.f1 && o.f0 < fm) { fm = o.f0; bn = o; } }
+            if (!bn) { let fm = 1; for (const o of list) if (o !== c && o.f0 > c.f1 && o.f0 < fm) { fm = o.f0; bn = o; } }   // only a run that arrives inside the envelope
             c.next = bn; return c; };
         if (window._farPick !== 'coverage') { let first = null, firstF = Infinity; for (const c of list) if (c.f0 < firstF) { firstF = c.f0; first = c; } nCand++; if (first.thin) nThin++; return withNext(first); }
         // nearest first; each takes the part of its interval no nearer run has taken; the largest share wins
@@ -20495,6 +20495,7 @@ function updateCameraAndProjection() {
         // realtime too, where there is no bake at all.
         try { bgEnsureFishtank(); } catch (e) {}
         _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) _syncBG(bgLayerMesh.userData.plate2);   // S4 plate 2 (its depth-law uniforms were the app defaults: 56 px per head fraction where the hill moves 700)
         // A170: this comment used to say the quick skirt carries its own cloned
         // material and therefore needs its own sync. a169 deleted that material
         _syncBG(typeof mpiMidMesh !== 'undefined' ? mpiMidMesh : null);
