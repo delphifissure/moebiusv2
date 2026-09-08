@@ -111,17 +111,17 @@ def continuity(dn, D, pn, outer, inner, mode='ratio', t=1.05, tear=1.0, sig=None
     return np.maximum(a, b) / np.maximum(1e-9, np.minimum(a, b)) <= t
 
 
-def run(dn, W, D, pn, outer, inner, fade_deg=45.0, nx_poses=17, ny_poses=5, tear=1.0, H=None, join='ratio', t=1.05, log=print):
+def run(dn, W, D, pn, outer, inner, fade_deg=45.0, nx_poses=17, ny_poses=5, tear=1.0, H=None, join='ratio', t=1.05, log=print, fade_deg_v=30.0):
     ph, pw = dn.shape
     H = H if H is not None else W * 9 / 16
     # the app's bgShiftLUTFor: the layer is fitted inside the frame, so a portrait plate is height-limited
     layer_aspect = pw / ph; frame_aspect = W / H
     layer_w = W if layer_aspect > frame_aspect else H * layer_aspect
     ppw = pw / layer_w
-    aspect = H / W                                                                # the sweep's vertical extent factor (asp)
+    aspect = np.tan(np.radians(fade_deg_v)) / np.tan(np.radians(fade_deg))          # S2a: the vertical rim is an ANGLE (30 deg), not the window's aspect
     e_max = D * np.tan(np.radians(fade_deg))
     sig_x = shift_px(dn, e_max, D, pn, outer, inner, ppw)                       # at f = 1 along x
-    sig_y = shift_px(dn, e_max * aspect, D, pn, outer, inner, ppw)              # vertical poses reach e_max * H / W
+    sig_y = shift_px(dn, e_max * aspect, D, pn, outer, inner, ppw)              # vertical poses reach D*tan(30 deg)
     log(f'  plate {pw}x{ph}: layer width {layer_w:.4f} m, {ppw:.0f} px/m; max |shift| at e_max: {np.abs(sig_x).max():.1f} px (x), {np.abs(sig_y).max():.1f} px (y)')
     # pose fractions along each axis, from the grid (symmetric, excluding rest)
     def grid(n):

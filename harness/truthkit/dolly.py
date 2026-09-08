@@ -48,7 +48,7 @@ def main():
         th_a = a.fade
         e_b = e_ref * D_ref / D; th_b = float(np.degrees(np.arctan2(e_b, D)))
         th_c = float(np.degrees(np.arctan2(e_ref, D)))     # (c) head motion constant in metres (= in frame widths, W fixed)
-        asp = a.H / a.W
+        asp = np.tan(np.radians(30.0)) / np.tan(np.radians(45.0))   # S2a: 45/30 envelope
         res = {'f_mm': f, 'D': D, 'hfov_deg': float(np.degrees(2 * np.arctan2(a.W / 2, D))), 'theta_window_deg': th_a, 'theta_head_units_deg': th_b, 'theta_const_e_deg': th_c,
                'e_window': float(D * np.tan(np.radians(th_a))), 'e_head_units': float(e_b), 'e_const': float(e_ref)}
         for tag, th in (('window', th_a), ('head', th_b), ('conste', th_c)):

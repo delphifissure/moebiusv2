@@ -137,6 +137,27 @@ let _viewDragActive = false, _viewDragLX = 0, _viewDragLY = 0;
 // plain globals; anything wanting to change it assigns them directly (the
 // shift LUT keys on bgViewFadeEndDeg, so the cache follows).
 let bgViewFadeStartDeg = 35, bgViewFadeEndDeg = 45;
+// S2a THE ENVELOPE IS A RECTANGLE OF ANGLES, NOT THE WINDOW'S ASPECT. User decision
+// (2026-09-08): the shipped envelope is +/-45 deg horizontal and +/-30 deg vertical
+// from centre (a 90 x 60 degree field). Until now every consumer derived the
+// vertical extent as horizontal x terrariumHeight/terrariumWidth (0.5625 -> 29.4 deg
+// at 45), i.e. from the window's shape, which has nothing to do with where heads
+// go. bgEnvAspect() is tan(V)/tan(H) = 0.577 at 30/45; bgPoseFrac() is the
+// rectangular pose fraction (1 at the rim on either axis) that the per-fragment
+// tear, the sweep grid and the fade all read, so the four agree by construction.
+let bgViewFadeEndDegV = 30;
+function bgEnvAspect() { return Math.tan(bgViewFadeEndDegV * Math.PI / 180) / Math.tan(bgViewFadeEndDeg * Math.PI / 180); }
+function bgPoseFrac(x, y, D) {
+    const exR = Math.max(1e-6, D) * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    return Math.max(Math.abs(x) / exR, Math.abs(y) / (exR * bgEnvAspect()));
+}
+// The fade in pose-fraction units: start = tan(35)/tan(45) = 0.700 of the rim on
+// the horizontal axis, and the same fraction of the (smaller) vertical rim.
+function bgFadeFrac(x, y, D) {
+    const pf = bgPoseFrac(x, y, D);
+    const p0 = Math.tan(bgViewFadeStartDeg * Math.PI / 180) / Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+    return Math.min(1, Math.max(0, (pf - p0) / Math.max(1e-3, 1 - p0)));
+}
 
 // ===================== CONE SLOPE: ONE DEFINITION =====================
 // A90. The plate's maximum rise per source pixel. Five call sites had
@@ -348,6 +369,55 @@ function bgDepthAtShift(L, m) {
     const t = (m - L.m0) / (L.m1 - L.m0) * L.M, i = t | 0;
     return (i >= L.M) ? 1 : L.inv[i] + (L.inv[i + 1] - L.inv[i]) * (t - i);
 }
+// =====================================================================================
+// S2b THE RIM LAW (window._tearLaw === 'rim'; Sprint 2, S1 report §5 correction)
+// =====================================================================================
+// The fold criterion ("rim shift span > cell extent") tears ~90 % of every grazing
+// floor and ceiling in both depth formats, the sweep then reads the cut as a reveal and
+// the far-field inversion fills the whole plane (measured on the truth kit, S1 §5c).
+// Compression never opens a hole and stretching is already covered by the quad fill up
+// to the cut length, so a tear is only ever right where two adjacent texels are NOT the
+// same surface. The truth-kit instrument decides that with a ratio test on metric eye
+// distance (t = 1.05; precision 0.86 where the fold band scores 0.02–0.04) and this is
+// the same test carried onto the app's own depth law:
+//     joined(a, b)  iff  max(ze_a, ze_b) / min(ze_a, ze_b) <= t,   ze = D - z(d)
+// t is not a free constant: one continuous surface at grazing angle g (between the
+// surface and the line of sight), seen at eye distance ze, changes distance by
+// dz ~= ze * dtheta / tan(g) over one texel of angular pitch dtheta = hfov / pw, so
+//     t = 1 + (hfov / pw) / tan(g_min)
+// with g_min the most edge-on a surface may be before it is treated as two surfaces.
+// g_min is a stated angle (2 deg unless window._rimGrazeDeg says otherwise); its units are
+// invariant to resolution (dtheta scales) and to the depth volume (a ratio). A crease
+// (S16's two walls) is continuous in distance and stays joined; a jump is not.
+let _bgRimLaw = null;
+function bgRimLawFor(pwArg, phArg) {
+    const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
+    const pn = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
+    const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    const _cz = (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2;
+    const D = Math.max(1e-3, Math.abs(_cz - _pz));
+    const gmin = (typeof window._rimGrazeDeg === 'number' && window._rimGrazeDeg > 0) ? window._rimGrazeDeg : 2;
+    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin;
+    if (_bgRimLaw && _bgRimLaw.key === key) return _bgRimLaw;
+    const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
+    const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
+    const hfov = 2 * Math.atan((layerW / 2) / D);
+    const t = 1 + (hfov / pwv) / Math.tan(gmin * Math.PI / 180);
+    const outer = outerVolumeDepth, inner = innerVolumeDepth;
+    const N = 4096, ze = new Float32Array(N + 1);
+    for (let i = 0; i <= N; i++) {
+        const d = i / N; let z;
+        if (d < pn) { const s = d / pn;             z = -outer + outer * (s * s * (3 - 2 * s)); }
+        else        { const s = (d - pn) / (1 - pn); z =  inner * (s * s * (3 - 2 * s)); }
+        ze[i] = Math.max(1e-4, D - z);
+    }
+    const zeAt = (d) => { const x = Math.min(1, Math.max(0, d)) * N, i = x | 0; return (i >= N) ? ze[N] : ze[i] + (ze[i + 1] - ze[i]) * (x - i); };
+    const joined = (dA, dB) => { const a = zeAt(dA), b = zeAt(dB); return (a > b ? a / b : b / a) <= t; };
+    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined };
+    console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
+    return _bgRimLaw;
+}
+function bgRimLawOn() { return window._tearLaw === 'rim'; }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
     return T * bgConeSlopePerPx(pwArg);
@@ -514,8 +584,7 @@ function _dbgViewAngleStamp() {
         const off  = Math.hypot(camera.position.x, camera.position.y);
         const ang  = Math.atan2(off, dist) * 180 / Math.PI;
         const rim  = dist * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
-        const f    = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) /
-                        Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+        const f    = bgFadeFrac(camera.position.x, camera.position.y, dist);   // S2a rectangular envelope
         return 'ang=' + ang.toFixed(1) + 'deg ' +
                (ang > bgViewFadeEndDeg
                    ? ('OUTSIDE the ' + bgViewFadeEndDeg + 'deg cone by ' + (ang - bgViewFadeEndDeg).toFixed(1) +
@@ -902,7 +971,8 @@ function updateViewFade() {
     const dist = Math.max(1e-3, Math.abs(camera.position.z - portalPlaneWorldZ));
     const off = Math.hypot(camera.position.x, camera.position.y);
     const ang = Math.atan2(off, dist) * 180 / Math.PI;
-    let f = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) / Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+    // S2a: the fade follows the rectangular 45/30 envelope (bgFadeFrac), not a circular cone
+    let f = bgFadeFrac(camera.position.x, camera.position.y, dist);
     // FACE-FRAME FADE (per-device LUT): the normalized nose position in
     // the video frame IS the head's angular position inside the camera
     // FOV (through the tan mapping). Only used while tracking is fresh —
@@ -7531,7 +7601,7 @@ window._plugVisibilitySweep = function (opts) {
     // pose grid across the cone
     const fadeDeg = (typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45;
     const ex = z0 * Math.tan(fadeDeg * Math.PI / 180);
-    const asp = (typeof terrariumHeight === 'number' && typeof terrariumWidth === 'number') ? terrariumHeight / terrariumWidth : 0.5625;
+    const asp = bgEnvAspect();   // S2a: 45/30 envelope
     const NX = opts.nx || 17, NY = opts.ny || 5;   // 17 across: adjacent poses 1/8 of the cone apart in x, the axis of head motion
     const poses = opts.poses || [];
     if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * (2 * ix / (NX - 1) - 1), ex * asp * (2 * iy / (NY - 1) - 1)]);
@@ -7719,7 +7789,7 @@ window._plugCpuSweep = function (opts) {
     const D = Math.max(1e-3, Math.abs(_cz - _pz));
     const fadeDeg = (typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45;
     const exRim = D * Math.tan(fadeDeg * Math.PI / 180);
-    const asp = (typeof terrariumHeight === 'number' && typeof terrariumWidth === 'number') ? terrariumHeight / terrariumWidth : 0.5625;
+    const asp = bgEnvAspect();   // S2a: vertical rim = tan(30)/tan(45) of the horizontal, not the window's aspect
     const NX = opts.nx || 17, NY = opts.ny || 5;
     const poses = opts.poses || [];
     // Phase 0.4 (opts.boundary): only the grid's perimeter poses. Along any direction from rest the
@@ -7832,6 +7902,11 @@ window._plugCpuSweep = function (opts) {
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
+    // S2b: under the rim law the foreground is one sheet except across unjoined edges; a quad is
+    // drawn iff its four edges are joined (and, as before, not stretched past the cut length)
+    const rimL = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;
+    const rimJ = rimL ? rimL.joined : null;
+    let nRimCut = 0;
     for (const [ex, ey] of poses) {
         const fx = sign * ex / exRim, fy = sign * ey / exRim;
         zb.fill(-1e9); own.fill(-1);
@@ -7846,6 +7921,7 @@ window._plugCpuSweep = function (opts) {
                 const xs = x + sFG[i] * fx, ys = y + sFG[i] * fy, d = dQ[i];
                 if (fgOwn) { curTi = i; curFar = d; }
                 if (x + 1 < pw && y + 1 < ph && !(torn && (torn[i + 1] || torn[i + pw] || torn[i + pw + 1]))) {
+                    if (rimJ && !(rimJ(d, dQ[i + 1]) && rimJ(d, dQ[i + pw]) && rimJ(dQ[i + 1], dQ[i + pw + 1]) && rimJ(dQ[i + pw], dQ[i + pw + 1]))) { nRimCut++; splat(xs, ys, d, -2); continue; }
                     const xa = x + 1 + sFG[i + 1] * fx, ya = y + sFG[i + 1] * fy, xb = x + sFG[i + pw] * fx, yb = y + 1 + sFG[i + pw] * fy, xc = x + 1 + sFG[i + pw + 1] * fx, yc = y + 1 + sFG[i + pw + 1] * fy;
                     if (Math.hypot(xa - xs, ya - ys) <= cutLen && Math.hypot(xb - xs, yb - ys) <= cutLen) {
                         if (fgOwn) {   // A246: the quad's FAR corner is the lip a gap beside it exposes (a sheet quad's near corner is the occluder)
@@ -7982,7 +8058,8 @@ window._plugCpuSweep = function (opts) {
     // largest texel motion between adjacent poses of the grid (the between-pose coverage pad, derived not chosen)
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
     const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, lipA: obsLipA, lipB: obsLipB, lipA0: obsLipA0, meta: obsMeta, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip, continuous: obsCont, interior: obsInterior, extent: obsExtent, skirt: obsSkirt } : null;
-    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, ms: Date.now() - t0 };
+    if (rimL) console.log('[S2b] sweep under the rim law: ' + nRimCut + ' quad draws skipped across unjoined edges over ' + poses.length + ' poses (t ' + rimL.t.toFixed(4) + ')');
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -13995,6 +14072,7 @@ function bgBuildBackgroundLayerCore() {
                         // vertex budget below source resolution), where a
                         // per-texel threshold tears every cell it looks at.
                         const _tearL = (window._noExactCone === true) ? null : bgShiftLUTFor(pw, ph);
+                        const _rimL = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;   // S2b
                         const _cellExtentPx = Math.sqrt(sxT * sxT + syT * syT);
                         const tiOf = (vi) => Math.round(((vi / vw) | 0) * syT) * pw + Math.round((vi % vw) * sxT);
                         // A111: `drop` marks every texel incident to a DROPPED
@@ -14063,7 +14141,9 @@ function bgBuildBackgroundLayerCore() {
                                 ? ((bgShiftPxAt(_tearL, mx) - bgShiftPxAt(_tearL, mn)) > _cellExtentPx)
                                 : (mx - mn > ((window._noPerPixelCone === true) ? _cellTearStep
                                    : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep))));
-                            const _fold = _folds && ((mx - mn) > _qNoise);
+                            // S2b: under the rim law the torn footprint (which the plug takes, a160b) is the rim set
+                            const _fold = _rimL ? !(_rimL.joined(d0, d1) && _rimL.joined(d1, d2) && _rimL.joined(d0, d2))
+                                                : (_folds && ((mx - mn) > _qNoise));
                             if (_fold) { droppedT++; drop[t0i] = 1; drop[t1i] = 1; drop[t2i] = 1; continue; }
                             // A165 THE SMEAR GATE'S MEASUREMENT, TAKEN HERE.
                             // A surviving triangle whose reprojected shift span
@@ -15635,6 +15715,7 @@ function bgBuildBackgroundLayerCore() {
                     const txA = new Int32Array(3), tyA = new Int32Array(3);
                     let nKeep = 0, nDrop = 0;
                     const tornFG = window._plugSweepCapture ? new Uint8Array(pw * ph) : null;   // A236: torn foreground texels, source rows
+                    const rimT = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;   // S2b
                     for (let t = 0; t < src.length; t += 3) {
                         let mnD = 2, mxD = -1, inScan = false;
                         for (let k = 0; k < 3; k++) {
@@ -15650,7 +15731,12 @@ function bgBuildBackgroundLayerCore() {
                             if (disocc[ti]) inScan = true;
                         }
                         let keep = true;
-                        if ((inScan || window._a212Ungated === true) && (mxD - mnD) > qN) {
+                        if (rimT) {
+                            // S2b: torn iff any edge of the triangle joins two different surfaces (the rim law);
+                            // no fold test, no demand gate — the same rule the CPU sweep draws with
+                            const dA = dQ[tyA[0] * pw + txA[0]], dB = dQ[tyA[1] * pw + txA[1]], dC = dQ[tyA[2] * pw + txA[2]];
+                            if (!(rimT.joined(dA, dB) && rimT.joined(dB, dC) && rimT.joined(dA, dC))) keep = false;
+                        } else if ((inScan || window._a212Ungated === true) && (mxD - mnD) > qN) {
                             const ext = Math.max(1,
                                 Math.abs(txA[0]-txA[1]), Math.abs(txA[0]-txA[2]), Math.abs(txA[1]-txA[2]),
                                 Math.abs(tyA[0]-tyA[1]), Math.abs(tyA[0]-tyA[2]), Math.abs(tyA[1]-tyA[2]));
@@ -15662,7 +15748,8 @@ function bgBuildBackgroundLayerCore() {
                     if (tornFG) window._qbFgTorn = tornFG;
                     g.setIndex(new THREE.BufferAttribute(out.slice(0, nKeep), 1));
                     console.log('[QUICK-BAKE] A212 FG pre-tear: ' + nDrop + ' of ' + (src.length/3|0) +
-                        ' triangles torn (a160 fold criterion, scan-gated; every hole is plate-backed)');
+                        (rimT ? ' triangles torn (S2b RIM LAW: eye-distance ratio > ' + rimT.t.toFixed(4) + ' across an edge; no fold test, no gate)'
+                              : ' triangles torn (a160 fold criterion, scan-gated; every hole is plate-backed)'));
                 } catch (e) { console.warn('[QUICK-BAKE] A212 FG pre-tear failed: ' + e.message); }
             }
             bgBuildStamp = new Date().toISOString().slice(11, 19);
@@ -19368,9 +19455,7 @@ function updateCameraAndProjection() {
     if (window._fragTear && typeof mediaLayers !== 'undefined') {
         const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
         const D = Math.max(1e-3, Math.abs(camera.position.z - _pz));
-        const exR = D * Math.tan(((typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45) * Math.PI / 180);
-        const asp = (typeof terrariumHeight === 'number' && typeof terrariumWidth === 'number') ? terrariumHeight / terrariumWidth : 0.5625;
-        const pf = Math.max(Math.abs(camera.position.x) / exR, Math.abs(camera.position.y) / (exR * asp));
+        const pf = bgPoseFrac(camera.position.x, camera.position.y, D);   // S2a: rectangular 45/30 envelope
         for (const L of mediaLayers) { const u = L.mesh && L.mesh.material && L.mesh.material.uniforms; if (u && u.u_poseFrac) u.u_poseFrac.value = pf; }
     }
 
@@ -22172,8 +22257,7 @@ function svRenderFrame() {
     {
         const dist = Math.max(1e-3, Math.abs(E.z - R.P)), off = Math.hypot(E.x, E.y);
         const ang = Math.atan2(off, dist) * 180 / Math.PI;
-        svState.lastFade = Math.min(1, Math.max(0, (ang - bgViewFadeStartDeg) /
-            Math.max(1e-3, bgViewFadeEndDeg - bgViewFadeStartDeg)));
+        svState.lastFade = bgFadeFrac(E.x, E.y, dist);   // S2a rectangular envelope
     }
     bgViewFadeEnabled = false;
     if (typeof _viewFadeEl !== 'undefined' && _viewFadeEl) _viewFadeEl.style.opacity = '0';
