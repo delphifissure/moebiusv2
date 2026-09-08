@@ -26,8 +26,12 @@ from tk import Portal, render, save_png, to_u8, INF
 from scenes import SCENES
 from PIL import Image, ImageDraw
 
-CLASS_NAMES = ['photographed', 'outpaint', 'bg_disocclusion', 'thing_disocclusion', 'side', 'interior', 'sky']
-CLASS_RGB = np.array([[0, 0, 0], [255, 140, 0], [40, 120, 255], [255, 60, 60], [60, 220, 90], [230, 60, 230], [120, 200, 255]], float) / 255
+# 6 = sky the photograph already shows in that direction (sky is at infinity, so its identity is the ray
+# DIRECTION; the rest eye sees it iff the parallel ray passes the window and hits nothing); 7 = sky the
+# viewer sees that the photograph does not (hidden behind a hill/tree at rest): revealed content, counted
+# in scope like any other reveal (user decision, 2026-09-08; R3).
+CLASS_NAMES = ['photographed', 'outpaint', 'bg_disocclusion', 'thing_disocclusion', 'side', 'interior', 'sky', 'sky_reveal']
+CLASS_RGB = np.array([[0, 0, 0], [255, 140, 0], [40, 120, 255], [255, 60, 60], [60, 220, 90], [230, 60, 230], [120, 200, 255], [20, 90, 200]], float) / 255
 
 
 # ----------------------------------------------------------------------------- shadow rays
@@ -60,6 +64,43 @@ def visible_from(scene, eye, Q, portal, rel_eps=1e-4):
         t = first_t(scene, o, d[idx])
         vis[idx] = t >= L[idx] * (1 - rel_eps)
     return vis
+
+
+def sky_visible_from(scene, eye, dirs, portal):
+    """Sky is at infinity: a sky sample is a ray DIRECTION. It is seen from `eye` through the window iff the
+    parallel ray from `eye` crosses the window rect and hits nothing."""
+    eye = np.array(eye, float)
+    dz = dirs[:, 2]
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t = eye[2] / np.where(dz < 0, -dz, np.nan)
+    x = eye[0] + dirs[:, 0] * t; y = eye[1] + dirs[:, 1] * t
+    through = np.isfinite(t) & portal.in_frame(x, y)
+    vis = np.zeros(len(dirs), bool)
+    idx = np.nonzero(through)[0]
+    if len(idx):
+        o = np.broadcast_to(eye, (len(idx), 3)).copy()
+        vis[idx] = ~np.isfinite(first_t(scene, o, dirs[idx]))
+    return vis
+
+
+def rest_sky_layer(scene, canvas, plate, R, eyes, log=print):
+    """The sky behind the photograph: in-frame rest pixels whose ray escapes after >= 1 hit (nothing bounds the
+    scene in that direction). Visibility from each envelope eye by the parallel-ray test."""
+    ny, nx, K = R['valid'].shape
+    P = canvas.pixel_centres(); inframe = canvas.in_frame(P[..., 0], P[..., 1])
+    nhit = R['valid'].sum(axis=-1)
+    hidden = inframe & (nhit >= 1) & (nhit < K)
+    idx = np.nonzero(hidden.reshape(-1))[0]
+    dirs = R['dir'].reshape(-1, 3)[idx]
+    E = len(eyes); bits = np.zeros((E, len(idx)), bool)
+    for ei, ey in enumerate(eyes):
+        bits[ei] = sky_visible_from(scene, ey['eye'], dirs, plate) if len(idx) else bits[ei]
+    wr = np.array([retinal_weight(e['theta']) for e in eyes])
+    w_disp = np.zeros(ny * nx, np.float32); w_ret = np.zeros(ny * nx, np.float32)
+    if len(idx):
+        w_disp[idx] = bits.mean(axis=0); w_ret[idx] = (bits * wr[:, None]).sum(axis=0) / wr.sum()
+    log(f'  sky layer: {len(idx)} in-frame rest pixels have sky behind them; ever visible {int((w_disp > 0).sum())}')
+    return hidden, w_disp.reshape(ny, nx), w_ret.reshape(ny, nx)
 
 
 # ----------------------------------------------------------------------------- envelope
@@ -126,7 +167,19 @@ def display_gt(scene, plate, canvas, R, eye, eye0):
     hit = Rv['valid'][..., 0].reshape(-1)
     P = Rv['pts'][..., 0, :].reshape(-1, 3); n = Rv['nrm'][..., 0, :].reshape(-1, 3)
     pid = Rv['pid'][..., 0].reshape(-1); lab = Rv['label'][..., 0].reshape(-1)
-    cls = np.full(ny * nx, 6, np.int8)   # sky where nothing is hit
+    cls = np.full(ny * nx, 6, np.int8)   # sky where nothing is hit (refined below)
+    if (~hit).any():
+        dirs = Rv['dir'].reshape(-1, 3)[~hit]
+        e0 = np.array(eye0, float); dz = dirs[:, 2]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t0 = e0[2] / np.where(dz < 0, -dz, np.nan)
+        thr0 = np.isfinite(t0) & plate.in_frame(e0[0] + dirs[:, 0] * t0, e0[1] + dirs[:, 1] * t0)
+        seen0 = np.zeros(len(dirs), bool)
+        if thr0.any():
+            o = np.broadcast_to(e0, (int(thr0.sum()), 3)).copy()
+            seen0[thr0] = ~np.isfinite(first_t(scene, o, dirs[thr0]))
+        sky_cls = np.where(~thr0, 1, np.where(seen0, 6, 7)).astype(np.int8)
+        cls[~hit] = sky_cls
     x, y, i, j = canvas.project(P, eye0)
     infr = plate.in_frame(x, y) & hit
     phot = np.zeros_like(hit)
@@ -142,7 +195,7 @@ def display_gt(scene, plate, canvas, R, eye, eye0):
     cls[hid & (lab == 2) & (pid != pid0)] = 3
     cls[hid & (pid == pid0) & ~facing] = 4
     cls[hid & (pid == pid0) & facing] = 5
-    frac = {CLASS_NAMES[c]: float((cls == c).mean()) for c in range(7)}
+    frac = {CLASS_NAMES[c]: float((cls == c).mean()) for c in range(8)}
     # how much of the display's non-photographed content lands inside the rest canvas (the atlas can hold it)
     oncanvas = (i >= 0) & (i < canvas.nx) & (j >= 0) & (j < canvas.ny)
     out = cls == 1
@@ -157,7 +210,7 @@ def overlay(rgb, cls, w=None, alpha=0.75):
     a = np.where(cls >= 1, alpha, 0.0)
     if w is not None:
         a = a * np.clip(w, 0, 1) ** 0.5
-    col = CLASS_RGB[np.clip(cls, 0, 6)]
+    col = CLASS_RGB[np.clip(cls, 0, 7)]
     return base * (1 - a[..., None]) + col * a[..., None]
 
 
@@ -173,7 +226,7 @@ def sheet(tiles, cols, title, scale=1.0):
 
 
 def legend_text():
-    return 'legend: orange outpaint, blue bg disocclusion, red thing disocclusion, green own side, magenta own interior, pale blue sky'
+    return 'legend: orange outpaint, blue bg disocclusion, red thing disocclusion, green own side, magenta own interior, pale blue sky (photographed), deep blue sky revealed'
 
 
 def main():
@@ -224,18 +277,19 @@ def main():
             disp_rgb[ey['thx']] = (rgb, c)
     disp_cls = np.stack(disp_cls)
     print('  display fractions (thy=0):')
-    print('   thx   theta  w_ret   phot   outp    bg  thing  side   int   sky | backwall meas / closed')
+    print('   thx   theta  w_ret   phot   outp    bg  thing  side   int   sky skyrev | backwall meas / closed')
     for fr in fracs:
         if fr['thy'] == 0:
             bw = f"{fr.get('backwall_photographed_measured', float('nan')):.3f} / plane {fr.get('backwall_photographed_closed_form', float('nan')):.3f} / room {fr.get('backwall_photographed_closed_form_room', float('nan')):.3f}"
-            print(f"  {fr['thx']:+5.0f} {fr['theta']:6.1f} {fr['w_ret']:6.3f} {fr['photographed']:6.3f} {fr['outpaint']:6.3f} {fr['bg_disocclusion']:5.3f} {fr['thing_disocclusion']:6.3f} {fr['side']:5.3f} {fr['interior']:5.3f} {fr['sky']:5.3f} | {bw}")
+            print(f"  {fr['thx']:+5.0f} {fr['theta']:6.1f} {fr['w_ret']:6.3f} {fr['photographed']:6.3f} {fr['outpaint']:6.3f} {fr['bg_disocclusion']:5.3f} {fr['thing_disocclusion']:6.3f} {fr['side']:5.3f} {fr['interior']:5.3f} {fr['sky']:5.3f} {fr['sky_reveal']:6.3f} | {bw}")
 
     # ---- A: rest atlas GT
     if not a.no_atlas:
         print('  rest-atlas visibility (shadow rays per sample per eye):')
         w_disp, w_ret, vis = rest_atlas_gt(prims, plate, R, eyes, log=print)
+        sky_hidden, sky_w_disp, sky_w_ret = rest_sky_layer(prims, canvas, plate, R, eyes, log=print)
     else:
-        w_disp = w_ret = None; vis = None
+        w_disp = w_ret = None; vis = None; sky_hidden = sky_w_disp = sky_w_ret = None
 
     # ---- summary
     summ = {'scene': a.scene, 'element': meta.get('element', ''), 'W': a.W, 'H': a.H, 'D': a.D, 'outer': meta['outer'], 'inner': meta.get('inner', 0.0), 'nx': a.nx, 'ny': ny,
@@ -253,12 +307,15 @@ def main():
             summ[f'atlas_{CLASS_NAMES[c]}_samples'] = int(m.sum())
             summ[f'atlas_{CLASS_NAMES[c]}_ever_visible'] = int((m & (w_disp > 0)).sum())
             summ[f'atlas_{CLASS_NAMES[c]}_w_disp_sum'] = float(w_disp[m].sum()); summ[f'atlas_{CLASS_NAMES[c]}_w_ret_sum'] = float(w_ret[m].sum())
+        summ['atlas_sky_reveal_samples'] = int(sky_hidden.sum()); summ['atlas_sky_reveal_ever_visible'] = int((sky_hidden & (sky_w_disp > 0)).sum())
+        summ['atlas_sky_reveal_w_disp_sum'] = float(sky_w_disp[sky_hidden].sum()); summ['atlas_sky_reveal_w_ret_sum'] = float(sky_w_ret[sky_hidden].sum())
     json.dump(summ, open(os.path.join(out, 'scope_summary.json'), 'w'), indent=1)
     np.savez_compressed(os.path.join(out, 'scope_display.npz'), cls=disp_cls, thx=np.array([e['thx'] for e in eyes]), thy=np.array([e['thy'] for e in eyes]))
     if w_disp is not None:
         np.savez_compressed(os.path.join(out, 'scope_gt.npz'), cls=cls, w_disp=w_disp.astype(np.float16), w_ret=w_ret.astype(np.float16),
                             vis_bits=np.packbits(vis, axis=0), n_eyes=len(eyes), depth=R['depth'].astype(np.float32), pid=R['pid'].astype(np.int16), label=R['label'],
-                            rgb=(np.clip(R['rgb'], 0, 1) * 255).astype(np.uint8), valid=R['valid'], thx=np.array([e['thx'] for e in eyes]), thy=np.array([e['thy'] for e in eyes]))
+                            rgb=(np.clip(R['rgb'], 0, 1) * 255).astype(np.uint8), valid=R['valid'], thx=np.array([e['thx'] for e in eyes]), thy=np.array([e['thy'] for e in eyes]),
+                            sky_hidden=sky_hidden, sky_w_disp=sky_w_disp.astype(np.float16), sky_w_ret=sky_w_ret.astype(np.float16))
 
     # ---- sheets
     rgb0 = np.clip(R['rgb'][..., 0, :], 0, 1)
@@ -270,7 +327,9 @@ def main():
         wk = np.where(cls >= 1, w_disp, -1); kb = np.argmax(wk, axis=-1)
         cb = np.take_along_axis(cls, kb[..., None], axis=-1)[..., 0]; wb = np.take_along_axis(w_disp, kb[..., None], axis=-1)[..., 0]
         cb = np.where(wb > 0, cb, -1)
-        tiles.append((Image.fromarray(to_u8(overlay(dim, cb, wb))), 'SCOPE: best hidden sample per pixel, alpha = fraction of envelope eyes that see it'))
+        sky_better = (sky_w_disp > wb) & sky_hidden
+        cb = np.where(sky_better, 7, cb); wb = np.where(sky_better, sky_w_disp, wb)
+        tiles.append((Image.fromarray(to_u8(overlay(dim, cb, wb))), 'SCOPE: best hidden sample per pixel (sky reveal included), alpha = fraction of envelope eyes that see it'))
         wrb = np.take_along_axis(w_ret, kb[..., None], axis=-1)[..., 0]
         tiles.append((Image.fromarray(to_u8(overlay(dim, np.where(wrb > 0, cb, -1), wrb))), 'SCOPE retinal: same, alpha = cos^3-weighted visibility'))
         for k in (1, 2):

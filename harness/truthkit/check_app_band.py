@@ -21,6 +21,11 @@ y0 = (H - ph) // 2; x0 = (W - pw) // 2
 cls_c = cls[y0:y0 + ph, x0:x0 + pw]; w_c = w[y0:y0 + ph, x0:x0 + pw]; dep_c = dep[y0:y0 + ph, x0:x0 + pw]
 vis_hidden = (cls_c >= 2) & (cls_c <= 5) & (w_c > 0)
 hidden = vis_hidden.any(axis=-1)
+# sky revealed behind an occluder counts as hidden content (R3): the sky layer of the rest atlas
+sky_hid = None
+if 'sky_hidden' in gt.files:
+    sky_hid = (gt['sky_hidden'] & (gt['sky_w_disp'].astype(np.float32) > 0))[y0:y0 + ph, x0:x0 + pw]
+    hidden = hidden | sky_hid
 tp = (dis & hidden).sum()
 res = {'scene': os.path.basename(probe), 'plate': [pw, ph], 'truth_hidden_px': int(hidden.sum()), 'app_band_px': int(dis.sum()),
        'precision': float(tp / max(1, dis.sum())), 'recall': float(tp / max(1, hidden.sum())), 'iou': float(tp / max(1, (dis | hidden).sum()))}
@@ -29,6 +34,8 @@ wmax = np.where(vis_hidden, w_c, 0).max(axis=-1)
 res['recall_w_disp'] = float((wmax * dis).sum() / max(1e-9, wmax.sum()))
 for c, nm in ((2, 'bg'), (3, 'thing'), (4, 'side'), (5, 'interior')):
     m = ((cls_c == c) & (w_c > 0)).any(axis=-1); res[f'truth_{nm}_px'] = int(m.sum()); res[f'recall_{nm}'] = float((dis & m).sum() / max(1, m.sum()))
+if sky_hid is not None:
+    res['truth_sky_reveal_px'] = int(sky_hid.sum()); res['recall_sky_reveal'] = float((dis & sky_hid).sum() / max(1, sky_hid.sum()))
 # depth on the band: the app's far field (normalised depth) vs the truth's first ever-visible hidden layer, in metres
 if ff is not None:
     outer, inner, pn = meta['outer'], meta['inner'], meta['pn']
@@ -36,7 +43,7 @@ if ff is not None:
     kk = np.argmax(vis_hidden, axis=-1); has = vis_hidden.any(axis=-1)
     d_true = np.take_along_axis(dep_c, kk[..., None], axis=-1)[..., 0]
     d_app = -app_z_of_d(ff, pn, outer, inner)          # metres behind the window
-    m = dis & has & np.isfinite(d_true)
+    m = dis & has & np.isfinite(d_true)   # sky-reveal texels have no finite truth depth; excluded from the metres error
     err = (d_app - d_true)[m]
     res['band_depth_err_m'] = {'n': int(m.sum()), 'mean': float(err.mean()) if m.any() else None, 'median_abs': float(np.median(np.abs(err))) if m.any() else None,
                                'p90_abs': float(np.percentile(np.abs(err), 90)) if m.any() else None, 'scene_depth_m': float(outer)}
