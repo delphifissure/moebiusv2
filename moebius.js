@@ -609,25 +609,49 @@ function bgFarSidePlane(dQ, pw, ph) {
     // reveal opens, and the fill is right from the onset of the reveal, where the eye spends its time. The first
     // run behind by more than the bound was tried first and measured (S15 recall 0.80): it named the leaf 2 cm
     // behind a leaf, which covers three texels of a 54-texel reveal, for the whole reveal.
+    // POSE COVERAGE (replaces first arrival, which it contains). At head fraction f the run c has slid k·Δ_c·f texels
+    // toward the texel (k = e·ppw·D, × the envelope aspect on columns); it covers the texel for f in
+    // [g_c/(kΔ_c), (g_c + len_c)/(kΔ_c)] — it arrives, passes, and what is beyond it shows. Nearer runs occlude
+    // farther ones where both cover. The far side is the run that is SEEN for the largest part of the envelope
+    // [0, 1]: a three-texel leaf that passes in a hundredth of the envelope no longer outranks the hill behind it,
+    // while the floor behind a box, which never passes, still does. Sky runs never pass (infinite length).
+    const lutK = bgShiftLUTFor(pw, ph), kAx = [lutK.ex * lutK.pxPerWorld * lutK.D, lutK.ex * lutK.pxPerWorld * lutK.D * bgEnvAspect()];
     const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
         const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
         const xi = i % pw, yi = (i - xi) / pw; const gB = ground ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
-        let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; let best = null, bestF = Infinity;
+        let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; const list = []; const kk = kAx[ax];
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
             const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
             const thin = len < g + 1;
             // THIN EVIDENCE: a run shorter than the gap it is asked to cross has a slope uncertain by more than a
-            // quantum at the far end. Extrapolating it drew ramps from every leaf of S15's crown toward the hill or
-            // the sky — affine by construction, so the plate's tear test kept them, and they rendered as the
-            // horizontal streaks (plate-only shot). A thin run continues along the fitted ground plane if it is one
-            // of the ground's own runs (S32's 44-row floor in front of a 180-row gap), otherwise at constant depth.
+            // quantum at the far end, so it is not extrapolated: a thin run continues along the fitted ground plane
+            // if it is one of the ground's own runs (S32's 44-row floor in front of a 180-row gap), otherwise at
+            // constant depth. (It was first suspected of S15's horizontal streaks; the plate-only shot after this
+            // change still had them — they were the plate's linearly filtered depth texture, fixed at plateDT.)
             if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
             if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; nGroundCut++; }   // the plane continues under the ground: it meets the ground here instead
             const dlt = disp[i] - v;
-            if (dlt > tol[i]) { const fa = g / dlt; if (fa < bestF) { bestF = fa; best = { g, p, m, v0, w, len, j, thin }; } }
+            if (dlt > tol[i]) { const f0 = g / (kk * dlt), f1 = isSky[j] ? Infinity : (g + len) / (kk * dlt); list.push({ g, p, m, v0, w, len, j, thin, dlt, f0, f1 }); }
             p = dir > 0 ? b + 1 : a - 1; }
-        if (best) { nCand++; if (best.thin) nThin++; }
+        if (!list.length) return null;
+        // Which of them is THE far side is the user's trade, not the geometry's: the first-arriving run is what shows
+        // when the reveal opens (near rest, where the head spends its time) and leaves the texel empty once that run
+        // has passed; the run with the largest pose coverage is right for most of the envelope and wrong at the onset
+        // (S15's sign: the hill behind it passes in 15 % of the envelope, the sky covers the rest). One texel holds one
+        // depth; both are kept for the live pass — window._farPick = 'coverage' selects the second, default the first.
+        // The complete answer is a second layer (report §6).
+        if (window._farPick !== 'coverage') { let first = null, firstF = Infinity; for (const c of list) if (c.f0 < firstF) { firstF = c.f0; first = c; } nCand++; if (first.thin) nThin++; return first; }
+        // nearest first; each takes the part of its interval no nearer run has taken; the largest share wins
+        list.sort((u, v) => u.dlt - v.dlt);   // dlt = disp_i - v: the smallest gap is the nearest run, in front of the others
+        const taken = []; let best = null, bestCov = 0, first = null, firstF = Infinity;
+        for (const c of list) { const a0 = Math.min(1, c.f0), a1 = Math.min(1, c.f1); if (c.f0 < firstF) { firstF = c.f0; first = c; } if (!(a1 > a0)) continue;
+            let cov = a1 - a0; for (const t of taken) { const o0 = Math.max(a0, t[0]), o1 = Math.min(a1, t[1]); if (o1 > o0) cov -= o1 - o0; }   // taken intervals are disjoint by construction below
+            if (cov > bestCov) { bestCov = cov; best = c; }
+            // merge [a0,a1] into taken
+            let lo = a0, hi = a1; const rest = []; for (const t of taken) { if (t[1] < lo || t[0] > hi) rest.push(t); else { lo = Math.min(lo, t[0]); hi = Math.max(hi, t[1]); } } rest.push([lo, hi]); taken.length = 0; taken.push(...rest); }
+        if (!best) best = first;   // nothing arrives inside the envelope: the first to arrive at all (the texel will not be free anyway)
+        nCand++; if (best.thin) nThin++;
         return best; };
     const lineAt = (c, p) => c.v0 + c.m * (p - c.p);
     // returns [value, kind, g, cL, cR, mixL] — mixL is the weight of the -1 side's rim (1 = that side alone), kept for the band's colour
@@ -14303,7 +14327,11 @@ function bgBuildBackgroundLayerCore() {
             if ('colorSpace' in islandDT) islandDT.colorSpace = THREE.NoColorSpace;
             const plateDT = new THREE.DataTexture(plateF, pw, ph, THREE.RedFormat, THREE.FloatType);
             plateDT.needsUpdate = true; plateDT.flipY = false;
-            plateDT.minFilter = THREE.LinearFilter; plateDT.magFilter = THREE.LinearFilter;
+            // S3: under the rim law the plate's vertex depth must be a texel, not a blend, for the same reason as the
+            // foreground's (S2b.4 note below): the vertices sit at k/(pw-1), texel centres at (k+0.5)/pw, and a linearly
+            // filtered depth hands a vertex beside a torn plate edge a mix of both sides — measured on S15's crown as
+            // horizontal streaks 200 px long from every leaf-depth plate patch toward the hill (plate-only shot).
+            plateDT.minFilter = bgRimLawOn() ? THREE.NearestFilter : THREE.LinearFilter; plateDT.magFilter = plateDT.minFilter; plateDT.generateMipmaps = false;
             if ('colorSpace' in plateDT) plateDT.colorSpace = THREE.NoColorSpace;
             const maskDT = new THREE.DataTexture(maskF, pw, ph, THREE.RedFormat, THREE.FloatType);
             maskDT.needsUpdate = true; maskDT.flipY = false;
