@@ -419,7 +419,32 @@ function bgRimLawFor(pwArg, phArg) {
     }
     const zeAt = (d) => { const x = Math.min(1, Math.max(0, d)) * N, i = x | 0; return (i >= N) ? ze[N] : ze[i] + (ze[i + 1] - ze[i]) * (x - i); };
     const joined = (dA, dB) => { if (skyOn) { const sA = dA < sq, sB = dB < sq; if (sA || sB) return sA && sB; } const a = zeAt(dA), b = zeAt(dB); return (a > b ? a / b : b / a) <= t; };
-    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined };
+    // S2b.3 GRAZING PLANES. The pairwise ratio test tears a continuous plane wherever its grazing
+    // angle is under g_min — the ground beyond h/tan(g_min) from the eye (1.3 m at the kit's 45 mm
+    // eye height, 46 m at a standing photographer's): S15's whole horizon strip was band. A plane
+    // is affine in DISPARITY (1/ze) along any image line (the plane's homography; Hartley &
+    // Zisserman ch. 13), so a surface that is merely grazing is predicted exactly by its own two
+    // previous samples, and a jump is not (its second difference is the jump minus the slope). An
+    // edge (i, j) is therefore joined if it passes the ratio test OR the linear prediction from
+    // either side lands within the quantisation bound: three samples each within q/2 of the truth
+    // put the second difference within |disp(d + q) - disp(d - q)|. Sky joins nothing but sky.
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
+    const dispAt = (d) => 1 / zeAt(d);
+    const tolAt = (d) => Math.abs(dispAt(Math.min(1, d + q)) - dispAt(Math.max(0, d - q))) + 1e-9;
+    const joinedIdx = (i, j, dQ, pwv2) => {
+        const pw2 = pwv2 || pwv, N2 = dQ.length;
+        const dA = dQ[i], dB = dQ[j];
+        if (skyOn && (dA < sq || dB < sq)) return (dA < sq) && (dB < sq);
+        if (joined(dA, dB)) return true;
+        const xi = i % pw2, yi = (i - xi) / pw2, xj = j % pw2, yj = (j - xj) / pw2, dx = xj - xi, dy = yj - yi;
+        const a = dispAt(dA), b = dispAt(dB), tol = Math.max(tolAt(dA), tolAt(dB));
+        const xp = xi - dx, yp = yi - dy;
+        if (xp >= 0 && xp < pw2 && yp >= 0 && (yp * pw2 + xp) < N2) { const pr = 2 * a - dispAt(dQ[yp * pw2 + xp]); if (Math.abs(b - pr) <= tol) return true; }
+        const xn = xj + dx, yn = yj + dy;
+        if (xn >= 0 && xn < pw2 && yn >= 0 && (yn * pw2 + xn) < N2) { const pr = 2 * b - dispAt(dQ[yn * pw2 + xn]); if (Math.abs(a - pr) <= tol) return true; }
+        return false;
+    };
+    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, q };
     console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
     return _bgRimLaw;
 }
@@ -7826,7 +7851,7 @@ window._plugCpuSweep = function (opts) {
     // unjoined edges, the plate pass warps the FAR FIELD (so the plate texel that lands on an
     // uncovered cell IS the demand texel), and holes with no such texel are outpaint.
     const rimL = bgRimLawOn() ? bgRimLawFor(pw, ph) : null;
-    const rimJ = rimL ? rimL.joined : null;
+    const rimJ = rimL ? ((a, b) => rimL.joinedIdx(a, b, dQ, pw)) : null;   // S2b.3: index-based (grazing planes rescued by their own line)
     let nRimCut = 0;
     const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
     const _cz = (camera && camera.position) ? camera.position.z : 0.2;
@@ -7967,7 +7992,7 @@ window._plugCpuSweep = function (opts) {
                 const xs = x + sFG[i] * fx, ys = y + sFG[i] * fy, d = dQ[i];
                 if (fgOwn) { curTi = i; curFar = d; }
                 if (x + 1 < pw && y + 1 < ph && !(torn && (torn[i + 1] || torn[i + pw] || torn[i + pw + 1]))) {
-                    if (rimJ && !(rimJ(d, dQ[i + 1]) && rimJ(d, dQ[i + pw]) && rimJ(dQ[i + 1], dQ[i + pw + 1]) && rimJ(dQ[i + pw], dQ[i + pw + 1]))) { nRimCut++; splat(xs, ys, d, -2); continue; }
+                    if (rimJ && !(rimJ(i, i + 1) && rimJ(i, i + pw) && rimJ(i + 1, i + pw + 1) && rimJ(i + pw, i + pw + 1))) { nRimCut++; splat(xs, ys, d, -2); continue; }
                     const xa = x + 1 + sFG[i + 1] * fx, ya = y + sFG[i + 1] * fy, xb = x + sFG[i + pw] * fx, yb = y + 1 + sFG[i + pw] * fy, xc = x + 1 + sFG[i + pw + 1] * fx, yc = y + 1 + sFG[i + pw + 1] * fy;
                     if (Math.hypot(xa - xs, ya - ys) <= cutLen && Math.hypot(xb - xs, yb - ys) <= cutLen) {
                         if (fgOwn) {   // A246: the quad's FAR corner is the lip a gap beside it exposes (a sheet quad's near corner is the occluder)
@@ -8193,12 +8218,12 @@ window._plugGeoBand = function (opts) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const free = new Uint8Array(N);
         const walk = (iNear, step, span, limit) => { let i = iNear, k = 0, prev = -1;
-            while (k < span && k < limit) { if (prev >= 0 && !rl.joined(dQ[prev], dQ[i])) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } };
+            while (k < span && k < limit) { if (prev >= 0 && !rl.joinedIdx(prev, i, dQ, pw)) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } };
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
-            if (x < pw - 1) { const j = i + 1; if (!rl.joined(dQ[i], dQ[j])) { nEdgeU++;
+            if (x < pw - 1) { const j = i + 1; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j]));
                 if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1); else walk(j, 1, span, pw - 1 - x); } }
-            if (y < ph - 1) { const j = i + pw; if (!rl.joined(dQ[i], dQ[j])) { nEdgeU++;
+            if (y < ph - 1) { const j = i + pw; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR;
                 if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1); else walk(j, pw, span, ph - 1 - y); } } }
         fixedFF = new Uint8Array(N); for (let i = 0; i < N; i++) fixedFF[i] = free[i] ? 0 : 1;
@@ -14231,7 +14256,7 @@ function bgBuildBackgroundLayerCore() {
                                 : (mx - mn > ((window._noPerPixelCone === true) ? _cellTearStep
                                    : Math.SQRT2 * bgConeSlopeAtDepth(pw, ph, (d0 + d1 + d2) / 3, fgTearStep))));
                             // S2b: under the rim law the torn footprint (which the plug takes, a160b) is the rim set
-                            const _fold = _rimL ? !(_rimL.joined(d0, d1) && _rimL.joined(d1, d2) && _rimL.joined(d0, d2))
+                            const _fold = _rimL ? !(_rimL.joinedIdx(t0i, t1i, dQ, pw) && _rimL.joinedIdx(t1i, t2i, dQ, pw) && _rimL.joinedIdx(t0i, t2i, dQ, pw))
                                                 : (_folds && ((mx - mn) > _qNoise));
                             if (_fold) { droppedT++; drop[t0i] = 1; drop[t1i] = 1; drop[t2i] = 1; continue; }
                             // A165 THE SMEAR GATE'S MEASUREMENT, TAKEN HERE.
@@ -15839,8 +15864,8 @@ function bgBuildBackgroundLayerCore() {
                         if (rimT) {
                             // S2b: torn iff any edge of the triangle joins two different surfaces (the rim law);
                             // no fold test, no demand gate — the same rule the CPU sweep draws with
-                            const dA = dQ[tyA[0] * pw + txA[0]], dB = dQ[tyA[1] * pw + txA[1]], dC = dQ[tyA[2] * pw + txA[2]];
-                            if (!(rimT.joined(dA, dB) && rimT.joined(dB, dC) && rimT.joined(dA, dC))) keep = false;
+                            const iA = tyA[0] * pw + txA[0], iB = tyA[1] * pw + txA[1], iC = tyA[2] * pw + txA[2];
+                            if (!(rimT.joinedIdx(iA, iB, dQ, pw) && rimT.joinedIdx(iB, iC, dQ, pw) && rimT.joinedIdx(iA, iC, dQ, pw))) keep = false;
                         } else if ((inScan || window._a212Ungated === true) && (mxD - mnD) > qN) {
                             const ext = Math.max(1,
                                 Math.abs(txA[0]-txA[1]), Math.abs(txA[0]-txA[2]), Math.abs(txA[1]-txA[2]),
