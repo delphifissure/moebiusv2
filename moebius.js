@@ -655,8 +655,11 @@ function bgFarSidePlane(dQ, pw, ph) {
             else if (colR[2] < row[2]) { pick = colR; axv = 2; } else { pick = row; axv = 1; } }
         else if (row) { pick = row; axv = 1; } else if (colR) { pick = colR; axv = 2; }
         if (!pick) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
-        if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
         let v = pick[0]; if (v < dispFloor) v = dispFloor; if (v > disp[i]) v = disp[i];
+        // a value that clamps back to the texel's own depth (a floor's line continued behind the wall it ends at: the
+        // far end of the volume) is no far side at all: the texel is its own, with no rims to colour it from
+        if (disp[i] - v <= tol[i]) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
+        if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
         farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
     const sqDisp = skyOn ? rl.dispAt(sq) : -1;
@@ -14783,7 +14786,9 @@ function bgBuildBackgroundLayerCore() {
                     const winMean = (j, w, ax, side) => { const st = ax === 1 ? 1 : pw; const jx = j % pw, jy = (j - jx) / pw; const lim = ax === 1 ? (side > 0 ? pw - jx : jx + 1) : (side > 0 ? ph - jy : jy + 1);
                         const n = Math.max(1, Math.min(w, lim)); let r = 0, g = 0, b = 0; for (let k = 0; k < n; k++) { const t = j + side * k * st; r += cd[t * 4]; g += cd[t * 4 + 1]; b += cd[t * 4 + 2]; } acc[0] = r / n; acc[1] = g / n; acc[2] = b / n; return n; };
                     const col = new Float32Array(PNq * 3), hasC = new Uint8Array(PNq); let nCol = 0;
+                    const qPC = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
                     for (let i = 0; i < PNq; i++) { if (!disocc[i]) continue; const jA = FR.j[2 * i], jB = FR.j[2 * i + 1], ax = FR.axis[i]; if (!ax || (jA < 0 && jB < 0)) continue;
+                        if (!(plateQ[i] < dQ[i] - qPC)) continue;   // a band texel whose plate depth is its own (the band's margin, pinholes) keeps its own colour: it is its own far side
                         let mA = jA >= 0 ? (jB >= 0 ? FR.mix[i] : 1) : 0, r = 0, g = 0, b = 0;
                         if (jA >= 0 && mA > 0) { winMean(jA, FR.w[2 * i], ax, -1); r += mA * acc[0]; g += mA * acc[1]; b += mA * acc[2]; }
                         if (jB >= 0 && mA < 1) { winMean(jB, FR.w[2 * i + 1], ax, +1); r += (1 - mA) * acc[0]; g += (1 - mA) * acc[1]; b += (1 - mA) * acc[2]; }
