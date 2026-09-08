@@ -8189,10 +8189,14 @@ window._plugGeoBand = function (opts) {
         for (let i = 0; i < N; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y;
             const init = (dis1[i] ? pS1[i] : dQ[i]) * 255; lv.vR[u] = lv.vG[u] = lv.vB[u] = init;
             const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
-            for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue; if (fixed[j]) { const v = val[j] * 255; lv.dR[u] += v; lv.dG[u] += v; lv.dB[u] += v; lv.dW[u]++; } else lv.nb[u * 4 + s2] = uIdx[j]; } }
+            for (let s2 = 0; s2 < 4; s2++) { const j = cN[s2]; if (j < 0) continue;
+                if (fixed[j]) { if (optsF && optsF.neumann && optsF.neumann(i, j)) continue;   // S2b.4: a joined fixed neighbour is the same surface — no boundary value, the far side continues at its own depth
+                    const v = val[j] * 255; lv.dR[u] += v; lv.dG[u] += v; lv.dB[u] += v; lv.dW[u]++; } else lv.nb[u * 4 + s2] = uIdx[j]; } }
         const mg = bgMembraneSolve(lv, 0.5, 60);
         const field = new Float32Array(N);
         for (let i = 0; i < N; i++) { const u = uIdx[i]; field[i] = u < 0 ? val[i] : Math.max(0, Math.min(1, lv.vR[u] / 255)); }
+        // S2c: a membrane value within one source quantum of the far end IS the far end (sky under the flag); the solver's residual must not keep sky off the plane at infinity
+        if (bgSkyInfOn() && !(optsF && optsF.noClamp)) { const qS = 2 * bgSkyQ(); for (let i = 0; i < N; i++) if (uIdx[i] >= 0 && field[i] < qS) field[i] = 0; }
         // never in front of the source: the field is a continuation BEHIND the surface (a135's ordering, per texel)
         let nClamp = 0; const clampMask = new Uint8Array(N); if (!(optsF && optsF.noClamp)) for (let i = 0; i < N; i++) if (field[i] > dQ[i]) { field[i] = dQ[i]; clampMask[i] = 1; nClamp++; }
         return { field, nU, cycles: mg.sweeps[0][1], err: mg.residual / 255, nClamp, clampMask };
@@ -8213,23 +8217,45 @@ window._plugGeoBand = function (opts) {
     // along the axis, for that many texels or until the next unjoined edge; those texels are free
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
-    let fixedFF = rim, nReach = 0, nEdgeU = 0;
+    let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
+        const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
         const free = new Uint8Array(N);
-        const walk = (iNear, step, span, limit) => { let i = iNear, k = 0, prev = -1;
-            while (k < span && k < limit) { if (prev >= 0 && !rl.joinedIdx(prev, i, dQ, pw)) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } };
+        // S2c: the far side's CLASS. Every walk remembers how far it came from a sky rim and from a non-sky
+        // rim; a free texel nearer to a sky rim than to any other far rim has sky behind it (R3 D2's
+        // "above the horizon", with the nearest rim standing in for the horizon estimator until one exists).
+        const dSky = new Int32Array(N).fill(0x3fffffff), dGnd = new Int32Array(N).fill(0x3fffffff);
+        const walk = (iNear, step, span, limit, farSky) => { let i = iNear, k = 0, prev = -1;
+            while (k < span && k < limit) { if (prev >= 0 && !rl.joinedIdx(prev, i, dQ, pw)) break; if (!free[i]) { free[i] = 1; nReach++; }
+                if (farSky) { if (k < dSky[i]) dSky[i] = k; } else if (k < dGnd[i]) dGnd[i] = k;
+                prev = i; i += step; k++; } };
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
             if (x < pw - 1) { const j = i + 1; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
-                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j]));
-                if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1); else walk(j, 1, span, pw - 1 - x); } }
+                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])), fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
+                if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1, fs); else walk(j, 1, span, pw - 1 - x, fs); } }
             if (y < ph - 1) { const j = i + pw; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
-                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR;
-                if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1); else walk(j, pw, span, ph - 1 - y); } } }
-        fixedFF = new Uint8Array(N); for (let i = 0; i < N; i++) fixedFF[i] = free[i] ? 0 : 1;
+                const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR, fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
+                if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1, fs); else walk(j, pw, span, ph - 1 - y, fs); } } }
+        // S2c: sky-class texels are sky (fixed at the far end, rendered at infinity); ground-class unknowns never
+        // take a sky boundary value. A harmonic blend of a hill at 8 m and the sky at infinity is a tilted sheet
+        // that exists nowhere — measured on S15 as the far field ramping from the hill depth at the sign's side
+        // rims toward the sky at its top rim, i.e. the plate skirt the user saw as "tunneling".
+        const skyClass = new Uint8Array(N);
+        if (skyOnR) for (let i = 0; i < N; i++) if (free[i] && dSky[i] < dGnd[i]) { skyClass[i] = 1; nSkyClass++; }
+        window._geoSkyClass = skyOnR ? skyClass : null;
+        fixedFF = new Uint8Array(N); valFF = new Float32Array(dQ);
+        for (let i = 0; i < N; i++) { if (skyClass[i]) { fixedFF[i] = 1; valFF[i] = 0; } else fixedFF[i] = free[i] ? 0 : 1; }
+        // S2b.4: only the far rims are boundary values. A fixed texel JOINED to a free one is the near surface
+        // continuing past the reach limit (or the floor a box stands on): the far side does not ramp down to
+        // it — it keeps the far surface's depth (Neumann). With the ramp, S15's fill behind the tree ran from
+        // the sky rim to the crown's own depth and drew the near-to-far skirt in every reveal.
+        ffNeumann = skyOnR ? ((i, j) => rl.joinedIdx(i, j, dQ, pw) || skyClass[j] === 1 || dQ[j] < sqR)
+                           : ((i, j) => rl.joinedIdx(i, j, dQ, pw));
+        if (skyOnR) console.log('[S2c] far-side class: ' + nSkyClass + ' reach texels have sky behind them (nearest far rim is sky), ' + (nReach - nSkyClass) + ' have a surface');
         console.log('[S2b] reach: ' + nEdgeU + ' unjoined edges, ' + nReach + ' texels within the far side\'s slide at the envelope rim (' + (100 * nReach / N).toFixed(2) + '% of the plate); pass-1 band was ' + (100 * (() => { let c = 0; for (let i = 0; i < N; i++) c += dis1[i] ? 1 : 0; return c; })() / N).toFixed(2) + '%');
     }
-    const ffRes = solveField(fixedFF, dQ);
+    const ffRes = solveField(fixedFF, valFF || dQ, ffNeumann ? { neumann: ffNeumann } : undefined);
     const farField = ffRes.field, nU = ffRes.nU, nClampF = ffRes.nClamp, mgF = { sweeps: [[0, ffRes.cycles]], residual: ffRes.err * 255 };
     // A244h (refined far field: source texels at or behind the field join its boundary) was built, measured
     // and REMOVED (rule 7): against the gate fix alone it changed nothing the instruments or the screen
@@ -8445,7 +8471,11 @@ window._plugGeoBand = function (opts) {
             lipDeep[i] = medOf(tD, k); lipNear[i] = medOf(tN, k); lipSpread[i] = medOf(tS, kS); rampDrop[i] = medOf(tR, k); crossFrac[i] = nCross / k;
             // kind 1 continuous, 2 interior step (A253: most step samples had both lips in one object), 7 extent step, 3 single lip; without the object rule every step is 2
             kindTex[i] = (nK1 >= nK2 && nK1 >= nK3) ? 1 : (nK2 >= nK3 ? ((objId && nInt * 2 < nK2) ? 7 : 2) : 3); prov[i] = 1; }
-        const merged = solveField(fixed2, val2);
+        // S2b.4: under the rim law there are no observations to merge (the observe walk is bypassed) and this
+        // second solve, Dirichlet at every fixed neighbour, undid the reach field: the trunk's band took its
+        // own depth from the joined crown above and foot below instead of the ground beside it (S15 row 300:
+        // field 0.4734 where the far rims say 0.4353), so the plate rode with the trunk. The reach field stands.
+        const merged = bgRimLawOn() ? ffRes : solveField(fixed2, val2);
         for (let i = 0; i < N; i++) if (!prov[i] && !rim[i]) prov[i] = merged.clampMask[i] ? 3 : 2;   // A252: 2 field solve, 3 clamped to the source
         // A253 B1 THE LIP BOUND in the field: no band texel may carry a depth deeper than the deeper of its
         // two lips less one source quantum (the surfaces beside the gap are the evidence; deeper than both
@@ -13539,6 +13569,13 @@ function bgBuildBackgroundLayerCore() {
                     console.log('[QUICK-BAKE] a86: depth texture promoted to float (mesh now renders the cleaned field)');
                 }
             }
+            // S2b.4: the foreground's vertex depth must be a texel, not a blend. The mesh's vertices sit at k/(pw-1)
+            // in u while texel centres sit at (k+0.5)/pw, so a linearly filtered depth texture hands a rim vertex a
+            // mix of both sides of the tear and the quads next to a dropped rim quad still draw a skirt.
+            if (bgRimLawOn() && L.textures.depth && L.textures.depth.minFilter !== THREE.NearestFilter) {
+                const dtN = L.textures.depth; dtN.minFilter = THREE.NearestFilter; dtN.magFilter = THREE.NearestFilter; dtN.generateMipmaps = false; dtN.needsUpdate = true;
+                console.log('[S2b] foreground depth texture: nearest filtering (a vertex takes its own texel\'s depth)');
+            }
             if (window._srCapture) window._qbDbg = { plate: plateQ.slice(), d: dQ.slice(), pw, ph };
             // SD MASK (A39): the honest "where diffusion will paint" is
             // exactly where the plate SYNTHESIZES content — wherever the
@@ -14133,6 +14170,7 @@ function bgBuildBackgroundLayerCore() {
             renderer.setRenderTarget(null);
             // quick mode replaces any prior stack
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) { const sM = bgLayerMesh.userData.sky; scene.remove(sM); sM.geometry.dispose(); if (sM.material.map) sM.material.map.dispose(); sM.material.dispose(); bgLayerMesh.userData.sky = null; }   // S2c sky layer
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
@@ -14546,7 +14584,10 @@ function bgBuildBackgroundLayerCore() {
             // texel is on the boundary, no clone. Solved by SOR (Young 1954; Numerical
             // Recipes 19.5: omega = 2 / (1 + sin(pi / L)), L the domain extent in texels)
             // to below half an 8-bit step.
-            if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane || !!window._plugWashGated)) {
+            // S2b.4: under the rim law the band's colour is the membrane by default (the user's standing rule: a
+            // plausible wash, never a clone — with the source colour the plate carried the trunk's own brown and
+            // the leaves' green into every reveal at the far depth, the "streaks" on the S15 shots).
+            if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane || !!window._plugWashGated || bgRimLawOn())) {
                 try {
                     const tBF0 = Date.now();
                     const cImgF = (L.elements && L.elements.color) || L.textures.color.image;
@@ -14669,7 +14710,7 @@ function bgBuildBackgroundLayerCore() {
                                 const t = f.w[o]; f.r[o] = f.r[o] * t + cr * (1 - t); f.g[o] = f.g[o] * t + cg * (1 - t); f.b[o] = f.b[o] * t + cb * (1 - t); f.w[o] = Math.min(1, t + (1 - t) * cw); } }
                         const L0 = levels[0];
                         for (let i = 0; i < PNq; i++) if (disocc[i] && L0.w[i] > 0) { cd[i*4] = L0.r[i]; cd[i*4+1] = L0.g[i]; cd[i*4+2] = L0.b[i]; nPPFilled++; }
-                    } else if (!!window._plugMembrane) {
+                    } else if (!!window._plugMembrane || bgRimLawOn()) {
                         // couplings: a domain texel talks to a neighbour only through the same
                         // depth gate the BFS used (source neighbour: |plate - src| <= TOLB, a
                         // Dirichlet value; domain neighbour: |plate - plate| <= TOLB, an unknown)
@@ -15224,7 +15265,15 @@ function bgBuildBackgroundLayerCore() {
                         const _fx = window._plateFlushExempt === true;
                         const _epsX = 2 * ((typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255);
                         let _nX = 0, _maxX = 0, _sumX = 0, _nEx = 0;
+                        // S2b.4: under the rim law the push is skipped. The band's depth is the far surface's
+                        // continuation (Neumann membrane, Dirichlet only at far rims), so the plate is already
+                        // behind every texel that can land on it; the push made a cliff at every rim (S15 trunk:
+                        // field 0.435 = the ground beside it, plate 0.369), the torn plate then opened a one-texel
+                        // slit at rest, and the rendered depth was 3.3 m off where the field was 1.1 m off.
+                        const _skipX = bgRimLawOn();
+                        if (_skipX) console.log('[S2b] a162 cross-texel push skipped under the rim law (the far field is the ordering-correct continuation; the plate is torn at its rims)');
                         for (let i = 0; i < PNq; i++) {
+                            if (_skipX) break;
                             const cur = bgShiftPxAt(_xl, plateF[i]);
                             if (cur > F[i]) {
                                 if (_fx) { const yF = (i / pw) | 0, xF = i - yF * pw; if (Math.abs(plateF[i] - dQ[(ph - 1 - yF) * pw + xF]) <= _epsX) { _nEx++; continue; } }
@@ -15257,7 +15306,13 @@ function bgBuildBackgroundLayerCore() {
                 plateFPreSmooth = plateF ? plateF.slice() : null;
                 // window._legacyPlateTear restores the a87 tear.
                 if (window._legacyPlateTear !== true) {
-                    if (plateF) {
+                    // S2b.4: under the rim law the plate is NOT slope-limited. The chamfer turns every plate cliff
+                    // into a ramp 1/step texels wide (16 px for a hill against the sky at 800 px, 50+ px round a
+                    // leaf), and with the foreground torn at its rims that ramp is what the eye sees in the gap:
+                    // the "stretching / tunneling" skirt from near to far. The plate's cliffs are torn instead
+                    // (below), where the reach construction guarantees the near foreground covers the tear.
+                    if (plateF && bgRimLawOn()) console.log('[S2b] plate slope limit (a126) skipped under the rim law: the plate is torn at its own rims');
+                    if (plateF && !bgRimLawOn()) {
                         const _t0P = Date.now();
                         // A128 THE STEP IS 1/k FROM THE ENVELOPE, NOT THE STALE SLOPE.
                         // a126 shipped with step = bgConeSlopePerPx(pw) and its log
@@ -15325,6 +15380,36 @@ function bgBuildBackgroundLayerCore() {
                         console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + _moved + ' texels lowered of ' + PNq +
                                     ' (' + (100*_moved/Math.max(1,PNq)).toFixed(2) + '%), max ' + _maxMove.toFixed(4) +
                                     ' depth, step = ' + _st.toFixed(5) + '/texel (k=' + _kPl.toFixed(0) + '), ' + (Date.now()-_t0P) + 'ms');
+                    }
+                    // S2b.4 PLATE TORN AT ITS OWN RIMS (rim law). The plate's depth is the far field inside the band
+                    // (smooth by construction, continuous with the far surface it continues) and the source outside;
+                    // its only cliffs are the reach limits, which sit behind the near foreground at every pose, and
+                    // the source's own rims outside any reach, which the foreground covers too. A quad across an
+                    // unjoined plate edge is not drawn. Same law, same function, the plate's own depth.
+                    if (plateF && bgRimLawOn() && gQ && gQ.index) {
+                        try {
+                            const rlP = bgRimLawFor(pw, ph);
+                            const pS = new Float32Array(PNq);
+                            for (let y = 0; y < ph; y++) { const s = y * pw, d2 = (ph - 1 - y) * pw; for (let x = 0; x < pw; x++) pS[s + x] = plateF[d2 + x]; }
+                            // the clone is a plain BufferGeometry (no PlaneGeometry parameters): the grid comes from the source mesh
+                            const srcP = gQ.index.array, gpP = (gQ.parameters && gQ.parameters.widthSegments) ? gQ.parameters : (L.mesh.geometry.parameters || {});
+                            const vwP = (gpP.widthSegments || 0) + 1, vhP = (gpP.heightSegments || 0) + 1;
+                            if (!(vwP > 1 && vhP > 1)) console.warn('[S2b] plate tear: grid unknown (no PlaneGeometry parameters); plate left continuous');
+                            if (vwP > 1 && vhP > 1) {
+                                const sxP = (pw - 1) / (vwP - 1), syP = (ph - 1) / (vhP - 1);
+                                const tiP = (vi) => Math.round(((vi / vwP) | 0) * syP) * pw + Math.round((vi % vwP) * sxP);
+                                const outP = new srcP.constructor(srcP.length); let nK = 0, nDropP = 0, nSkyP = 0;
+                                const skyOnP = bgSkyInfOn(), sqP = bgSkyQ();   // S2c: sky plate texels are the sky layer's job (drawn behind everything at infinity)
+                                for (let t = 0; t < srcP.length; t += 3) {
+                                    const a = tiP(srcP[t]), b = tiP(srcP[t + 1]), c = tiP(srcP[t + 2]);
+                                    if (skyOnP && pS[a] < sqP && pS[b] < sqP && pS[c] < sqP) { nSkyP++; continue; }
+                                    if (rlP.joinedIdx(a, b, pS, pw) && rlP.joinedIdx(b, c, pS, pw) && rlP.joinedIdx(a, c, pS, pw)) { outP[nK++] = srcP[t]; outP[nK++] = srcP[t + 1]; outP[nK++] = srcP[t + 2]; }
+                                    else nDropP++;
+                                }
+                                gQ.setIndex(new THREE.BufferAttribute(outP.slice(0, nK), 1));
+                                console.log('[S2b] plate torn at its own rims: ' + nDropP + ' of ' + (srcP.length / 3 | 0) + ' triangles dropped (' + (100 * nDropP / Math.max(1, srcP.length / 3)).toFixed(2) + '%)' + (skyOnP ? '; ' + nSkyP + ' sky triangles left to the sky layer' : ''));
+                            }
+                        } catch (ePT) { console.warn('[S2b] plate tear failed (plate left continuous):', ePT); }
                     }
                     // A253 B2 THE LIP FLOOR after the ordering and slope passes (window._geoLipFloor, or the object rule).
                     // The A252 instrument measured on the troll that the observed lip depths are right (the observation
@@ -15638,6 +15723,43 @@ function bgBuildBackgroundLayerCore() {
             }
             bgLayerMesh = new THREE.Mesh(gQ, matQ);
             bgLayerMesh.position.copy(L.mesh.position);
+            // S2c THE SKY LAYER (window._skyInf; R3 D1). Sky is a direction-indexed layer behind everything: a
+            // plane at z = -Z_sky, scaled by (Z + D)/D about the rest eye so it reproduces the photograph's sky at
+            // rest and moves by -e off-axis (the plane-at-infinity law). Texture: the source where it is sky, and
+            // below the sky in each column the lowest sky colour continued downward (the horizon's colour — what
+            // is behind a hill at the horizon); columns with no sky take the nearest column that has some. Three
+            // window widths across with ClampToEdge: the margin is the border colour's Neumann continuation (D3's
+            // zero-parameter version). Plate cliffs between a hill and the sky, and every sky reveal, are backed
+            // by this layer instead of by a blend.
+            if (bgSkyInfOn()) {
+                try {
+                    const szk = bgSkyZ(); const Zs = szk.Z, Dk = szk.D;
+                    const gp0s = L.mesh.geometry.parameters || {}; const w0s = gp0s.width || terrariumWidth, h0s = gp0s.height || terrariumHeight;
+                    const scS = (Zs + Dk) / Dk, EXT = 3;
+                    const gS = new THREE.PlaneGeometry(w0s * scS * EXT, h0s * scS * EXT, 1, 1);
+                    const uvS = gS.attributes.uv; for (let k = 0; k < uvS.count; k++) uvS.setXY(k, (uvS.getX(k) - 0.5) * EXT + 0.5, (uvS.getY(k) - 0.5) * EXT + 0.5); uvS.needsUpdate = true;
+                    const cImgS = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvS = document.createElement('canvas'); cvS.width = pw; cvS.height = ph; const cxS = cvS.getContext('2d', { willReadFrequently: true });
+                    cxS.drawImage(cImgS, 0, 0, pw, ph); const pxS = cxS.getImageData(0, 0, pw, ph); const cs = pxS.data;
+                    const sqS = bgSkyQ(); let nSkyPx = 0; const colHas = new Uint8Array(pw), last = new Uint8Array(pw * 3);
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x, o4 = i * 4;
+                        if (dQ[i] < sqS) { nSkyPx++; colHas[x] = 1; last[x * 3] = cs[o4]; last[x * 3 + 1] = cs[o4 + 1]; last[x * 3 + 2] = cs[o4 + 2]; }
+                        else if (colHas[x]) { cs[o4] = last[x * 3]; cs[o4 + 1] = last[x * 3 + 1]; cs[o4 + 2] = last[x * 3 + 2]; } }
+                    let nNoSky = 0;
+                    for (let x = 0; x < pw; x++) { if (colHas[x]) continue; nNoSky++; let xs = -1; for (let r = 1; r < pw; r++) { if (x - r >= 0 && colHas[x - r]) { xs = x - r; break; } if (x + r < pw && colHas[x + r]) { xs = x + r; break; } }
+                        if (xs < 0) break; for (let y = 0; y < ph; y++) { const o4 = (y * pw + x) * 4, s4 = (y * pw + xs) * 4; cs[o4] = cs[s4]; cs[o4 + 1] = cs[s4 + 1]; cs[o4 + 2] = cs[s4 + 2]; } }
+                    cxS.putImageData(pxS, 0, 0);
+                    const texS = new THREE.CanvasTexture(cvS); texS.wrapS = texS.wrapT = THREE.ClampToEdgeWrapping; texS.minFilter = THREE.LinearFilter; texS.magFilter = THREE.LinearFilter;
+                    const srcT = L.textures && L.textures.color; if (srcT) { if ('colorSpace' in texS && 'colorSpace' in srcT) texS.colorSpace = srcT.colorSpace; if ('encoding' in texS && 'encoding' in srcT) texS.encoding = srcT.encoding; }
+                    const matS = new THREE.MeshBasicMaterial({ map: texS, depthTest: true, depthWrite: true, side: THREE.DoubleSide });
+                    const skyMesh = new THREE.Mesh(gS, matS);
+                    skyMesh.position.copy(L.mesh.position); skyMesh.rotation.copy(L.mesh.rotation); skyMesh.scale.copy(L.mesh.scale);
+                    skyMesh.position.z = L.mesh.position.z - Zs;
+                    skyMesh.renderOrder = bgLayerMesh.renderOrder - 1;
+                    bgLayerMesh.userData.sky = skyMesh;
+                    console.log('[S2c] sky layer: plane at z = -' + Zs.toFixed(1) + ' m, ' + (w0s * scS * EXT).toFixed(1) + ' x ' + (h0s * scS * EXT).toFixed(1) + ' m (scale ' + scS.toFixed(1) + ' x ' + EXT + '); texture ' + nSkyPx + ' sky px of ' + PNq + ' (' + (100 * nSkyPx / PNq).toFixed(1) + '%), ' + nNoSky + ' columns without sky took a neighbour');
+                } catch (eS) { console.warn('[S2c] sky layer failed (no layer):', eS); }
+            }
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
@@ -15731,6 +15853,7 @@ function bgBuildBackgroundLayerCore() {
             bgLayerMesh.visible = showQ ? showQ.checked : true;
             scene.add(bgLayerMesh);
             if (bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) scene.add(m);   // A245 ring
+            if (bgLayerMesh.userData && bgLayerMesh.userData.sky) { bgLayerMesh.userData.sky.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.sky); }   // S2c sky layer
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;

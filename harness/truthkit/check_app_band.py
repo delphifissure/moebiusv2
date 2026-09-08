@@ -47,6 +47,13 @@ if ff is not None:
     err = (d_app - d_true)[m]
     res['band_depth_err_m'] = {'n': int(m.sum()), 'mean': float(err.mean()) if m.any() else None, 'median_abs': float(np.median(np.abs(err))) if m.any() else None,
                                'p90_abs': float(np.percentile(np.abs(err), 90)) if m.any() else None, 'scene_depth_m': float(outer)}
+    # the RENDERED plate depth (plateF.f32, stored bottom-up) after the ordering clamps and the slope limit: what the screen shows
+    pfp = os.path.join(probe, 'plateF.f32')
+    if os.path.exists(pfp):
+        pf = np.fromfile(pfp, np.float32).reshape(ph, pw)[::-1]
+        d_pl = -app_z_of_d(pf, pn, outer, inner); errp = (d_pl - d_true)[m]
+        res['plate_depth_err_m'] = {'n': int(m.sum()), 'mean': float(errp.mean()) if m.any() else None, 'median_abs': float(np.median(np.abs(errp))) if m.any() else None,
+                                    'p90_abs': float(np.percentile(np.abs(errp), 90)) if m.any() else None}
 print(json.dumps(res, indent=1))
 rgb = np.array(Image.open(sys.argv[3]).convert('RGB').resize((pw, ph))).astype(float) / 255
 col = np.zeros(rgb.shape); col[dis & hidden] = (0.2, 0.9, 0.2); col[dis & ~hidden] = (1, 0.5, 0); col[~dis & hidden] = (0.3, 0.5, 1)

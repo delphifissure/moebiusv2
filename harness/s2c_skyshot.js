@@ -31,6 +31,12 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
         if (o.geo) window._plugGeoBand({ flush: !!o.flush, observed: true, gateAPriori: true }); else { bgQuickBake = true; buildBackgroundLayer(); }
         // the canonical shot (a150/a169/a105 harnesses): isSweeping hands camera.position to us, the main canvas is the window
         isSweeping = true;
+        // HIDE=plate,fg,sky,ring: leave layers out of the shot (which mesh draws what)
+        if (o.hide) { const L0 = mediaLayers[0];
+            if (o.hide.includes('fg') && L0 && L0.mesh) L0.mesh.visible = false;
+            if (o.hide.includes('plate') && typeof bgLayerMesh !== 'undefined' && bgLayerMesh) bgLayerMesh.visible = false;
+            if (o.hide.includes('sky') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) bgLayerMesh.userData.sky.visible = false;
+            if (o.hide.includes('ring') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) m.visible = false; }
         const D = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2, exR = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180), asp = bgEnvAspect();
         const out = { meta: { D, exR, asp, terrariumWidth, terrariumHeight, outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, W: renderer.domElement.width, H: renderer.domElement.height, sky: window._skyInf ? bgSkyZ() : null }, shots: {} };
         for (const [fx, fy] of o.poses) {
@@ -39,7 +45,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
         }
         camera.position.set(0, 0, D); render();
         return out;
-    }, { poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
+    }, { poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, hide: process.env.HIDE ? process.env.HIDE.split(',') : null, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
          depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(res.meta));
     for (const [k, v] of Object.entries(res.shots)) { const f = path.join(OUT, 'pose_' + k.replace(':', '_').replace(/-/g, 'm') + '.png'); fs.writeFileSync(f, Buffer.from(v.split(',')[1], 'base64')); console.log('wrote ' + f); }
