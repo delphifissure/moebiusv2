@@ -562,7 +562,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     // row z = -v0/m with an error bar from its slope's and intercept's quantisation bounds; the horizon is the row
     // stabbed by the greatest run-length of error bars, the horizontal runs are those whose bars contain it, and the
     // ground is the horizontal run of smallest slope in each column.
-    let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; const groundTex = new Uint8Array(N); { const picks = []; const rising = [];
+    let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; const groundTex = new Uint8Array(N), groundCol = new Uint8Array(pw); { const picks = []; const rising = [];
         for (let x = 0; x < pw; x++) { let y = 0;
             while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j]; const len = b - a + 1;
                 if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tol[j] / (2 * Math.max(1, len - 1));
@@ -598,7 +598,7 @@ function bgFarSidePlane(dQ, pw, ph) {
                 const dM = det(M); if (Math.abs(dM) > 1e-12) { const s2 = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; s2.push(det(Mk) / dM); } if (s2[2] > 0) sol = s2; } }
             if (sol[2] > 0) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
                 // the texels of the ground's own runs (a thin ground run continues along the fitted plane, not its own noisy line)
-                for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tol[jj]; } if (se / p.len <= 1) for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } }
+                for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tol[jj]; } if (se / p.len <= 1) { groundCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0]; const sqDispK = skyOn ? rl.dispAt(sq) : -1;
@@ -618,7 +618,10 @@ function bgFarSidePlane(dQ, pw, ph) {
     const lutK = bgShiftLUTFor(pw, ph), kAx = [lutK.ex * lutK.pxPerWorld * lutK.D, lutK.ex * lutK.pxPerWorld * lutK.D * bgEnvAspect()];
     const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
         const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
-        const xi = i % pw, yi = (i - xi) / pw; const gB = ground ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
+        // the ground bounds the world only where it is seen: in columns with a ground run of their own. (On the default
+        // photograph a 12-column, 209-texel "ground" at the water's edge cut nine million candidates across the whole
+        // frame and left every reveal empty; the kit's scenes have a ground run in every column, so nothing changes there.)
+        const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
         let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; const list = []; const kk = kAx[ax];
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
@@ -724,7 +727,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     console.log('[S3] far side by the plane law: ' + nR + ' row runs (' + (nR / ph).toFixed(1) + '/row, median length ' + med(runLen[0]) + '), ' + nC + ' column runs (' + (nC / pw).toFixed(1) + '/col, median ' + med(runLen[1]) + '); ' +
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
-        (horizon ? ('ground plane from ' + horizon.nRuns + ' column runs (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
+        (horizon ? ('ground plane from ' + horizon.nRuns + ' of ' + pw + ' columns (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : 'no ground (no rising column run): no bound, no horizon') + '; ' + (Date.now() - t0) + 'ms');
     return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
