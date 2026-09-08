@@ -3,3 +3,4 @@ harness/synth/*.f32
 harness/synth/*.u8
 harness/truthkit/out/
 harness/truthkit/__pycache__/
+harness/shots/
