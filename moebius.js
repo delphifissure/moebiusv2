@@ -8576,7 +8576,7 @@ window._plugGeoBand = function (opts) {
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
     let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
-    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null; window._geoStepRims = null;
+    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null; window._geoStepRims = null; window._geoSelfMirror = null;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
@@ -8622,6 +8622,19 @@ window._plugGeoBand = function (opts) {
             window._geoFarRim = { j: planeFS.farRimJ, w: planeFS.farRimW, mix: planeFS.farMix, axis: planeFS.farAxis };   // S3: the rims each band texel continues from (its colour)
             window._geoFarField2 = planeFS.farField2; window._geoFarRim2 = { j: planeFS.farRimJ2, w: planeFS.farRimW2, side: planeFS.farSide2, axis: planeFS.farAxis };   // S4: the second layer
             window._geoStepRims = planeFS.stepRims;   // S5: step rims (near, far) pairs
+            // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
+            // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
+            // rim (the same distance into the far run) is the sample. -1 where the rim is another object or the mirror leaves it.
+            { const comp = new Int32Array(N).fill(-1); const st = new Int32Array(N); let nC = 0;
+                for (let i = 0; i < N; i++) { if (comp[i] >= 0 || !free[i]) continue; let h = 0, t = 0; st[t++] = i; comp[i] = nC;
+                    while (h < t) { const j = st[h++]; const x = j % pw, y = (j - x) / pw; const cN = [x > 0 ? j - 1 : -1, x < pw - 1 ? j + 1 : -1, y > 0 ? j - pw : -1, y < ph - 1 ? j + pw : -1];
+                        for (const n of cN) if (n >= 0 && comp[n] < 0 && free[n]) { comp[n] = nC; st[t++] = n; } }
+                    nC++; }
+                const mirror = new Int32Array(N).fill(-1); let nM = 0; const FJ = planeFS.farRimJ, FM = planeFS.farMix, FA = planeFS.farAxis;
+                for (let i = 0; i < N; i++) { const ax = FA[i]; if (!ax || !free[i]) continue; const j = FM[i] >= 0.5 ? FJ[2 * i] : FJ[2 * i + 1]; if (j < 0 || comp[j] !== comp[i]) continue;
+                    const stp = ax === 1 ? 1 : pw; const g = Math.round((j - i) / stp); if (g === 0) continue; const side = g > 0 ? 1 : -1; const m = j + side * (Math.abs(g) - 1) * stp;
+                    if (m < 0 || m >= N) continue; if (ax === 1 && ((m / pw) | 0) !== ((i / pw) | 0)) continue; if (comp[m] !== comp[i]) continue; mirror[i] = m; nM++; }
+                window._geoSelfMirror = mirror; console.log('[S5] self-occlusion: ' + nC + ' objects (components with a far side); ' + nM + ' texels whose first layer is their own object, with a mirror sample'); }
             { let n2 = 0; for (let i = 0; i < N; i++) if (free[i] && planeFS.farField2[i] >= 0) n2++; console.log('[S4] second layer: ' + planeFS.nLayer2 + ' texels have one (' + n2 + ' of them free): what shows once the first-arriving surface has passed'); }
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
             console.log('[S3] reach under the plane law: ' + nReach + ' free texels (single ' + kc[1] + ', same plane ' + kc[2] + ', crossing ' + kc[3] + ', midpoint ' + kc[4] + ', none ' + kc[0] + '; row axis ' + ac[1] + ', column axis ' + ac[2] + ')' + (skyOnR ? ('; sky behind ' + nSkyClass) : '')); }
@@ -14963,6 +14976,10 @@ function bgBuildBackgroundLayerCore() {
                     const ring = new Uint8Array(PNq); let nRing = 0; const inD = (j) => carQ3[j] && hasC[j];
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!inD(i)) continue;
                         if (x === 0 || y === 0 || x === pw - 1 || y === ph - 1 || !inD(i - 1) || !inD(i + 1) || !inD(i - pw) || !inD(i + pw)) { ring[i] = 1; nRing++; } }
+                    if (!!window._selfSample && window._geoSelfMirror && window._geoSelfMirror.length === PNq) {   // S5 Item 7 (experiment)
+                        const MR = window._geoSelfMirror; let nSS = 0;
+                        for (let i = 0; i < PNq; i++) { if (!carQ3[i] || !hasC[i] || MR[i] < 0) continue; const m = MR[i]; col[i * 3] = cd[m * 4]; col[i * 3 + 1] = cd[m * 4 + 1]; col[i * 3 + 2] = cd[m * 4 + 2]; ring[i] = 1; nSS++; }
+                        console.log('[S5] self-sample: ' + nSS + ' texels coloured from the other side of their own object (Dirichlet for the membrane)'); }
                     const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (carQ3[i] && hasC[i] && !ring[i]) uIdx[i] = nU++;
                     const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1), dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU), vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
                     for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y; lv.vR[u] = col[i * 3]; lv.vG[u] = col[i * 3 + 1]; lv.vB[u] = col[i * 3 + 2];

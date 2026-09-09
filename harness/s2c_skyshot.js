@@ -36,6 +36,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
             if (o.hide.includes('fg') && L0 && L0.mesh) L0.mesh.visible = false;
             if (o.hide.includes('plate') && typeof bgLayerMesh !== 'undefined' && bgLayerMesh) bgLayerMesh.visible = false;
             if (o.hide.includes('sky') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) bgLayerMesh.userData.sky.visible = false;
+            if (o.hide.includes('steps') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) bgLayerMesh.userData.steps.visible = false;
             if (o.hide.includes('plate2') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) bgLayerMesh.userData.plate2.visible = false;
             if (o.hide.includes('ring') && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) m.visible = false; }
         const D = Math.abs(camera.position.z - portalPlaneWorldZ) || 0.2, exR = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180), asp = bgEnvAspect();
