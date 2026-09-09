@@ -16355,7 +16355,7 @@ function bgBuildBackgroundLayerCore() {
                     { const key = new Map(); for (let q = 0; q < nP; q++) key.set(SR[2 * q], q);
                         const segOf = new Int32Array(nP).fill(-1); let nSeg = 0; const acc = [];
                         for (let q = 0; q < nP; q++) { if (segOf[q] >= 0) continue; const iA0 = SR[2 * q], xA0 = iA0 % pw, yA0 = (iA0 - xA0) / pw; const horiz = (SR[2 * q + 1] - iA0) % pw !== 0 || Math.abs(SR[2 * q + 1] - iA0) === 1; const perp = horiz ? pw : 1;
-                            const mem = [q]; segOf[q] = nSeg; for (const dir of [-perp, perp]) { let cur = iA0 + dir; while (cur >= 0 && cur < N && key.has(cur) && segOf[key.get(cur)] < 0) { const qq = key.get(cur); segOf[qq] = nSeg; mem.push(qq); cur += dir; } }
+                            const mem = [q]; segOf[q] = nSeg; for (const dir of [-perp, perp]) { let cur = iA0 + dir; while (cur >= 0 && cur < PNq && key.has(cur) && segOf[key.get(cur)] < 0) { const qq = key.get(cur); segOf[qq] = nSeg; mem.push(qq); cur += dir; } }
                             let r = 0, g = 0, b = 0; for (const qq of mem) { const a = SR[2 * qq], bb = SR[2 * qq + 1]; r += src[a * 4] + src[bb * 4]; g += src[a * 4 + 1] + src[bb * 4 + 1]; b += src[a * 4 + 2] + src[bb * 4 + 2]; }
                             const n2 = 2 * mem.length; acc.push([r / n2, g / n2, b / n2]); nSeg++; }
                         for (let q = 0; q < nP; q++) { const [r, g, b] = acc[segOf[q]]; const iA = SR[2 * q], iB = SR[2 * q + 1]; cs[iA * 4] = r; cs[iA * 4 + 1] = g; cs[iA * 4 + 2] = b; cs[iB * 4] = r; cs[iB * 4 + 1] = g; cs[iB * 4 + 2] = b; } }
