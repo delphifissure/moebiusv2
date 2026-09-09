@@ -8522,15 +8522,14 @@ window._plugGeoBand = function (opts) {
         // S3: the far side of every texel from the plane law (rows and columns), before any walk; the reach
         // then asks, per texel, whether ITS far side slides past the edge — not the edge's far depth
         planeFS = bgFarRuleOn() ? bgFarSidePlane(dQ, pw, ph) : null;
-        // The walk does not stop at a rim inside the occluder: the reveal is geometric — every rest texel within the
-        // edge's slide against ITS far side is uncovered, whatever tears lie between it and the edge (the troll's head is
-        // torn in two by a one-texel notch; the cave's reveal at half the envelope is 154 texels wide, the right half of
-        // the head 28). It stops where a texel has no far side of its own (nothing behind it to carry) or where its far
-        // side is not behind the edge by more than the distance walked — the span test, which bounds every walk.
-        const walkP = planeFS ? ((iNear, step, dEdge, limit, vert) => { const sE = bgShiftPxAt(lutR, dEdge); let i = iNear, k = 0;
-            while (k < limit) { if (!(planeFS.farField[i] < dQ[i])) break;
-                const span = (sE - bgShiftPxAt(lutR, planeFS.farField[i])) * (vert ? aspR : 1);   // > 0 iff this texel's far side is behind the occluding edge
-                if (!(k < span)) break; if (!free[i]) { free[i] = 1; nReach++; } i += step; k++; } }) : null;
+        // Under the plane law there is no reach walk: every texel with a far side of its own offers it, and the sweep's
+        // rim-law demand (the far-field plate splatted per pose; a cell the foreground leaves uncovered names the texel
+        // that landed there) is the exact screen-space test of which offers are taken. The walk from each edge was a
+        // pre-filter inherited from the membrane arm (it decided which texels got a field value at all); with a field
+        // at every texel it only lost reveals: it broke at any rim inside the occluder (the troll's head, torn in two by
+        // a one-texel notch, never carried the cave through its left half) and measured the slide from the edge texel's
+        // depth (a ramp end 48 texels short of the head's body). Removed (rule 7); the rim arm's walk below is untouched.
+        if (planeFS) for (let i = 0; i < N; i++) if (planeFS.farField[i] < dQ[i]) { free[i] = 1; nReach++; }
         // S2c: the far side's CLASS. Every walk remembers how far it came from a sky rim and from a non-sky
         // rim; a free texel nearer to a sky rim than to any other far rim has sky behind it (R3 D2's
         // "above the horizon", with the nearest rim standing in for the horizon estimator until one exists).
@@ -8542,12 +8541,10 @@ window._plugGeoBand = function (opts) {
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
             if (x < pw - 1) { const j = i + 1; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])), fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
-                if (walkP) { if (dQ[i] > dQ[j]) walkP(i, -1, dQ[i], x + 1, false); else walkP(j, 1, dQ[j], pw - 1 - x, false); }
-                else if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1, fs); else walk(j, 1, span, pw - 1 - x, fs); } }
+                if (!planeFS) { if (dQ[i] > dQ[j]) walk(i, -1, span, x + 1, fs); else walk(j, 1, span, pw - 1 - x, fs); } } }
             if (y < ph - 1) { const j = i + pw; if (!rl.joinedIdx(i, j, dQ, pw)) { nEdgeU++;
                 const span = Math.abs(bgShiftPxAt(lutR, dQ[i]) - bgShiftPxAt(lutR, dQ[j])) * aspR, fs = skyOnR && Math.min(dQ[i], dQ[j]) < sqR;
-                if (walkP) { if (dQ[i] > dQ[j]) walkP(i, -pw, dQ[i], y + 1, true); else walkP(j, pw, dQ[j], ph - 1 - y, true); }
-                else if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1, fs); else walk(j, pw, span, ph - 1 - y, fs); } } }
+                if (!planeFS) { if (dQ[i] > dQ[j]) walk(i, -pw, span, y + 1, fs); else walk(j, pw, span, ph - 1 - y, fs); } } } }
         // S2c: sky-class texels are sky (fixed at the far end, rendered at infinity); ground-class unknowns never
         // take a sky boundary value. A harmonic blend of a hill at 8 m and the sky at infinity is a tilted sheet
         // that exists nowhere — measured on S15 as the far field ramping from the hill depth at the sign's side
