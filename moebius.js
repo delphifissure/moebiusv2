@@ -752,9 +752,23 @@ function bgFarSidePlane(dQ, pw, ph) {
     // S5 STEP RIMS: a rim between two runs whose lines are parallel within their fit uncertainty is a step inside one
     // surface (R1 §2.3's prior: a jump inside one continuous surface is a return face; a jump to a surface of another
     // orientation is open). Both runs need two samples for a slope; sky never steps. Pairs are (near texel, far texel).
-    const stepList = []; let nStepPairs = 0, nStepLineOnly = 0;
+    // S6: PARALLEL PLANES, not equal slopes. A plane n.X = rho seen through a pinhole of focal length f (texels) is the
+    // disparity plane 1/Z = A x + B y + C with (A, B, C) = (n_x, n_y, n_z f) / (f rho), x, y from the principal point; so
+    // n is proportional to (A, B, C/f) and two planes are parallel when those vectors are parallel (cross product zero within
+    // the fits' uncertainties). Equal slopes was wrong in general: parallel planes at different distances have PROPORTIONAL
+    // gradients (S16's two walls: 0 = 0 along the columns, -0.00138 vs -0.00134 along the rows, 60x the fit uncertainty).
+    const stepList = []; let nStepPairs = 0, nStepNoPerp = 0, nStepNotPar = 0;
+    const fTex = (pw / 2) / Math.tan(rl.hfov / 2), cx0 = (pw - 1) / 2, cy0 = (ph - 1) / 2;
     const perpSlopeAx = (axP, j) => { const x = j % pw, y = (j - x) / pw; const lP = axP === 0 ? y : x; const aP = rs[axP][j], bP = re[axP][j]; const lenP = bP - aP + 1;
         if (lenP < 2) return null; const fP = fit(axP, lP, aP, bP, aP); return [fP[0], tol[j] / (2 * (lenP - 1))]; };
+    // the plane through texel j: slope mL (uncertainty uL) along axis ax, fitted disparity dL at j, slope gP on the other axis
+    const planeAt = (ax, j, mL, uL, dL, gP) => { const x = j % pw - cx0, y = (j - (j % pw)) / pw - cy0;
+        const A = ax === 0 ? mL : gP[0], B = ax === 0 ? gP[0] : mL, uA = ax === 0 ? uL : gP[1], uB = ax === 0 ? gP[1] : uL;
+        return [A, B, (dL - A * x - B * y) / fTex, uA, uB, (tol[j] / 2 + Math.abs(x) * uA + Math.abs(y) * uB) / fTex]; };
+    const parallelPlanes = (P, Q) => { const [A1, B1, C1, a1, b1, c1] = P, [A2, B2, C2, a2, b2, c2] = Q;
+        return Math.abs(A1 * B2 - A2 * B1) <= Math.abs(B2) * a1 + Math.abs(A1) * b2 + Math.abs(B1) * a2 + Math.abs(A2) * b1
+            && Math.abs(B1 * C2 - B2 * C1) <= Math.abs(C2) * b1 + Math.abs(B1) * c2 + Math.abs(C1) * b2 + Math.abs(B2) * c1
+            && Math.abs(C1 * A2 - C2 * A1) <= Math.abs(A2) * c1 + Math.abs(C1) * a2 + Math.abs(A1) * c2 + Math.abs(C2) * a1; };
     for (let ax = 0; ax < 2; ax++) { const Lx = L[ax], nLn = nL[ax], st = stepA[ax]; const perpSlope = (j) => perpSlopeAx(1 - ax, j);
         for (let l = 0; l < nLn; l++) { const base = ax === 0 ? l * pw : l; let p = 0;
             while (p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; if (b + 1 >= Lx) break;
@@ -762,16 +776,13 @@ function bgFarSidePlane(dQ, pw, ph) {
                 if (len1 >= 2 && len2 >= 2 && !isSky[jb] && !isSky[j2] && !rl.joinedIdx(jb, j2, dQ, pw)) {
                     const f1 = fit(ax, l, a, b, b), f2 = fit(ax, l, a2, b2, a2);
                     const u1 = tol[jb] / (2 * (len1 - 1)), u2 = tol[j2] / (2 * (len2 - 1));
-                    if (Math.abs(f1[0] - f2[0]) <= u1 + u2) {
-                        // S6: parallel LINES are one partial derivative; a step inside one surface needs parallel PLANES, i.e. the
-                        // gradient across the line too (the two texels' runs on the other axis, same fit, same uncertainty).
-                        // On the photograph the line test alone passed the arm's silhouette against the cave wall (977 faces).
-                        const g1 = perpSlope(jb), g2 = perpSlope(j2);
-                        if (g1 && g2 && Math.abs(g1[0] - g2[0]) <= g1[1] + g2[1]) { const near = disp[jb] >= disp[j2] ? jb : j2, far = near === jb ? j2 : jb; stepList.push(near, far); nStepPairs++; }
-                        else nStepLineOnly++; } }
+                    const g1 = perpSlope(jb), g2 = perpSlope(j2);   // the gradient across the line, from the two texels' runs on the other axis
+                    if (!g1 || !g2) nStepNoPerp++;
+                    else if (parallelPlanes(planeAt(ax, jb, f1[0], u1, f1[1], g1), planeAt(ax, j2, f2[0], u2, f2[1], g2))) { const near = disp[jb] >= disp[j2] ? jb : j2, far = near === jb ? j2 : jb; stepList.push(near, far); nStepPairs++; }
+                    else nStepNotPar++; }
                 p = b + 1; } } }   // one run at a time: every consecutive pair is tested
     const stepRims = Int32Array.from(stepList);
-    console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel planes (a step inside one surface; its face is synthesised when window._stepFaces is on); ' + nStepLineOnly + ' more had parallel lines only (rejected)');
+    console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel planes (a step inside one surface; its face is synthesised when window._stepFaces is on); rejected: ' + nStepNotPar + ' not parallel, ' + nStepNoPerp + ' without a gradient across the line');
     return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {

@@ -88,4 +88,13 @@ sh.save(sys.argv[4]); print('wrote', sys.argv[4])
 cp = os.path.join(probe, 'carrier.u8'); res['carrier_px'] = int((np.fromfile(cp, np.uint8) > 0).sum()) if os.path.exists(cp) else None
 res['clone_count'] = meta.get('cloneCount'); res['clone_count_final'] = meta.get('cloneCountFinal')
 cp2 = os.path.join(probe, 'carrier2.u8'); res['carrier2_px'] = int((np.fromfile(cp2, np.uint8) > 0).sum()) if os.path.exists(cp2) else None
+# S6: the band by first-uncover pose (bandPose.f32 = smallest pose fraction at which the texel was demanded; fraction =
+# tan(head angle)/tan(envelope)); per tier its size and its precision against the same truth (a tier is a subset of the band)
+bpf = os.path.join(probe, 'bandPose.f32')
+if os.path.exists(bpf):
+    bp = np.fromfile(bpf, np.float32).reshape(ph, pw); env = float(meta.get('envDeg') or 45.0); res['tiers'] = {}
+    for deg in (15, 25, 35):
+        t = dis & (bp <= np.tan(np.radians(deg)) / np.tan(np.radians(env)) + 1e-6); n = int(t.sum())
+        res['tiers'][str(deg)] = {'px': n, 'frac_of_band': float(n / max(1, dis.sum())), 'precision': float((t & hidden).sum() / max(1, n))}
+    print('tiers', json.dumps(res['tiers']))
 json.dump(res, open(os.path.splitext(sys.argv[4])[0] + '.json', 'w'), indent=1)
