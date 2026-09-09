@@ -8166,6 +8166,11 @@ window._plugCpuSweep = function (opts) {
     const zeF = rimFF ? new Float32Array(N) : null; if (rimFF) for (let i = 0; i < N; i++) zeF[i] = zeOfD(rimFF[i]);
     const zeF2 = rimFF2 ? new Float32Array(N) : null; if (rimFF2) for (let i = 0; i < N; i++) zeF2[i] = rimFF2[i] >= 0 ? zeOfD(rimFF2[i]) : 1;
     const sameSheet = (a, b) => { const za = a >= N ? zeF2[a - N] : zeF[a], zb2 = b >= N ? zeF2[b - N] : zeF[b]; return (za > zb2 ? za / zb2 : zb2 / za) <= tJoin; };
+    // S5: a plate quad is splatted only where its four corners are one sheet (the rendered plate is torn elsewhere); a torn
+    // quad's texel is a point at its own far depth. Interpolating every quad had turned the torn ones into skirt quads that
+    // won cells between two surfaces (v10 kit: precision down on every scene, S15 recall 0.934 -> 0.878).
+    const quadJoined = (ze, i) => { const a = ze[i], b = ze[i + 1], c = ze[i + pw], d = ze[i + pw + 1];
+        const r = (u, v) => (u > v ? u / v : v / u) <= tJoin; return r(a, b) && r(a, c) && r(b, d) && r(c, d); };
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
@@ -8403,9 +8408,9 @@ window._plugCpuSweep = function (opts) {
         for (let y = 0; y < ph; y++) { const r = y * pw;
             for (let x = 0; x < pw; x++) { const i = r + x; const f = (ph - 1 - y) * pw + x; if (plateIdx && !plateIdx[f]) continue;
                 const xs = x + sPL[i] * fx, ys = y + sPL[i] * fy, d = pFs[i];
-                if (x + 1 < pw && y + 1 < ph && !(plateIdx && (!plateIdx[f + 1] || !plateIdx[f - pw] || !plateIdx[f - pw + 1]))) {
+                if (x + 1 < pw && y + 1 < ph && !(plateIdx && (!plateIdx[f + 1] || !plateIdx[f - pw] || !plateIdx[f - pw + 1])) && (!zeF || quadJoined(zeF, i))) {
                     quad(xs, ys, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, x + 1 + sPL[i + pw + 1] * fx, y + 1 + sPL[i + pw + 1] * fy,
-                         Math.min(d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]), i, [d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]]); continue;
+                         Math.min(d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]), i, zeF ? [d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]] : null); continue;
                 }
                 splat(xs, ys, d, i);
             } }
@@ -8414,7 +8419,7 @@ window._plugCpuSweep = function (opts) {
         if (rimFF2) for (let y = 0; y < ph; y++) { const r = y * pw;
             for (let x = 0; x < pw; x++) { const i = r + x; const d = rimFF2[i]; if (d < 0) continue;
                 const xs = x + sPL2[i] * fx, ys = y + sPL2[i] * fy;
-                if (x + 1 < pw && y + 1 < ph && rimFF2[i + 1] >= 0 && rimFF2[i + pw] >= 0 && rimFF2[i + pw + 1] >= 0) {
+                if (x + 1 < pw && y + 1 < ph && rimFF2[i + 1] >= 0 && rimFF2[i + pw] >= 0 && rimFF2[i + pw + 1] >= 0 && quadJoined(zeF2, i)) {
                     quad(xs, ys, x + 1 + sPL2[i + 1] * fx, y + sPL2[i + 1] * fy, x + sPL2[i + pw] * fx, y + 1 + sPL2[i + pw] * fy, x + 1 + sPL2[i + pw + 1] * fx, y + 1 + sPL2[i + pw + 1] * fy,
                          Math.min(d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]), N + i, [d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]]); continue;
                 }
@@ -14336,8 +14341,8 @@ function bgBuildBackgroundLayerCore() {
             if (window._bandReplace && window._geoFarField && window._geoFarField.length === PNq && window._geoDepth !== false) {
                 // A244f: the band's depth IS the a-priori far field (the far-rim membrane over the whole plate)
                 const ff = window._geoFarField; let nFF = 0; const carQ2 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: carriers
-                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (carQ2[i]) { plateF[(ph-1-y)*pw+x] = ff[i]; nFF++; } }
-                console.log('[QUICK-BAKE] A244f band depth = the far field on ' + nFF + ' carrier texels' + (carQ2 === disocc ? ' (no carrier mask: the band)' : ''));
+                let nOwn = 0; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; const f = (ph-1-y)*pw+x; if (carQ2[i]) { plateF[f] = ff[i]; nFF++; } else if (plateF[f] !== dQ[i]) { plateF[f] = dQ[i]; nOwn++; } }   // S5: a non-carrier sits at its own depth, whatever pass 1 left there (S27: 23 texels 0.016 below their own, clones)
+                console.log('[QUICK-BAKE] A244f band depth = the far field on ' + nFF + ' carrier texels' + (carQ2 === disocc ? ' (no carrier mask: the band)' : '') + '; ' + nOwn + ' non-carrier texels returned to their own depth');
             } else if (window._bandReplace && window._geoRef && window._geoRef.band && window._geoRef.band.length === PNq && window._geoDepth !== false) {
                 const tGD = Date.now(); const ref = window._geoRef; const TOLD2 = fgTearStep;
                 // reference far depth: BFS from the pass-1 band with its plate depth (source rows)
