@@ -86,5 +86,6 @@ for k, (t, txt) in enumerate(tiles):
 sh.save(sys.argv[4]); print('wrote', sys.argv[4])
 # S5: carriers (plate vertices at far depth for continuity) vs the texture band; the wash check from the bake
 cp = os.path.join(probe, 'carrier.u8'); res['carrier_px'] = int((np.fromfile(cp, np.uint8) > 0).sum()) if os.path.exists(cp) else None
-res['clone_count'] = meta.get('cloneCount')
+res['clone_count'] = meta.get('cloneCount'); res['clone_count_final'] = meta.get('cloneCountFinal')
+cp2 = os.path.join(probe, 'carrier2.u8'); res['carrier2_px'] = int((np.fromfile(cp2, np.uint8) > 0).sum()) if os.path.exists(cp2) else None
 json.dump(res, open(os.path.splitext(sys.argv[4])[0] + '.json', 'w'), indent=1)

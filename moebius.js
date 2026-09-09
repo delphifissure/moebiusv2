@@ -8153,6 +8153,19 @@ window._plugCpuSweep = function (opts) {
     // whose far-field displacement lands on cell c — the demand texel, exact under the shift law
     const rimFF = (rimL && opts.farField && opts.farField.length === N) ? opts.farField : null;
     if (rimFF) for (let i = 0; i < N; i++) { pFs[i] = rimFF[i]; sPL[i] = bgShiftPxAt(lut, rimFF[i]); }
+    // S5: the second layer (S4's farField2, -1 where none) takes part in the demand: its copies are splatted after
+    // plate 1's with ids N + i; a cell won by a layer-2 copy demands that texel's second layer (revealTex2).
+    const rimFF2 = (rimFF && opts.farField2 && opts.farField2.length === N) ? opts.farField2 : null;
+    const sPL2 = rimFF2 ? new Float32Array(N) : null; if (rimFF2) for (let i = 0; i < N; i++) sPL2[i] = rimFF2[i] >= 0 ? bgShiftPxAt(lut, rimFF2[i]) : 0;
+    const farOf = (id) => id >= N ? rimFF2[id - N] : rimFF[id];
+    // The same-sheet test between a lander and the cell's winner is the rim law's ratio test on cached eye distances
+    // (the affine rescue is for grazing planes along a line; between two copies landing on one cell the ratio is the
+    // question). Calling rimL.joined per cell had tripled the sweep's time (photograph: 3.5 -> 10 min).
+    const skyOnS = bgSkyInfOn(), sqS = bgSkyQ(), tJoin = rimL ? rimL.t : 1;
+    const zeOfD = (d) => (skyOnS && d < sqS) ? 1e9 : rimL.zeAt(d);
+    const zeF = rimFF ? new Float32Array(N) : null; if (rimFF) for (let i = 0; i < N; i++) zeF[i] = zeOfD(rimFF[i]);
+    const zeF2 = rimFF2 ? new Float32Array(N) : null; if (rimFF2) for (let i = 0; i < N; i++) zeF2[i] = rimFF2[i] >= 0 ? zeOfD(rimFF2[i]) : 1;
+    const sameSheet = (a, b) => { const za = a >= N ? zeF2[a - N] : zeF[a], zb2 = b >= N ? zeF2[b - N] : zeF[b]; return (za > zb2 ? za / zb2 : zb2 / za) <= tJoin; };
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
@@ -8215,6 +8228,7 @@ window._plugCpuSweep = function (opts) {
     const wantHoles = (!!opts.holeDemand || wantReveal) && window._qbDisocc;
     const holeTex = wantHoles ? new Uint8Array(N) : null; let holeIn = 0, holeOut = 0;
     const revealTex = wantReveal ? new Uint8Array(N) : null; let revealIn = 0, revealOut = 0;
+    const revealTex2 = (wantReveal && rimFF2) ? new Uint8Array(N) : null; let revealIn2 = 0;   // S5: demand for the second layer
     const outp = wantReveal ? new Uint8Array(G) : null, stk = wantReveal ? new Int32Array(G) : null;
     let farAt = null;
     if (wantHoles && opts.farField && opts.farField.length === N) { farAt = opts.farField; }   // A244f: the a-priori far field (source rows)
@@ -8239,9 +8253,9 @@ window._plugCpuSweep = function (opts) {
     // along one row of the troll's head) neighbouring copies overtake one another by a few texels; the losers, left
     // at their own depth, tore the plate into patches (the band through the face was a comb). They get their far
     // depth on the plate (continuity) but are not demanded of the texture stage (the winner set is the band).
-    const landed = (revealTex && rimFF) ? new Uint8Array(N) : null;
+    const landed = (revealTex && rimFF) ? new Uint8Array(N) : null, landed2 = (revealTex && rimFF2) ? new Uint8Array(N) : null;
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
-        if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || rimL.joined(rimFF[id], rimFF[own[c]]))) landed[id] = 1;   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
+        if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || sameSheet(id, own[c]))) { if (id >= N) landed2[id - N] = 1; else landed[id] = 1; }   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
         if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } };
     const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
         const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / sc; const steps = Math.ceil(n);
@@ -8257,7 +8271,7 @@ window._plugCpuSweep = function (opts) {
         const mnx = Math.max(0, Math.floor(Math.min(x0, x1, x2, x3) / sc)), mxx = Math.min(GW - 1, Math.floor(Math.max(x0, x1, x2, x3) / sc));
         const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
-            if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || rimL.joined(rimFF[id], rimFF[own[c]]))) landed[id] = 1;   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
+            if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || sameSheet(id, own[c]))) { if (id >= N) landed2[id - N] = 1; else landed[id] = 1; }   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
     for (const [ex, ey] of poses) {
@@ -8389,6 +8403,17 @@ window._plugCpuSweep = function (opts) {
                 }
                 splat(xs, ys, d, i);
             } }
+        // S5 PLATE 2 PASS: the second layer's copies, behind plate 1's on the same texel by construction (the depth test
+        // keeps the nearer copy per cell); a quad only where all four corners have a second layer
+        if (rimFF2) for (let y = 0; y < ph; y++) { const r = y * pw;
+            for (let x = 0; x < pw; x++) { const i = r + x; const d = rimFF2[i]; if (d < 0) continue;
+                const xs = x + sPL2[i] * fx, ys = y + sPL2[i] * fy;
+                if (x + 1 < pw && y + 1 < ph && rimFF2[i + 1] >= 0 && rimFF2[i + pw] >= 0 && rimFF2[i + pw + 1] >= 0) {
+                    quad(xs, ys, x + 1 + sPL2[i + 1] * fx, y + sPL2[i + 1] * fy, x + sPL2[i + pw] * fx, y + 1 + sPL2[i + pw] * fy, x + 1 + sPL2[i + pw + 1] * fx, y + 1 + sPL2[i + pw + 1] * fy,
+                         Math.min(d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]), N + i); continue;
+                }
+                splat(xs, ys, d, N + i);
+            } }
         // S2b RIM-LAW DEMAND: every cell the foreground does not cover is a reveal; the demand texel is the
         // one the far-field plate pass landed there (own[c] >= 0). A texel whose far field is its own source
         // depth is a pinhole of the foreground sheet, not a reveal (the same texel would have covered the cell
@@ -8397,12 +8422,13 @@ window._plugCpuSweep = function (opts) {
             const qR = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
             for (let c = 0; c < G; c++) { const o = own[c]; if (o === -2) continue;
                 if (o < 0) { revealOut++; continue; }
+                if (o >= N) { const t2 = o - N; if (dQ[t2] - rimFF2[t2] < qR) { obsSelf++; continue; } if (!revealTex2[t2]) { revealTex2[t2] = 1; revealIn2++; } continue; }   // S5: a layer-2 copy won the cell
                 if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
                 revealTex[o] = 1; revealIn++; }
             // S5: the landers that lost their cell are CARRIERS (returned as landedTex), not demand: the plate needs
             // their vertex at far depth for continuity, the texture stage does not need their colour synthesised.
         }
-        for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
+        for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c] >= N ? own[c] - N : own[c]] = 1; else if (own[c] === -1) { holeCells++;
             if (wantHoles) {
                 const cx0 = ((c % GW) + 0.5) * sc, cy0 = (((c / GW) | 0) + 0.5) * sc;
                 let tx = cx0, ty = cy0;
@@ -8425,7 +8451,7 @@ window._plugCpuSweep = function (opts) {
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
     const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, lipA: obsLipA, lipB: obsLipB, lipA0: obsLipA0, meta: obsMeta, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip, continuous: obsCont, interior: obsInterior, extent: obsExtent, skirt: obsSkirt } : null;
     if (rimL) console.log('[S2b] sweep under the rim law: ' + nRimCut + ' quad draws skipped across unjoined edges over ' + poses.length + ' poses (t ' + rimL.t.toFixed(4) + ')');
-    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, landedTex: landed, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, landedTex: landed, revealTex2, landedTex2: landed2, revealIn2, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -8448,7 +8474,7 @@ window._plugGeoBand = function (opts) {
     // the band is their union (+ pinholes), and the band's depth IS that field. One step.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._carrierReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
     window._geoLipDeep = null; window._geoLipNear = null; window._geoLipSpread = null; window._geoKind = null; window._geoProv = null; window._geoClass = null; window._geoPost = null; window._geoRampDrop = null;   // A252
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
@@ -8585,6 +8611,7 @@ window._plugGeoBand = function (opts) {
     const ffRes = planeFS ? { field: valFF, nU: nReach, cycles: 0, err: 0, nClamp: 0, clampMask: new Uint8Array(N) }   // S3: the field is the plane law's, nothing to solve
                           : solveField(fixedFF, valFF || dQ, ffNeumann ? { neumann: ffNeumann } : undefined);
     const farField = ffRes.field, nU = ffRes.nU, nClampF = ffRes.nClamp, mgF = { sweeps: [[0, ffRes.cycles]], residual: ffRes.err * 255 };
+    const farField2 = planeFS ? planeFS.farField2 : null;   // S5: the second layer takes part in the demand
     // A244h (refined far field: source texels at or behind the field join its boundary) was built, measured
     // and REMOVED (rule 7): against the gate fix alone it changed nothing the instruments or the screen
     // resolve (troll far distance 36.7 vs 38.7, star watcher seam 24.0 vs 24.5) and did not save the
@@ -8744,7 +8771,7 @@ window._plugGeoBand = function (opts) {
     }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
-    let s1 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent });
+    let s1 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     let obsStats = null;
     if (observed && s1.obs) {
@@ -8841,12 +8868,13 @@ window._plugGeoBand = function (opts) {
             // the tear gate now reads the observed field: re-bake the fold field under it and re-observe once,
             // so the band is derived under the tear the final bake will use (item: reveal set drift is reported)
             const rev1 = s1.revealTex; bgQuickBake = true; buildBackgroundLayer();
-            const s1b = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: false });
+            const s1b = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: false });
             if (s1b) { let nA = 0, nB2 = 0, nBoth = 0; for (let i = 0; i < N; i++) { if (rev1[i]) nA++; if (s1b.revealTex[i]) nB2++; if (rev1[i] && s1b.revealTex[i]) nBoth++; }
                 obsStats.regateReveal = [nA, nB2, nBoth];
                 console.log('[A246] re-gated reveal set: ' + nA + ' texels under the far-field gate -> ' + nB2 + ' under the observed gate (' + nBoth + ' shared)');
                 for (let i = 0; i < N; i++) { if (s1b.revealTex[i]) rev1[i] = 1; if (s1b.seen[i]) s1.seen[i] = 1; }   // union: cover both tears
                 if (s1b.landedTex) { if (!s1.landedTex) s1.landedTex = s1b.landedTex; else for (let i = 0; i < N; i++) if (s1b.landedTex[i]) s1.landedTex[i] = 1; }   // S5: carriers of both tears
+                for (const k of ['revealTex2', 'landedTex2']) if (s1b[k]) { if (!s1[k]) s1[k] = s1b[k]; else for (let i = 0; i < N; i++) if (s1b[k][i]) s1[k][i] = 1; }
                 s1.torn = s1b.torn; }
         }
     } else { window._geoObsDepth = null; window._geoObsCount = null; }
@@ -8854,7 +8882,7 @@ window._plugGeoBand = function (opts) {
     const band = new Uint8Array(N); let nB = 0, nKeep = 0, nAdd = 0, nDrop = 0, nRev = 0, nPin = 0;
     // +1 texel of rounding around the reveal texels
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const pin = !!(s1.seen[i] && torn && torn[i]); if (s1.revealTex[i]) nRev++; if (pin) nPin++;
-        let b = pin || s1.revealTex[i];
+        let b = pin || s1.revealTex[i] || !!(s1.revealTex2 && s1.revealTex2[i]);   // S5: a texel demanded for its second layer is band too
         if (!b) { const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && s1.revealTex[j]) { b = true; break; } }
         if (b) { band[i] = 1; nB++; } if (b && dis1[i]) nKeep++; else if (b) nAdd++; else if (dis1[i]) nDrop++; }
     window._bandReplace = band;
@@ -8866,6 +8894,10 @@ window._plugGeoBand = function (opts) {
         if (lt) for (let i = 0; i < N; i++) if (lt[i] && !carrier[i] && farField[i] < dQ[i]) { carrier[i] = 1; nExtra++; }
         for (let i = 0; i < N; i++) nCar += carrier[i];
         window._carrierReplace = carrier;
+        // S5: carriers of the second layer (plate 2's vertices): its winners and its landers, where a second layer exists
+        { const c2 = new Uint8Array(N); let n2c = 0, n2w = 0; const r2 = s1.revealTex2, l2 = s1.landedTex2;
+            for (let i = 0; i < N; i++) if (farField2 && farField2[i] >= 0 && ((r2 && r2[i]) || (l2 && l2[i]))) { c2[i] = 1; n2c++; if (r2 && r2[i]) n2w++; }
+            window._carrier2Replace = c2; console.log('[S5] plate 2 in the demand: ' + n2w + ' texels demanded for their second layer, ' + n2c + ' carriers of it'); }
         console.log('[S5] carriers: ' + nCar + ' texels (' + (100 * nCar / N).toFixed(1) + '% of the plate) = band ' + nB + ' + ' + nExtra + ' landers that lost their cell; the band alone is what the texture stage synthesises'); }
     // A252 per-texel CLASS: 1 interior-continuous (observed, two-lip majority), 2 step (observed, far lip
     // taken), 3 single lip (observed, no near lip in frame), 4 fallback (revealed, never observed: the
@@ -8883,7 +8915,7 @@ window._plugGeoBand = function (opts) {
     { const h = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N; i++) h[geoClass[i]]++;
       console.log('[A252] band classes: continuous ' + h[1] + ', ' + (objId ? 'interior ' : '') + 'step ' + h[2] + (objId ? ', extent step ' + h[7] : '') + ', single-lip ' + h[3] + ', fallback ' + h[4] + ', pinhole ' + h[5] + ', dilation ' + h[6] + '; plate pushed deeper than the field after it on ' + nPost + ' band texels (mean ' + (nPost ? (sPost / nPost).toFixed(4) : '0') + ')');
       if (obsStats) { obsStats.classes = h; obsStats.postDeeper = nPost; obsStats.postMean = nPost ? sPost / nPost : 0; } }
-    const s2 = window._plugCpuSweep({ revealDemand: true, farField, nx: NXg, ny: NYg, boundary: !!opts.boundary });
+    const s2 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary });
     let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
     const stats = { pw, ph, poses: s1.poses, observed, obs: obsStats, boundary: !!opts.boundary, rims: nRim, farFieldCycles: mgF.sweeps[0][1], farFieldErr: mgF.residual / 255, farFieldClamped: nClampF, farFieldMs: msF,
                     revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin,
@@ -14173,7 +14205,7 @@ function bgBuildBackgroundLayerCore() {
                 }
                 console.log('[QUICK-BAKE] A244 geometric band: +' + nAdd + ' revealed texels joined, -' + nDrop + ' never-revealed front texels left the band (restored to source depth); band now ' + nD);
             }
-            if (window._plugSweepCapture) { window._qbDisocc = disocc.slice(); window._qbCarrier = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace.slice() : null; }
+            if (window._plugSweepCapture) { window._qbDisocc = disocc.slice(); window._qbCarrier = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace.slice() : null; window._qbCarrier2 = (window._carrier2Replace && window._carrier2Replace.length === PNq) ? window._carrier2Replace.slice() : null; }
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
@@ -14924,7 +14956,7 @@ function bgBuildBackgroundLayerCore() {
                     cxC.putImageData(pxC, 0, 0);
                     // S5 WASH, NEVER A CLONE: a plate texel whose depth is behind its own must not carry its own colour (a
                     // foreground clone seen as background). Counted on every bake; must be 0.
-                    { let nClone = 0; for (let i = 0; i < PNq; i++) if (plateQ[i] < dQ[i] - qPC && !(carQ3[i] && hasC[i])) nClone++; window._qbCloneCount = nClone;
+                    { let nClone = 0; const rlW = bgRimLawFor(pw, ph); for (let i = 0; i < PNq; i++) if (plateQ[i] < dQ[i] && !rlW.joined(dQ[i], plateQ[i]) && !(carQ3[i] && hasC[i])) nClone++; window._qbCloneCount = nClone;
                         console.log('[S5] wash check: ' + nClone + ' plate texels behind their own depth without a synthesised colour' + (nClone ? ' — CLONES' : '')); }
                     if (window._plugSweepCapture) window._qbPlateColor = cd.slice();
                     plateColorTex = new THREE.CanvasTexture(cvC);
@@ -15950,7 +15982,12 @@ function bgBuildBackgroundLayerCore() {
             // backstop (a216) is the default until the carve is verified
             // hole-free on their screen; window._plugCarve = true + rebake
             // re-enables it for that verification.
-            if (window._plugSweepCapture) window._qbPlateF = plateF;   // A234: final plate depths (flipped rows) for the sweep's inverse shift (captured whether or not the carve runs)
+            if (window._plugSweepCapture) window._qbPlateF = plateF;
+            // S5 wash check on the FINAL plate: a texel whose plate depth is torn from its own (not joined by the rim law) and
+            // which is no carrier has no synthesised colour — a foreground clone that could be seen as background. Must be 0.
+            if (bgRimLawOn() && window._geoFarField) { const rlF = bgRimLawFor(pw, ph), carF = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc; let nCl = 0;
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; const pf = plateF[(ph - 1 - y) * pw + x]; if (pf < dQ[i] && !carF[i] && !rlF.joined(dQ[i], pf)) nCl++; }
+                window._qbCloneCountFinal = nCl; console.log('[S5] wash check (final plate): ' + nCl + ' non-carrier texels torn from their own depth' + (nCl ? ' — CLONES' : '')); }   // A234: final plate depths (flipped rows) for the sweep's inverse shift (captured whether or not the carve runs)
             if (window._plugCarve === true) {
                 try {
                     const _t0C = Date.now();
@@ -16179,7 +16216,8 @@ function bgBuildBackgroundLayerCore() {
                     const t20 = Date.now(); const ff2 = window._geoFarField2, FR2 = window._geoFarRim2;
                     const q2x = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
                     const has2 = new Uint8Array(PNq); let n2 = 0; const carQ4 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: carriers
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (carQ4[i] && ff2[i] >= 0 && plateF[(ph - 1 - y) * pw + x] < dQ[i] - q2x) { has2[i] = 1; n2++; } }
+                    const car2 = (window._carrier2Replace && window._carrier2Replace.length === PNq) ? window._carrier2Replace : null;
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (ff2[i] >= 0 && ff2[i] < dQ[i] - q2x && (carQ4[i] || (car2 && car2[i]))) { has2[i] = 1; n2++; } }   // S5: plate 2 on its own carriers too
                     window._qbPlateF2 = null; window._qbPlateColor2 = null;
                     if (n2 > 0 && L.mesh.geometry.index) {
                         const plateF2 = new Float32Array(plateF);
@@ -19543,7 +19581,7 @@ function _wireDebugSheetControls() {
         const gapSel = document.getElementById('bgGapRuleSel');
         const bakeGapRule = (m) => {
             window._bgGapRule = m;   // debug-sheet stamp
-            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._geoFarField = null; window._geoGateField = null;
+            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoFarField = null; window._geoGateField = null;
                 if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = 1; window._plugExtent = (m === 'back') ? 'far' : m; window._geoLipSeed = 1; window._plugBack = (m === 'back') ? 1 : false;
             window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;
