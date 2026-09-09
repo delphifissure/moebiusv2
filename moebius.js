@@ -8949,7 +8949,8 @@ window._plugGeoBand = function (opts) {
     // take the smallest of their reveal neighbours, else 0). window._bandTierDeg (degrees of head angle, horizontal) selects
     // the tier the texture stage paints: pose fraction <= tan(tierDeg)/tan(bgViewFadeEndDeg); the rest keeps the wash.
     { const bp = new Float32Array(N).fill(2); const sp = s1.bandPose;
-        if (sp) for (let i = 0; i < N; i++) if (band[i]) { let v = sp[i]; if (v > 1) { const x = i % pw, y = (i - x) / pw; const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && sp[j] < v) v = sp[j]; if (v > 1) v = 0; } bp[i] = v; }
+        if (sp) { for (let i = 0; i < N; i++) if (band[i]) bp[i] = sp[i];
+            for (let i = 0; i < N; i++) if (band[i] && bp[i] > 1) { let v = 2; const x = i % pw, y = (i - x) / pw; if (x > 0 && sp[i - 1] < v) v = sp[i - 1]; if (x < pw - 1 && sp[i + 1] < v) v = sp[i + 1]; if (y > 0 && sp[i - pw] < v) v = sp[i - pw]; if (y < ph - 1 && sp[i + pw] < v) v = sp[i + pw]; bp[i] = v > 1 ? 0 : v; } }
         else for (let i = 0; i < N; i++) if (band[i]) bp[i] = 0;
         window._qbBandPose = bp;
         const tEnd = Math.tan(bgViewFadeEndDeg * Math.PI / 180); const degs = [15, 25, 35, 45]; const cnt = degs.map(() => 0);
@@ -8957,6 +8958,8 @@ window._plugGeoBand = function (opts) {
         const tierDeg = (typeof window._bandTierDeg === 'number' && window._bandTierDeg > 0) ? window._bandTierDeg : 0;
         let tier = null, nT = 0; if (tierDeg) { const fr = Math.tan(tierDeg * Math.PI / 180) / tEnd; tier = new Uint8Array(N); for (let i = 0; i < N; i++) if (band[i] && bp[i] <= fr) { tier[i] = 1; nT++; } }
         window._qbBandTier = tier;
+        { let pmin = 2, pmax = -1, n0 = 0, n1 = 0, nNever = 0; if (sp) for (let i = 0; i < N; i++) if (band[i]) { const v = sp[i]; if (v > 1) nNever++; else { if (v < pmin) pmin = v; if (v > pmax) pmax = v; if (v === 0) n0++; if (v >= 0.99) n1++; } }
+            console.log('[S6] bandPose diagnostic: band texels never marked ' + nNever + ', marked at 0 ' + n0 + ', at >=0.99 ' + n1 + ', min ' + pmin + ' max ' + pmax + '; sweep poses ' + (s1.poses || '?')); }
         console.log('[S6] band by first-uncover angle: ' + degs.map((d, k) => d + '°: ' + cnt[k]).join(', ') + ' of ' + nB + (tier ? ('; texture tier at ' + tierDeg + '°: ' + nT + ' texels') : '; texture tier: paint all')); }
     // S5 CARRIERS: the band is what the texture stage synthesises (winners, pinholes, one texel of rounding); the
     // carriers are every texel whose plate vertex must sit at its far depth so the plate is one continuous sheet —
