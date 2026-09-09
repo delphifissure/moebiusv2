@@ -28,6 +28,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
         if (o.flush) window._plateFlushExempt = true;
         if (o.depth) { outerVolumeDepth = o.depth.outer; innerVolumeDepth = o.depth.inner; currentNormPortalPlane = o.depth.pn; }
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
+        if (o.envDeg) { bgViewFadeEndDeg = o.envDeg; }   // S6: the horizontal envelope half-angle for the +-30 degree measurement (a top-level let, not a window flag)
         if (o.geo) window._plugGeoBand({ flush: !!o.flush, observed: true, gateAPriori: true }); else { bgQuickBake = true; buildBackgroundLayer(); }
         // the canonical shot (a150/a169/a105 harnesses): isSweeping hands camera.position to us, the main canvas is the window
         isSweeping = true;
@@ -47,7 +48,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 's2c_skyshot', proc
         }
         camera.position.set(0, 0, D); render();
         return out;
-    }, { poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, hide: process.env.HIDE ? process.env.HIDE.split(',') : null, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
+    }, { poses: POSES, flush: !!process.env.FLUSH, geo: !!process.env.GEO, envDeg: process.env.ENV_DEG ? +process.env.ENV_DEG : 0, hide: process.env.HIDE ? process.env.HIDE.split(',') : null, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
          depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(res.meta));
     for (const [k, v] of Object.entries(res.shots)) { const f = path.join(OUT, 'pose_' + k.replace(':', '_').replace(/-/g, 'm') + '.png'); fs.writeFileSync(f, Buffer.from(v.split(',')[1], 'base64')); console.log('wrote ' + f); }
