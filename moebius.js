@@ -627,7 +627,15 @@ function bgFarSidePlane(dQ, pw, ph) {
         // frame and left every reveal empty; the kit's scenes have a ground run in every column, so nothing changes there.)
         const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
         let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; const list = []; const kk = kAx[ax];
+        // A far side lies BEYOND A RIM. Runs break on curvature (second differences over the tolerance), so one joined
+        // surface can be several runs; a neighbouring run of the texel's own surface that sits a hair behind it is not
+        // disoccluded by anything (the mesh is continuous there, by the rim law's own definition) — yet it is adjacent,
+        // so it arrived first and made the far field the texel's own depth. (The default photograph: the troll's 8-bit
+        // head fragments into micro-runs; the reach walk stopped on them and the cave behind was never carried.)
+        let rim = false;
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
+            if (!rim && !rl.joinedIdx(base + (p - dir) * st, j, dQ, pw)) rim = true;
+            if (!rim) { p = dir > 0 ? b + 1 : a - 1; continue; }
             const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
             const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
             const thin = len < g + 1;
@@ -680,7 +688,14 @@ function bgFarSidePlane(dQ, pw, ph) {
         const dm = cL.m - cR.m;
         if (Math.abs(dm) > 1e-30) { const k = (cR.v0 - cR.m * cR.p - cL.v0 + cL.m * cL.p) / dm;
             if (k > cL.p && k < cR.p) return [x < k ? lineAt(cL, x) : lineAt(cR, x), 3, g, cL, cR, x < k ? 1 : 0]; }
-        const mid = (cL.p + cR.p) / 2; return [x <= mid ? lineAt(cL, x) : lineAt(cR, x), 4, g, cL, cR, x <= mid ? 1 : 0]; };
+        // Two different surfaces whose lines do not meet inside the gap: the boundary between them lies somewhere in
+        // it, unknowable from one view. With one plate the texel went to the nearer rim's side (the midpoint hedge);
+        // with two, it carries both — the farther as the first layer (its depth gives the wider reach, so the band is
+        // the superset), the nearer as the second, which occludes the first wherever it really is there. The depth
+        // test sorts them; no depth is invented between the two. (The troll's head: a one-texel notch tears the head
+        // in two; the right half's texels saw the left half through the slit on one side and the cave on the other,
+        // and the midpoint hedge put the head's own depth on them, which stopped the reach.)
+        const vL = lineAt(cL, x), vR = lineAt(cR, x), lFar = vL <= vR; return [lFar ? vL : vR, 4, g, cL, cR, lFar ? 1 : 0]; };
     // the rims each texel continues from (for the band's colour): rim texel and window length per side of the winning axis, and the -1 side's weight
     const farRimJ = new Int32Array(2 * N).fill(-1), farRimW = new Int32Array(2 * N), farMix = new Float32Array(N);
     // S4: the second layer per texel — its disparity, the rim run it comes from (texel, window, side along the axis)
@@ -710,8 +725,10 @@ function bgFarSidePlane(dQ, pw, ph) {
         if (disp[i] - v <= tol[i]) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
         if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
         // S4: the second layer comes from the side that gave the value (same plane: the nearer rim's side)
+        // (kind 4: the two sides are two surfaces — the nearer one is the second layer, not the side's next arrival)
         { const sideL = pick[3] && (!pick[4] || (pick[1] === 2 ? pick[3].g <= pick[4].g : pick[5] >= 0.5)); const cs = sideL ? pick[3] : pick[4];
-            if (cs && cs.next) { const nx = cs.next; const pos = axv === 1 ? x : y; let v2 = isSky[nx.j] ? 0 : (nx.v0 + nx.m * (pos - nx.p)); if (v2 < dispFloor) v2 = dispFloor; if (v2 > disp[i]) v2 = disp[i];
+            const nx = pick[1] === 4 ? (sideL ? pick[4] : pick[3]) : (cs && cs.next);
+            if (nx) { const pos = axv === 1 ? x : y; let v2 = isSky[nx.j] ? 0 : (nx.v0 + nx.m * (pos - nx.p)); if (v2 < dispFloor) v2 = dispFloor; if (v2 > disp[i]) v2 = disp[i];
                 if (Math.abs(v2 - pick[0]) > tol[i]) { farDisp2[i] = v2; farRimJ2[i] = nx.j; farRimW2[i] = nx.w; farSide2[i] = sideL ? -1 : 1; nLayer2++; } } }
         farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
