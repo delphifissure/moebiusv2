@@ -8234,10 +8234,11 @@ window._plugCpuSweep = function (opts) {
     // S2b: under the rim law a joined quad is one surface however far it stretches (magnification is
     // not a hole); the stretch cut is off for the sweep, as it is for the rendered foreground below
     const cutLen = ((opts.noCut || bgRimLawOn()) ? Infinity : ((typeof bgBandCutStretchFrac === 'number' && bgBandCutStretchFrac > 0) ? 1 / bgBandCutStretchFrac : Infinity));
-    // S3: every far-field texel that lands on a cell the foreground leaves uncovered is demanded, not only the one
-    // that wins the cell. Where the far field varies texel to texel (an estimator's map: 0, 13, 18 /255 along one
-    // row of the troll's head) neighbouring copies overtake one another by a few texels; the losers were never
-    // demanded, kept their own depth, and tore the plate into patches (the band through the face was a comb).
+    // S3/S5: every far-field texel that lands on a cell the foreground leaves uncovered is a CARRIER (landed[]),
+    // whether or not it wins the cell. Where the far field varies texel to texel (an estimator's map: 0, 13, 18 /255
+    // along one row of the troll's head) neighbouring copies overtake one another by a few texels; the losers, left
+    // at their own depth, tore the plate into patches (the band through the face was a comb). They get their far
+    // depth on the plate (continuity) but are not demanded of the texture stage (the winner set is the band).
     const landed = (revealTex && rimFF) ? new Uint8Array(N) : null;
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
         if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || rimL.joined(rimFF[id], rimFF[own[c]]))) landed[id] = 1;   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
@@ -8398,7 +8399,8 @@ window._plugCpuSweep = function (opts) {
                 if (o < 0) { revealOut++; continue; }
                 if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
                 revealTex[o] = 1; revealIn++; }
-            if (landed) for (let i = 0; i < N; i++) if (landed[i] && !revealTex[i] && dQ[i] - rimFF[i] >= qR) { revealTex[i] = 1; revealIn++; }
+            // S5: the landers that lost their cell are CARRIERS (returned as landedTex), not demand: the plate needs
+            // their vertex at far depth for continuity, the texture stage does not need their colour synthesised.
         }
         for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
             if (wantHoles) {
@@ -8423,7 +8425,7 @@ window._plugCpuSweep = function (opts) {
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
     const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, lipA: obsLipA, lipB: obsLipB, lipA0: obsLipA0, meta: obsMeta, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip, continuous: obsCont, interior: obsInterior, extent: obsExtent, skirt: obsSkirt } : null;
     if (rimL) console.log('[S2b] sweep under the rim law: ' + nRimCut + ' quad draws skipped across unjoined edges over ' + poses.length + ' poses (t ' + rimL.t.toFixed(4) + ')');
-    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, landedTex: landed, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -8446,7 +8448,7 @@ window._plugGeoBand = function (opts) {
     // the band is their union (+ pinholes), and the band's depth IS that field. One step.
     opts = opts || {};
     const t0 = Date.now();
-    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._carrierReplace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
     window._geoLipDeep = null; window._geoLipNear = null; window._geoLipSpread = null; window._geoKind = null; window._geoProv = null; window._geoClass = null; window._geoPost = null; window._geoRampDrop = null;   // A252
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
@@ -8844,6 +8846,7 @@ window._plugGeoBand = function (opts) {
                 obsStats.regateReveal = [nA, nB2, nBoth];
                 console.log('[A246] re-gated reveal set: ' + nA + ' texels under the far-field gate -> ' + nB2 + ' under the observed gate (' + nBoth + ' shared)');
                 for (let i = 0; i < N; i++) { if (s1b.revealTex[i]) rev1[i] = 1; if (s1b.seen[i]) s1.seen[i] = 1; }   // union: cover both tears
+                if (s1b.landedTex) { if (!s1.landedTex) s1.landedTex = s1b.landedTex; else for (let i = 0; i < N; i++) if (s1b.landedTex[i]) s1.landedTex[i] = 1; }   // S5: carriers of both tears
                 s1.torn = s1b.torn; }
         }
     } else { window._geoObsDepth = null; window._geoObsCount = null; }
@@ -8855,6 +8858,15 @@ window._plugGeoBand = function (opts) {
         if (!b) { const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && s1.revealTex[j]) { b = true; break; } }
         if (b) { band[i] = 1; nB++; } if (b && dis1[i]) nKeep++; else if (b) nAdd++; else if (dis1[i]) nDrop++; }
     window._bandReplace = band;
+    // S5 CARRIERS: the band is what the texture stage synthesises (winners, pinholes, one texel of rounding); the
+    // carriers are every texel whose plate vertex must sit at its far depth so the plate is one continuous sheet —
+    // the band plus the landers that lost their cell to a neighbour's copy of the same sheet. Two needs, two masks:
+    // tying them together made the band 54 % of the photograph (S5_photograph_note §5).
+    { const carrier = new Uint8Array(band); let nCar = 0, nExtra = 0; const lt = s1.landedTex;
+        if (lt) for (let i = 0; i < N; i++) if (lt[i] && !carrier[i] && farField[i] < dQ[i]) { carrier[i] = 1; nExtra++; }
+        for (let i = 0; i < N; i++) nCar += carrier[i];
+        window._carrierReplace = carrier;
+        console.log('[S5] carriers: ' + nCar + ' texels (' + (100 * nCar / N).toFixed(1) + '% of the plate) = band ' + nB + ' + ' + nExtra + ' landers that lost their cell; the band alone is what the texture stage synthesises'); }
     // A252 per-texel CLASS: 1 interior-continuous (observed, two-lip majority), 2 step (observed, far lip
     // taken), 3 single lip (observed, no near lip in frame), 4 fallback (revealed, never observed: the
     // far-field inversion), 5 pinhole, 6 the +1 dilation. 0 = not band.
@@ -14149,7 +14161,7 @@ function bgBuildBackgroundLayerCore() {
                 // rim gate reads plateQ; for added texels plateQ was still the SOURCE depth, so the gate
                 // admitted the near side and refused the far rims — the dark fill behind the star-watcher
                 // figure, seam 62 where the other scenes reached 9–16)
-                if (window._geoFarField && window._geoFarField.length === PNq) { const ff = window._geoFarField; for (let i = 0; i < PNq; i++) if (disocc[i]) plateQ[i] = ff[i]; }
+                if (window._geoFarField && window._geoFarField.length === PNq) { const ff = window._geoFarField; const carQ1 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc; for (let i = 0; i < PNq; i++) if (carQ1[i]) plateQ[i] = ff[i]; }   // S5: carriers, not only the band
                 // A253c: the colour gate keys on plateQ, the depth the plate will finally carry is floored to the deeper
                 // lip (A253 B2, after a126). With the object rule the same floor is applied HERE, so the colour seeds of an
                 // interior fill are the object's far part (the tentacle behind, the thigh) and not the backdrop — colour and
@@ -14161,7 +14173,7 @@ function bgBuildBackgroundLayerCore() {
                 }
                 console.log('[QUICK-BAKE] A244 geometric band: +' + nAdd + ' revealed texels joined, -' + nDrop + ' never-revealed front texels left the band (restored to source depth); band now ' + nD);
             }
-            if (window._plugSweepCapture) window._qbDisocc = disocc.slice();
+            if (window._plugSweepCapture) { window._qbDisocc = disocc.slice(); window._qbCarrier = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace.slice() : null; }
             const plateF = new Float32Array(PNq), maskF = new Float32Array(PNq);
             for (let y = 0; y < ph; y++) { const s = y*pw, d2 = (ph-1-y)*pw;
                 for (let x = 0; x < pw; x++) { plateF[d2+x] = plateQ[s+x]; maskF[d2+x] = disocc[s+x]; } }
@@ -14285,9 +14297,9 @@ function bgBuildBackgroundLayerCore() {
             // Same solver, same gate, as the colour.
             if (window._bandReplace && window._geoFarField && window._geoFarField.length === PNq && window._geoDepth !== false) {
                 // A244f: the band's depth IS the a-priori far field (the far-rim membrane over the whole plate)
-                const ff = window._geoFarField; let nFF = 0;
-                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (disocc[i]) { plateF[(ph-1-y)*pw+x] = ff[i]; nFF++; } }
-                console.log('[QUICK-BAKE] A244f band depth = the far field on ' + nFF + ' band texels');
+                const ff = window._geoFarField; let nFF = 0; const carQ2 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: carriers
+                for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x; if (carQ2[i]) { plateF[(ph-1-y)*pw+x] = ff[i]; nFF++; } }
+                console.log('[QUICK-BAKE] A244f band depth = the far field on ' + nFF + ' carrier texels' + (carQ2 === disocc ? ' (no carrier mask: the band)' : ''));
             } else if (window._bandReplace && window._geoRef && window._geoRef.band && window._geoRef.band.length === PNq && window._geoDepth !== false) {
                 const tGD = Date.now(); const ref = window._geoRef; const TOLD2 = fgTearStep;
                 // reference far depth: BFS from the pass-1 band with its plate depth (source rows)
@@ -14876,9 +14888,9 @@ function bgBuildBackgroundLayerCore() {
                     const acc = [0, 0, 0];
                     const winMean = (j, w, ax, side) => { const st = ax === 1 ? 1 : pw; const jx = j % pw, jy = (j - jx) / pw; const lim = ax === 1 ? (side > 0 ? pw - jx : jx + 1) : (side > 0 ? ph - jy : jy + 1);
                         const n = Math.max(1, Math.min(w, lim)); let r = 0, g = 0, b = 0; for (let k = 0; k < n; k++) { const t = j + side * k * st; r += cd[t * 4]; g += cd[t * 4 + 1]; b += cd[t * 4 + 2]; } acc[0] = r / n; acc[1] = g / n; acc[2] = b / n; return n; };
-                    const col = new Float32Array(PNq * 3), hasC = new Uint8Array(PNq); let nCol = 0;
+                    const col = new Float32Array(PNq * 3), hasC = new Uint8Array(PNq); let nCol = 0; const carQ3 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: the colour domain is the carriers
                     const qPC = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
-                    for (let i = 0; i < PNq; i++) { if (!disocc[i]) continue; const jA = FR.j[2 * i], jB = FR.j[2 * i + 1], ax = FR.axis[i]; if (!ax || (jA < 0 && jB < 0)) continue;
+                    for (let i = 0; i < PNq; i++) { if (!carQ3[i]) continue; const jA = FR.j[2 * i], jB = FR.j[2 * i + 1], ax = FR.axis[i]; if (!ax || (jA < 0 && jB < 0)) continue;
                         if (!(plateQ[i] < dQ[i] - qPC)) continue;   // a band texel whose plate depth is its own (the band's margin, pinholes) keeps its own colour: it is its own far side
                         let mA = jA >= 0 ? (jB >= 0 ? FR.mix[i] : 1) : 0, r = 0, g = 0, b = 0;
                         if (jA >= 0 && mA > 0) { winMean(jA, FR.w[2 * i], ax, -1); r += mA * acc[0]; g += mA * acc[1]; b += mA * acc[2]; }
@@ -14888,14 +14900,14 @@ function bgBuildBackgroundLayerCore() {
                     // (Measured with "touching a non-band texel": the box's outline texels were interior, because the band's margin
                     // — texels whose plate depth is their own — surrounds the silhouette; the 150 ring texels left were the floor
                     // rows and the whole box went floor-grey where the truth is the brick wall.)
-                    const ring = new Uint8Array(PNq); let nRing = 0; const inD = (j) => disocc[j] && hasC[j];
+                    const ring = new Uint8Array(PNq); let nRing = 0; const inD = (j) => carQ3[j] && hasC[j];
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!inD(i)) continue;
                         if (x === 0 || y === 0 || x === pw - 1 || y === ph - 1 || !inD(i - 1) || !inD(i + 1) || !inD(i - pw) || !inD(i + pw)) { ring[i] = 1; nRing++; } }
-                    const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (disocc[i] && hasC[i] && !ring[i]) uIdx[i] = nU++;
+                    const uIdx = new Int32Array(PNq).fill(-1); let nU = 0; for (let i = 0; i < PNq; i++) if (carQ3[i] && hasC[i] && !ring[i]) uIdx[i] = nU++;
                     const lv = { n: nU, x: new Int32Array(nU), y: new Int32Array(nU), nb: new Int32Array(nU * 4).fill(-1), dR: new Float32Array(nU), dG: new Float32Array(nU), dB: new Float32Array(nU), dW: new Float32Array(nU), vR: new Float32Array(nU), vG: new Float32Array(nU), vB: new Float32Array(nU), L: 0 };
                     for (let i = 0; i < PNq; i++) { const u = uIdx[i]; if (u < 0) continue; const x = i % pw, y = (i / pw) | 0; lv.x[u] = x; lv.y[u] = y; lv.vR[u] = col[i * 3]; lv.vG[u] = col[i * 3 + 1]; lv.vB[u] = col[i * 3 + 2];
                         const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
-                        for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0 || !disocc[j] || !hasC[j]) continue; if (ring[j]) { lv.dR[u] += col[j * 3]; lv.dG[u] += col[j * 3 + 1]; lv.dB[u] += col[j * 3 + 2]; lv.dW[u]++; } else lv.nb[u * 4 + s] = uIdx[j]; } }
+                        for (let s = 0; s < 4; s++) { const j = cN[s]; if (j < 0 || !carQ3[j] || !hasC[j]) continue; if (ring[j]) { lv.dR[u] += col[j * 3]; lv.dG[u] += col[j * 3 + 1]; lv.dB[u] += col[j * 3 + 2]; lv.dW[u]++; } else lv.nb[u * 4 + s] = uIdx[j]; } }
                     // an interior component that touches no ring value (a band region whose outline texels are their own far side)
                     // has a constant null space and the aggregation multigrid diverges on it (S15: error 1.4e5/255); such a
                     // component keeps its per-texel rim colours. If the solve still does not converge, every interior texel does.
@@ -14907,9 +14919,13 @@ function bgBuildBackgroundLayerCore() {
                     let mgC = { sweeps: [[nU, 0, 0]], residual: 0 }; if (nU > 0) mgC = bgMembraneSolve(lv, 0.5, 60);
                     const useMem = isFinite(mgC.residual) && mgC.residual < 2;
                     if (!useMem) console.warn('[S3] plane colour: the membrane did not converge (error ' + mgC.residual + '/255); interior texels keep their rim colours');
-                    for (let i = 0; i < PNq; i++) { if (!disocc[i] || !hasC[i]) continue; const u = useMem ? uIdx[i] : -1; const r = u >= 0 ? lv.vR[u] : col[i * 3], g = u >= 0 ? lv.vG[u] : col[i * 3 + 1], b = u >= 0 ? lv.vB[u] : col[i * 3 + 2];
+                    for (let i = 0; i < PNq; i++) { if (!carQ3[i] || !hasC[i]) continue; const u = useMem ? uIdx[i] : -1; const r = u >= 0 ? lv.vR[u] : col[i * 3], g = u >= 0 ? lv.vG[u] : col[i * 3 + 1], b = u >= 0 ? lv.vB[u] : col[i * 3 + 2];
                         cd[i * 4] = Math.max(0, Math.min(255, r)); cd[i * 4 + 1] = Math.max(0, Math.min(255, g)); cd[i * 4 + 2] = Math.max(0, Math.min(255, b)); }
                     cxC.putImageData(pxC, 0, 0);
+                    // S5 WASH, NEVER A CLONE: a plate texel whose depth is behind its own must not carry its own colour (a
+                    // foreground clone seen as background). Counted on every bake; must be 0.
+                    { let nClone = 0; for (let i = 0; i < PNq; i++) if (plateQ[i] < dQ[i] - qPC && !(carQ3[i] && hasC[i])) nClone++; window._qbCloneCount = nClone;
+                        console.log('[S5] wash check: ' + nClone + ' plate texels behind their own depth without a synthesised colour' + (nClone ? ' — CLONES' : '')); }
                     if (window._plugSweepCapture) window._qbPlateColor = cd.slice();
                     plateColorTex = new THREE.CanvasTexture(cvC);
                     plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
@@ -16162,8 +16178,8 @@ function bgBuildBackgroundLayerCore() {
                 try {
                     const t20 = Date.now(); const ff2 = window._geoFarField2, FR2 = window._geoFarRim2;
                     const q2x = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
-                    const has2 = new Uint8Array(PNq); let n2 = 0;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (disocc[i] && ff2[i] >= 0 && plateF[(ph - 1 - y) * pw + x] < dQ[i] - q2x) { has2[i] = 1; n2++; } }
+                    const has2 = new Uint8Array(PNq); let n2 = 0; const carQ4 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: carriers
+                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (carQ4[i] && ff2[i] >= 0 && plateF[(ph - 1 - y) * pw + x] < dQ[i] - q2x) { has2[i] = 1; n2++; } }
                     window._qbPlateF2 = null; window._qbPlateColor2 = null;
                     if (n2 > 0 && L.mesh.geometry.index) {
                         const plateF2 = new Float32Array(plateF);
@@ -19527,7 +19543,7 @@ function _wireDebugSheetControls() {
         const gapSel = document.getElementById('bgGapRuleSel');
         const bakeGapRule = (m) => {
             window._bgGapRule = m;   // debug-sheet stamp
-            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._geoFarField = null; window._geoGateField = null;
+            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._geoFarField = null; window._geoGateField = null;
                 if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = 1; window._plugExtent = (m === 'back') ? 'far' : m; window._geoLipSeed = 1; window._plugBack = (m === 'back') ? 1 : false;
             window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;

@@ -84,4 +84,7 @@ d.text((pad, 6), f'{res["scene"]}: the app\'s baked band (quick bake, 45 deg swe
 for k, (t, txt) in enumerate(tiles):
     x = pad + k * (Wt + pad); d.text((x, 28), txt, fill=(255, 230, 120)); sh.paste(t, (x, 44))
 sh.save(sys.argv[4]); print('wrote', sys.argv[4])
+# S5: carriers (plate vertices at far depth for continuity) vs the texture band; the wash check from the bake
+cp = os.path.join(probe, 'carrier.u8'); res['carrier_px'] = int((np.fromfile(cp, np.uint8) > 0).sum()) if os.path.exists(cp) else None
+res['clone_count'] = meta.get('cloneCount')
 json.dump(res, open(os.path.splitext(sys.argv[4])[0] + '.json', 'w'), indent=1)
