@@ -8234,7 +8234,13 @@ window._plugCpuSweep = function (opts) {
     // S2b: under the rim law a joined quad is one surface however far it stretches (magnification is
     // not a hole); the stretch cut is off for the sweep, as it is for the rendered foreground below
     const cutLen = ((opts.noCut || bgRimLawOn()) ? Infinity : ((typeof bgBandCutStretchFrac === 'number' && bgBandCutStretchFrac > 0) ? 1 / bgBandCutStretchFrac : Infinity));
+    // S3: every far-field texel that lands on a cell the foreground leaves uncovered is demanded, not only the one
+    // that wins the cell. Where the far field varies texel to texel (an estimator's map: 0, 13, 18 /255 along one
+    // row of the troll's head) neighbouring copies overtake one another by a few texels; the losers were never
+    // demanded, kept their own depth, and tore the plate into patches (the band through the face was a comb).
+    const landed = (revealTex && rimFF) ? new Uint8Array(N) : null;
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
+        if (landed && id >= 0 && own[c] !== -2) landed[id] = 1;
         if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } };
     const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
         const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / sc; const steps = Math.ceil(n);
@@ -8250,6 +8256,7 @@ window._plugCpuSweep = function (opts) {
         const mnx = Math.max(0, Math.floor(Math.min(x0, x1, x2, x3) / sc)), mxx = Math.min(GW - 1, Math.floor(Math.max(x0, x1, x2, x3) / sc));
         const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
+            if (landed && id >= 0 && own[c] !== -2) landed[id] = 1;
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
     for (const [ex, ey] of poses) {
@@ -8391,6 +8398,7 @@ window._plugCpuSweep = function (opts) {
                 if (o < 0) { revealOut++; continue; }
                 if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
                 revealTex[o] = 1; revealIn++; }
+            if (landed) for (let i = 0; i < N; i++) if (landed[i] && !revealTex[i] && dQ[i] - rimFF[i] >= qR) { revealTex[i] = 1; revealIn++; }
         }
         for (let c = 0; c < G; c++) { if (own[c] >= 0) seen[own[c]] = 1; else if (own[c] === -1) { holeCells++;
             if (wantHoles) {
