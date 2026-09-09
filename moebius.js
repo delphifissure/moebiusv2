@@ -8522,10 +8522,15 @@ window._plugGeoBand = function (opts) {
         // S3: the far side of every texel from the plane law (rows and columns), before any walk; the reach
         // then asks, per texel, whether ITS far side slides past the edge — not the edge's far depth
         planeFS = bgFarRuleOn() ? bgFarSidePlane(dQ, pw, ph) : null;
-        const walkP = planeFS ? ((iNear, step, dEdge, limit, vert) => { const sE = bgShiftPxAt(lutR, dEdge); let i = iNear, k = 0, prev = -1;
-            while (k < limit) { if (prev >= 0 && !rl.joinedIdx(prev, i, dQ, pw)) break;
+        // The walk does not stop at a rim inside the occluder: the reveal is geometric — every rest texel within the
+        // edge's slide against ITS far side is uncovered, whatever tears lie between it and the edge (the troll's head is
+        // torn in two by a one-texel notch; the cave's reveal at half the envelope is 154 texels wide, the right half of
+        // the head 28). It stops where a texel has no far side of its own (nothing behind it to carry) or where its far
+        // side is not behind the edge by more than the distance walked — the span test, which bounds every walk.
+        const walkP = planeFS ? ((iNear, step, dEdge, limit, vert) => { const sE = bgShiftPxAt(lutR, dEdge); let i = iNear, k = 0;
+            while (k < limit) { if (!(planeFS.farField[i] < dQ[i])) break;
                 const span = (sE - bgShiftPxAt(lutR, planeFS.farField[i])) * (vert ? aspR : 1);   // > 0 iff this texel's far side is behind the occluding edge
-                if (!(k < span)) break; if (!free[i]) { free[i] = 1; nReach++; } prev = i; i += step; k++; } }) : null;
+                if (!(k < span)) break; if (!free[i]) { free[i] = 1; nReach++; } i += step; k++; } }) : null;
         // S2c: the far side's CLASS. Every walk remembers how far it came from a sky rim and from a non-sky
         // rim; a free texel nearer to a sky rim than to any other far rim has sky behind it (R3 D2's
         // "above the horizon", with the nearest rim standing in for the horizon estimator until one exists).
