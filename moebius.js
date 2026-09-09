@@ -8655,22 +8655,13 @@ window._plugGeoBand = function (opts) {
                         for (const n of cN) if (n >= 0 && comp[n] < 0 && free[n]) { comp[n] = nC; st[t++] = n; } }
                     nC++; }
                 const mirror = new Int32Array(N).fill(-1); let nM = 0; const FJ = planeFS.farRimJ, FM = planeFS.farMix, FA = planeFS.farAxis;
-                // S6: reflect the texel across the LOCAL RIM LINE, not along its own row: the rim's tangent at the rim texel is
-                // taken from the rim texels of the two neighbouring lines (the same axis and side), so a slanted or curved rim
-                // mirrors coherently in 2-D and the fill stops being one reflected row after another (the horizontal streaks).
-                const rimOf = (i) => { const ax = FA[i]; if (!ax || !free[i]) return -1; const j = FM[i] >= 0.5 ? FJ[2 * i] : FJ[2 * i + 1]; return (j >= 0 && comp[j] === comp[i]) ? j : -1; };
-                for (let i = 0; i < N; i++) { const ax = FA[i]; if (!ax || !free[i]) continue; const j = rimOf(i); if (j < 0) continue;
-                    const xi = i % pw, yi = (i - xi) / pw, xj = j % pw, yj = (j - xj) / pw;
-                    const perp = ax === 1 ? pw : 1;   // the neighbouring lines of a row rim are the rows above and below
-                    const iA = i - perp, iB = i + perp; const jA = iA >= 0 ? rimOf(iA) : -1, jB = iB < N ? rimOf(iB) : -1;
-                    let tx, ty; if (jA >= 0 && jB >= 0) { tx = (jB % pw) - (jA % pw); ty = ((jB - jB % pw) / pw) - ((jA - jA % pw) / pw); }
-                    else if (jA >= 0) { tx = xj - (jA % pw); ty = yj - ((jA - jA % pw) / pw); } else if (jB >= 0) { tx = (jB % pw) - xj; ty = ((jB - jB % pw) / pw) - yj; }
-                    else { tx = ax === 1 ? 0 : 1; ty = ax === 1 ? 1 : 0; }   // no neighbour rim: the rim runs across the axis
-                    const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl; const nx = -ty, ny = tx;
-                    // the rim line passes through the boundary between the texel's own run and the far run: half a texel before j
-                    const bx = xj - (ax === 1 ? Math.sign(xj - xi) * 0.5 : 0), by = yj - (ax === 2 ? Math.sign(yj - yi) * 0.5 : 0);
-                    const dn = (bx - xi) * nx + (by - yi) * ny; const mx = Math.round(xi + 2 * dn * nx), my = Math.round(yi + 2 * dn * ny);
-                    if (mx < 0 || my < 0 || mx >= pw || my >= ph) continue; const m = my * pw + mx; if (m === i || comp[m] !== comp[i]) continue; mirror[i] = m; nM++; }
+                // The mirror sample is the texel the same distance INTO THE FAR RUN, along the texel's own line (mirror padding
+                // of the visible far surface). S6 tried a 2-D reflection across the local rim line (tangent from the neighbouring
+                // lines' rim texels) to remove the row streaks: on the kit it scored the same (S15 mean 33.2 vs 32.4) and on the
+                // photograph's plate it was a patchwork of box streaks where this one is a coherent continuation; removed.
+                for (let i = 0; i < N; i++) { const ax = FA[i]; if (!ax || !free[i]) continue; const j = FM[i] >= 0.5 ? FJ[2 * i] : FJ[2 * i + 1]; if (j < 0 || comp[j] !== comp[i]) continue;
+                    const stp = ax === 1 ? 1 : pw; const g = Math.round((j - i) / stp); if (g === 0) continue; const side = g > 0 ? 1 : -1; const m = j + side * (Math.abs(g) - 1) * stp;
+                    if (m < 0 || m >= N) continue; if (ax === 1 && ((m / pw) | 0) !== ((i / pw) | 0)) continue; if (comp[m] !== comp[i]) continue; mirror[i] = m; nM++; }
                 window._geoSelfMirror = mirror; console.log('[S5] self-occlusion: ' + nC + ' objects (components with a far side); ' + nM + ' texels whose first layer is their own object, with a mirror sample'); }
             { let n2 = 0; for (let i = 0; i < N; i++) if (free[i] && planeFS.farField2[i] >= 0) n2++; console.log('[S4] second layer: ' + planeFS.nLayer2 + ' texels have one (' + n2 + ' of them free): what shows once the first-arriving surface has passed'); }
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
