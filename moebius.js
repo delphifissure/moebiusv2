@@ -8267,10 +8267,16 @@ window._plugCpuSweep = function (opts) {
     // band. Each quad (texel, right, down, diagonal) now fills the cells of its warped
     // bounding box — conservative for coverage, which is what holes and reveals need; quads
     // are one texel, so the box and the quad differ by at most the stretch's skew.
-    const quad = (x0, y0, x1, y1, x2, y2, x3, y3, d, id) => {
+    // S5: with d4 = [d(i), d(i+1), d(i+pw), d(i+pw+1)] a cell takes the depth interpolated across the quad's box (exact for a
+    // planar quad) instead of the farthest corner: a stretched quad whose line runs from a near rim to a far one then beats a
+    // far copy where both land (S26: the beam's quads against the ceiling's copies at wall depth tied at the wall's depth and
+    // the first lander won, 29 000 ceiling texels). The farthest corner stays for callers that pass no d4 (the foreground).
+    const quad = (x0, y0, x1, y1, x2, y2, x3, y3, d, id, d4) => {
         const mnx = Math.max(0, Math.floor(Math.min(x0, x1, x2, x3) / sc)), mxx = Math.min(GW - 1, Math.floor(Math.max(x0, x1, x2, x3) / sc));
         const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
+        const dxq = Math.max(1, mxx - mnx), dyq = Math.max(1, mxy - mny);
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
+            if (d4) { const u = (cx - mnx) / dxq, v = (cy - mny) / dyq; d = (1 - v) * ((1 - u) * d4[0] + u * d4[1]) + v * ((1 - u) * d4[2] + u * d4[3]); }
             if (landed && id >= 0 && own[c] !== -2 && (own[c] < 0 || sameSheet(id, own[c]))) { if (id >= N) landed2[id - N] = 1; else landed[id] = 1; }   // a loser behind a copy of a NEARER sheet is hidden for real; behind its own sheet it is the sheet's continuity
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
@@ -8399,7 +8405,7 @@ window._plugCpuSweep = function (opts) {
                 const xs = x + sPL[i] * fx, ys = y + sPL[i] * fy, d = pFs[i];
                 if (x + 1 < pw && y + 1 < ph && !(plateIdx && (!plateIdx[f + 1] || !plateIdx[f - pw] || !plateIdx[f - pw + 1]))) {
                     quad(xs, ys, x + 1 + sPL[i + 1] * fx, y + sPL[i + 1] * fy, x + sPL[i + pw] * fx, y + 1 + sPL[i + pw] * fy, x + 1 + sPL[i + pw + 1] * fx, y + 1 + sPL[i + pw + 1] * fy,
-                         Math.min(d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]), i); continue;
+                         Math.min(d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]), i, [d, pFs[i + 1], pFs[i + pw], pFs[i + pw + 1]]); continue;
                 }
                 splat(xs, ys, d, i);
             } }
@@ -8410,7 +8416,7 @@ window._plugCpuSweep = function (opts) {
                 const xs = x + sPL2[i] * fx, ys = y + sPL2[i] * fy;
                 if (x + 1 < pw && y + 1 < ph && rimFF2[i + 1] >= 0 && rimFF2[i + pw] >= 0 && rimFF2[i + pw + 1] >= 0) {
                     quad(xs, ys, x + 1 + sPL2[i + 1] * fx, y + sPL2[i + 1] * fy, x + sPL2[i + pw] * fx, y + 1 + sPL2[i + pw] * fy, x + 1 + sPL2[i + pw + 1] * fx, y + 1 + sPL2[i + pw + 1] * fy,
-                         Math.min(d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]), N + i); continue;
+                         Math.min(d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]), N + i, [d, rimFF2[i + 1], rimFF2[i + pw], rimFF2[i + pw + 1]]); continue;
                 }
                 splat(xs, ys, d, N + i);
             } }
@@ -15801,7 +15807,11 @@ function bgBuildBackgroundLayerCore() {
                                   : bgConeSlopePerPx(pw);
                         const _stD = _st * 1.41421356;
                         let _moved = 0, _maxMove = 0;
-                        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+                        // S5: under the rim law the plate is torn at its rims, so the chamfer is redundant — and it lowered
+                        // non-carrier texels beside a carrier past their own join (S15: 223 texels at source colour torn
+                        // from their own depth, the wash check's clones). Skipped there, as a162 is.
+                        const _rimA126 = bgRimLawOn();
+                        if (!_rimA126) for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
                             const i = y*pw + x; const v0 = plateF[i]; let v = v0;
                             if (x > 0)            { const c = plateF[i-1]    + _st;  if (c < v) v = c; }
                             if (y > 0)            { const c = plateF[i-pw]   + _st;  if (c < v) v = c;
@@ -15809,7 +15819,7 @@ function bgBuildBackgroundLayerCore() {
                               if (x < pw-1)       { const d = plateF[i-pw+1] + _stD; if (d < v) v = d; } }
                             if (v !== v0) { plateF[i] = v; _moved++; const m = v0 - v; if (m > _maxMove) _maxMove = m; }
                         }
-                        for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
+                        if (!_rimA126) for (let y = ph-1; y >= 0; y--) for (let x = pw-1; x >= 0; x--) {
                             const i = y*pw + x; const v0 = plateF[i]; let v = v0;
                             if (x < pw-1)         { const c = plateF[i+1]    + _st;  if (c < v) v = c; }
                             if (y < ph-1)         { const c = plateF[i+pw]   + _st;  if (c < v) v = c;
@@ -15818,7 +15828,7 @@ function bgBuildBackgroundLayerCore() {
                             if (v !== v0) { plateF[i] = v; _moved++; const m = v0 - v; if (m > _maxMove) _maxMove = m; }
                         }
                         plateDT.needsUpdate = true;
-                        console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + _moved + ' texels lowered of ' + PNq +
+                        console.log('[QUICK-BAKE] a126 plate slope-limited (NOT torn): ' + (_rimA126 ? 'SKIPPED under the rim law (the plate is torn at its rims); ' : '') + _moved + ' texels lowered of ' + PNq +
                                     ' (' + (100*_moved/Math.max(1,PNq)).toFixed(2) + '%), max ' + _maxMove.toFixed(4) +
                                     ' depth, step = ' + _st.toFixed(5) + '/texel (k=' + _kPl.toFixed(0) + '), ' + (Date.now()-_t0P) + 'ms');
                     }
@@ -16224,14 +16234,14 @@ function bgBuildBackgroundLayerCore() {
                         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (has2[i]) plateF2[(ph - 1 - y) * pw + x] = ff2[i]; }
                         const plateDT2 = new THREE.DataTexture(plateF2, pw, ph, THREE.RedFormat, THREE.FloatType); plateDT2.needsUpdate = true; plateDT2.flipY = false; plateDT2.minFilter = THREE.NearestFilter; plateDT2.magFilter = THREE.NearestFilter; plateDT2.generateMipmaps = false;
                         const g2 = L.mesh.geometry.clone(); const src2 = L.mesh.geometry.index.array; const gp2 = L.mesh.geometry.parameters || {}; const vw2 = (gp2.widthSegments || 0) + 1, vh2 = (gp2.heightSegments || 0) + 1;
-                        const pS2 = new Float32Array(PNq); for (let i = 0; i < PNq; i++) pS2[i] = has2[i] ? ff2[i] : dQ[i];
+                        const pS2 = new Float32Array(PNq); for (let i = 0; i < PNq; i++) pS2[i] = has2[i] ? ff2[i] : plateF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)];   // S5: where no second layer exists the vertex sits on plate 1, so plate 2 bridges plate 1's layer seams
                         const rl2 = bgRimLawFor(pw, ph); const sx2 = (pw - 1) / (vw2 - 1), sy2 = (ph - 1) / (vh2 - 1); const ti2 = (vi) => Math.round(((vi / vw2) | 0) * sy2) * pw + Math.round((vi % vw2) * sx2);
                         const out2 = new src2.constructor(src2.length); let nK2 = 0; const skyOn2 = bgSkyInfOn(), sq2 = bgSkyQ();
-                        for (let t = 0; t < src2.length; t += 3) { const a = ti2(src2[t]), b = ti2(src2[t + 1]), c = ti2(src2[t + 2]); if (!(has2[a] && has2[b] && has2[c])) continue;
+                        for (let t = 0; t < src2.length; t += 3) { const a = ti2(src2[t]), b = ti2(src2[t + 1]), c = ti2(src2[t + 2]); if (!(has2[a] || has2[b] || has2[c])) continue;   // S5: any corner with a second layer (the others ride on plate 1)
                             if (skyOn2 && pS2[a] < sq2 && pS2[b] < sq2 && pS2[c] < sq2) continue;   // sky is the sky layer's
                             if (rl2.joinedIdx(a, b, pS2, pw) && rl2.joinedIdx(b, c, pS2, pw) && rl2.joinedIdx(a, c, pS2, pw)) { out2[nK2++] = src2[t]; out2[nK2++] = src2[t + 1]; out2[nK2++] = src2[t + 2]; } }
                         g2.setIndex(new THREE.BufferAttribute(out2.slice(0, nK2), 1));
-                        const cImg2 = (L.elements && L.elements.color) || L.textures.color.image; const cv2 = document.createElement('canvas'); cv2.width = pw; cv2.height = ph; const cx2 = cv2.getContext('2d', { willReadFrequently: true }); cx2.drawImage(cImg2, 0, 0, pw, ph); const px2 = cx2.getImageData(0, 0, pw, ph); const c2 = px2.data; const s2c = c2.slice();
+                        const cImg2 = (L.elements && L.elements.color) || L.textures.color.image; const cv2 = document.createElement('canvas'); cv2.width = pw; cv2.height = ph; const cx2 = cv2.getContext('2d', { willReadFrequently: true }); cx2.drawImage(cImg2, 0, 0, pw, ph); const px2s = cx2.getImageData(0, 0, pw, ph); const s2c = px2s.data.slice(); if (plateColorTex && plateColorTex.image) cx2.drawImage(plateColorTex.image, 0, 0, pw, ph); const px2 = cx2.getImageData(0, 0, pw, ph); const c2 = px2.data;   // S5: plate 2's canvas starts from plate 1's wash (never the source where plate 1 is behind it); the rim means still read the source (s2c)
                         for (let i = 0; i < PNq; i++) { if (!has2[i]) continue; const j = FR2.j[i], w = FR2.w[i], ax = FR2.axis[i], side = FR2.side[i]; if (j < 0 || !ax || !side) continue; const st = ax === 1 ? 1 : pw; const jx = j % pw, jy = (j - jx) / pw;
                             const lim = ax === 1 ? (side > 0 ? pw - jx : jx + 1) : (side > 0 ? ph - jy : jy + 1); const n = Math.max(1, Math.min(w, lim)); let r = 0, g = 0, b = 0;
                             for (let k = 0; k < n; k++) { const tt = j + side * k * st; r += s2c[tt * 4]; g += s2c[tt * 4 + 1]; b += s2c[tt * 4 + 2]; } c2[i * 4] = r / n; c2[i * 4 + 1] = g / n; c2[i * 4 + 2] = b / n; }
