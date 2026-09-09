@@ -8249,6 +8249,10 @@ window._plugCpuSweep = function (opts) {
     const holeTex = wantHoles ? new Uint8Array(N) : null; let holeIn = 0, holeOut = 0;
     const revealTex = wantReveal ? new Uint8Array(N) : null; let revealIn = 0, revealOut = 0;
     const revealTex2 = (wantReveal && rimFF2) ? new Uint8Array(N) : null; let revealIn2 = 0;   // S5: demand for the second layer
+    // S6: the smallest pose fraction (the shader's max(|fx|,|fy|), 0 = rest, 1 = the envelope's rim) at which each texel is
+    // demanded — the band tiered by first-uncover pose; 2 = never demanded
+    const bandPose = wantReveal ? new Float32Array(N).fill(2) : null; let pfCur = 0;
+    const markPose = (t) => { if (bandPose && pfCur < bandPose[t]) bandPose[t] = pfCur; };
     const outp = wantReveal ? new Uint8Array(G) : null, stk = wantReveal ? new Int32Array(G) : null;
     let farAt = null;
     if (wantHoles && opts.farField && opts.farField.length === N) { farAt = opts.farField; }   // A244f: the a-priori far field (source rows)
@@ -8302,6 +8306,7 @@ window._plugCpuSweep = function (opts) {
     const tornStatic = torn;
     for (const [ex, ey] of poses) {
         const fx = sign * ex / exRim, fy = sign * ey / exRim;
+        pfCur = Math.max(Math.abs(fx), Math.abs(fy));   // S6
         zb.fill(-1e9); own.fill(-1);
         // A246b: the pose fraction is the SHADER's (updateCameraAndProjection: max(|x|/exR, |y|/(exR*asp)) — the
         // vertical offset is measured against the cone's vertical half-extent), not the Euclidean norm the
@@ -8407,7 +8412,7 @@ window._plugCpuSweep = function (opts) {
                             const t = tyr * pw + txr;
                             if (dQ[t] - dFar < qN) { obsSelf++; continue; }   // the texel's own source depth is the lip's: at its source depth the plug already covers this cell
                             const meta = kind | (crossedPlate << 2) | (rampMoved << 3) | (interior << 4) | (skirt << 5) | (Math.min(8191, kA) << 6) | (Math.min(4095, kB) << 19);   // A252/A253 (bits 0-1 kind, 2 crossed, 3 ramp, 4 interior, 5 skirt, 6-18 kA, 19-30 kB)
-                            obsPush(t, dFar, dA, dB, dA0, meta); obsSamples++; revealTex[t] = 1; revealIn++;
+                            obsPush(t, dFar, dA, dB, dA0, meta); obsSamples++; revealTex[t] = 1; revealIn++; markPose(t);
                             continue;
                         }
                     }
@@ -8416,7 +8421,7 @@ window._plugCpuSweep = function (opts) {
                 for (let it = 0; it < 2; it++) { const txi = Math.max(0, Math.min(pw - 1, Math.round(tx))), tyi = Math.max(0, Math.min(ph - 1, Math.round(ty)));
                     const d = farAt[tyi * pw + txi]; if (d < 0) break; const sT = bgShiftPxAt(lut, d); tx = cx0 - sT * fx; ty = cy0 - sT * fy; }
                 const txr = Math.round(tx), tyr = Math.round(ty);
-                if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) revealOut++; else { revealTex[tyr * pw + txr] = 1; revealIn++; } }
+                if (txr < 0 || tyr < 0 || txr >= pw || tyr >= ph) revealOut++; else { revealTex[tyr * pw + txr] = 1; revealIn++; markPose(tyr * pw + txr); } }
         }
         // plate: continuous mesh (or the carved subset), behind the foreground on ties; a quad
         // takes its FARTHEST corner (a ramp quad must not claim a cell in front of the surface)
@@ -8448,9 +8453,9 @@ window._plugCpuSweep = function (opts) {
             const qR = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
             for (let c = 0; c < G; c++) { const o = own[c]; if (o === -2) continue;
                 if (o < 0) { revealOut++; continue; }
-                if (o >= N) { const t2 = o - N; if (dQ[t2] - rimFF2[t2] < qR) { obsSelf++; continue; } if (!revealTex2[t2]) { revealTex2[t2] = 1; revealIn2++; } continue; }   // S5: a layer-2 copy won the cell
+                if (o >= N) { const t2 = o - N; if (dQ[t2] - rimFF2[t2] < qR) { obsSelf++; continue; } if (!revealTex2[t2]) { revealTex2[t2] = 1; revealIn2++; } markPose(t2); continue; }   // S5: a layer-2 copy won the cell
                 if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
-                revealTex[o] = 1; revealIn++; }
+                revealTex[o] = 1; revealIn++; markPose(o); }
             // S5: the landers that lost their cell are CARRIERS (returned as landedTex), not demand: the plate needs
             // their vertex at far depth for continuity, the texture stage does not need their colour synthesised.
         }
@@ -8477,7 +8482,7 @@ window._plugCpuSweep = function (opts) {
     const stepPad = opts.poses ? 0 : Math.ceil(sMaxFG * 2 / Math.max(1, NX - 1));
     const obs = observe ? { head: obsHead, next: obsNext, val: obsVal, cnt: obsCnt, lipA: obsLipA, lipB: obsLipB, lipA0: obsLipA0, meta: obsMeta, samples: obsSamples, geo: obsGeo, self: obsSelf, ambiguous: obsAmbig, out: obsOut, ramp: obsRamp, twoLip: obsTwoLip, continuous: obsCont, interior: obsInterior, extent: obsExtent, skirt: obsSkirt } : null;
     if (rimL) console.log('[S2b] sweep under the rim law: ' + nRimCut + ' quad draws skipped across unjoined edges over ' + poses.length + ' poses (t ' + rimL.t.toFixed(4) + ')');
-    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, landedTex: landed, revealTex2, landedTex2: landed2, revealIn2, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
+    return { seen, torn: foldTex ? tornAny : tornStatic, perPoseTear: !!foldTex, pw, ph, N, nSeen, poses: poses.length, scale: sc, sign, exRim, holeCells, holeTex, holeIn, holeOut, revealTex, landedTex: landed, revealTex2, landedTex2: landed2, revealIn2, bandPose, revealIn, revealOut, stepPad, classMap, obs, rowDumps, rimCut: nRimCut, ms: Date.now() - t0 };
 };
 // A244 GEOMETRIC BAND (window._plugGeoBand(opts); Addendum 180 item 6). The demand band's
 // outline is taken from the reveal geometry, not from the fronts' row-wise budgets: pass 1
@@ -8631,9 +8636,22 @@ window._plugGeoBand = function (opts) {
                         for (const n of cN) if (n >= 0 && comp[n] < 0 && free[n]) { comp[n] = nC; st[t++] = n; } }
                     nC++; }
                 const mirror = new Int32Array(N).fill(-1); let nM = 0; const FJ = planeFS.farRimJ, FM = planeFS.farMix, FA = planeFS.farAxis;
-                for (let i = 0; i < N; i++) { const ax = FA[i]; if (!ax || !free[i]) continue; const j = FM[i] >= 0.5 ? FJ[2 * i] : FJ[2 * i + 1]; if (j < 0 || comp[j] !== comp[i]) continue;
-                    const stp = ax === 1 ? 1 : pw; const g = Math.round((j - i) / stp); if (g === 0) continue; const side = g > 0 ? 1 : -1; const m = j + side * (Math.abs(g) - 1) * stp;
-                    if (m < 0 || m >= N) continue; if (ax === 1 && ((m / pw) | 0) !== ((i / pw) | 0)) continue; if (comp[m] !== comp[i]) continue; mirror[i] = m; nM++; }
+                // S6: reflect the texel across the LOCAL RIM LINE, not along its own row: the rim's tangent at the rim texel is
+                // taken from the rim texels of the two neighbouring lines (the same axis and side), so a slanted or curved rim
+                // mirrors coherently in 2-D and the fill stops being one reflected row after another (the horizontal streaks).
+                const rimOf = (i) => { const ax = FA[i]; if (!ax || !free[i]) return -1; const j = FM[i] >= 0.5 ? FJ[2 * i] : FJ[2 * i + 1]; return (j >= 0 && comp[j] === comp[i]) ? j : -1; };
+                for (let i = 0; i < N; i++) { const ax = FA[i]; if (!ax || !free[i]) continue; const j = rimOf(i); if (j < 0) continue;
+                    const xi = i % pw, yi = (i - xi) / pw, xj = j % pw, yj = (j - xj) / pw;
+                    const perp = ax === 1 ? pw : 1;   // the neighbouring lines of a row rim are the rows above and below
+                    const iA = i - perp, iB = i + perp; const jA = iA >= 0 ? rimOf(iA) : -1, jB = iB < N ? rimOf(iB) : -1;
+                    let tx, ty; if (jA >= 0 && jB >= 0) { tx = (jB % pw) - (jA % pw); ty = ((jB - jB % pw) / pw) - ((jA - jA % pw) / pw); }
+                    else if (jA >= 0) { tx = xj - (jA % pw); ty = yj - ((jA - jA % pw) / pw); } else if (jB >= 0) { tx = (jB % pw) - xj; ty = ((jB - jB % pw) / pw) - yj; }
+                    else { tx = ax === 1 ? 0 : 1; ty = ax === 1 ? 1 : 0; }   // no neighbour rim: the rim runs across the axis
+                    const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl; const nx = -ty, ny = tx;
+                    // the rim line passes through the boundary between the texel's own run and the far run: half a texel before j
+                    const bx = xj - (ax === 1 ? Math.sign(xj - xi) * 0.5 : 0), by = yj - (ax === 2 ? Math.sign(yj - yi) * 0.5 : 0);
+                    const dn = (bx - xi) * nx + (by - yi) * ny; const mx = Math.round(xi + 2 * dn * nx), my = Math.round(yi + 2 * dn * ny);
+                    if (mx < 0 || my < 0 || mx >= pw || my >= ph) continue; const m = my * pw + mx; if (m === i || comp[m] !== comp[i]) continue; mirror[i] = m; nM++; }
                 window._geoSelfMirror = mirror; console.log('[S5] self-occlusion: ' + nC + ' objects (components with a far side); ' + nM + ' texels whose first layer is their own object, with a mirror sample'); }
             { let n2 = 0; for (let i = 0; i < N; i++) if (free[i] && planeFS.farField2[i] >= 0) n2++; console.log('[S4] second layer: ' + planeFS.nLayer2 + ' texels have one (' + n2 + ' of them free): what shows once the first-arriving surface has passed'); }
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
@@ -8915,6 +8933,7 @@ window._plugGeoBand = function (opts) {
                 for (let i = 0; i < N; i++) { if (s1b.revealTex[i]) rev1[i] = 1; if (s1b.seen[i]) s1.seen[i] = 1; }   // union: cover both tears
                 if (s1b.landedTex) { if (!s1.landedTex) s1.landedTex = s1b.landedTex; else for (let i = 0; i < N; i++) if (s1b.landedTex[i]) s1.landedTex[i] = 1; }   // S5: carriers of both tears
                 for (const k of ['revealTex2', 'landedTex2']) if (s1b[k]) { if (!s1[k]) s1[k] = s1b[k]; else for (let i = 0; i < N; i++) if (s1b[k][i]) s1[k][i] = 1; }
+                if (s1b.bandPose) { if (!s1.bandPose) s1.bandPose = s1b.bandPose; else for (let i = 0; i < N; i++) if (s1b.bandPose[i] < s1.bandPose[i]) s1.bandPose[i] = s1b.bandPose[i]; }   // S6
                 s1.torn = s1b.torn; }
         }
     } else { window._geoObsDepth = null; window._geoObsCount = null; }
@@ -8926,6 +8945,19 @@ window._plugGeoBand = function (opts) {
         if (!b) { const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && s1.revealTex[j]) { b = true; break; } }
         if (b) { band[i] = 1; nB++; } if (b && dis1[i]) nKeep++; else if (b) nAdd++; else if (dis1[i]) nDrop++; }
     window._bandReplace = band;
+    // S6 BAND TIER: per band texel the smallest pose fraction at which it was demanded (pinholes and the rounding texels
+    // take the smallest of their reveal neighbours, else 0). window._bandTierDeg (degrees of head angle, horizontal) selects
+    // the tier the texture stage paints: pose fraction <= tan(tierDeg)/tan(bgViewFadeEndDeg); the rest keeps the wash.
+    { const bp = new Float32Array(N).fill(2); const sp = s1.bandPose;
+        if (sp) for (let i = 0; i < N; i++) if (band[i]) { let v = sp[i]; if (v > 1) { const x = i % pw, y = (i - x) / pw; const cN = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1]; for (const j of cN) if (j >= 0 && sp[j] < v) v = sp[j]; if (v > 1) v = 0; } bp[i] = v; }
+        else for (let i = 0; i < N; i++) if (band[i]) bp[i] = 0;
+        window._qbBandPose = bp;
+        const tEnd = Math.tan(bgViewFadeEndDeg * Math.PI / 180); const degs = [15, 25, 35, 45]; const cnt = degs.map(() => 0);
+        for (let i = 0; i < N; i++) if (band[i]) for (let k = 0; k < degs.length; k++) if (bp[i] <= Math.tan(degs[k] * Math.PI / 180) / tEnd) cnt[k]++;
+        const tierDeg = (typeof window._bandTierDeg === 'number' && window._bandTierDeg > 0) ? window._bandTierDeg : 0;
+        let tier = null, nT = 0; if (tierDeg) { const fr = Math.tan(tierDeg * Math.PI / 180) / tEnd; tier = new Uint8Array(N); for (let i = 0; i < N; i++) if (band[i] && bp[i] <= fr) { tier[i] = 1; nT++; } }
+        window._qbBandTier = tier;
+        console.log('[S6] band by first-uncover angle: ' + degs.map((d, k) => d + '°: ' + cnt[k]).join(', ') + ' of ' + nB + (tier ? ('; texture tier at ' + tierDeg + '°: ' + nT + ' texels') : '; texture tier: paint all')); }
     // S5 CARRIERS: the band is what the texture stage synthesises (winners, pinholes, one texel of rounding); the
     // carriers are every texel whose plate vertex must sit at its far depth so the plate is one continuous sheet —
     // the band plus the landers that lost their cell to a neighbour's copy of the same sheet. Two needs, two masks:
@@ -9433,7 +9465,7 @@ function exportDebugContactSheet() {
         const reachStamp = document.getElementById('fgReachSlider')?.value || '120';
         const stamp = [
             MOEBIUS_DEBUG_VERSION + ' | ' + new Date().toISOString() + ' | render ' + srcW + 'x' + srcH,
-            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | ' + _dbgViewAngleStamp() + ' | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + (window._activeDebugView && window._activeDebugView !== dbgSel ? '(rendered:' + window._activeDebugView + ')' : '') + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk + ' | plug=' + ((typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? (bgLayerMesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | fg=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh) ? (mediaLayers[0].mesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | sdHl=' + (window._sdHighlightOn ? 'ON' : 'off') + ' | splat=' + (splatLayers.length ? splatLayers.length + 'L/' + splatLayers.reduce((a, s) => a + (s.cloud.frame() ? s.cloud.frame().n : 0), 0) + (splatLayers.some(s => s.cloud.dynamic) ? 'dyn' : '') : 'none') + ' | path=' + (window._framePath || '?') + ' | accum=' + (isAccumulatingGaps ? 'ON' : 'off') + ' | inpaint=' + (useInpainting ? 'on' : 'OFF') +
+            'cam(' + cam.x.toFixed(3) + ', ' + cam.y.toFixed(3) + ', ' + cam.z.toFixed(3) + ') | ' + _dbgViewAngleStamp() + ' | mode=' + (window._bgBakeMode || ((typeof bgQuickBake !== 'undefined' && bgQuickBake) ? 'quick' : ((typeof bgMPIFullPlanes !== 'undefined' && bgMPIFullPlanes) ? 'v2' : 'v1'))) + (window._bgQuickBaked ? '(baked:quick)' : '') + ' | view=' + dbgSel + (window._activeDebugView && window._activeDebugView !== dbgSel ? '(rendered:' + window._activeDebugView + ')' : '') + ' | bgBias=' + bias + ' | fgThresh=' + thr + ' | fgReach=' + reachStamp + ' | seed=' + (document.getElementById('bgSeedModeSel')?.value || '0') + (window._bgPlateOptions ? ' | plate=' + Object.values(window._bgPlateOptions).join('/') : '') + ' | bgBuilt=' + (bgBuildStamp || 'NO') + ' | depthPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand) ? 'band' : 'flood') + ' | srcPath=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._srcSharpApplied) ? 'sharp' : 'raw') + ' | det=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._detApplied) ? 'slope' : 'mode2') + ' | cut=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh?.material?.uniforms?.u_cutSharp?.value) ? '0.008' : 'legacy') + ' | live=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0]._liveBaked) ? 'bake' : 'records') + ' | relax=' + (document.getElementById('bgRelaxModeSel')?.value || 'min') + ' | fgSubRan=' + fgOk + ' | plug=' + ((typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? (bgLayerMesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | fg=' + ((typeof mediaLayers !== 'undefined' && mediaLayers[0]?.mesh) ? (mediaLayers[0].mesh.visible ? 'VISIBLE' : 'HIDDEN') : 'none') + ' | sdHl=' + (window._sdHighlightOn ? 'ON' : 'off') + ' | splat=' + (splatLayers.length ? splatLayers.length + 'L/' + splatLayers.reduce((a, s) => a + (s.cloud.frame() ? s.cloud.frame().n : 0), 0) + (splatLayers.some(s => s.cloud.dynamic) ? 'dyn' : '') : 'none') + ' | path=' + (window._framePath || '?') + ' | accum=' + (isAccumulatingGaps ? 'ON' : 'off') + ' | inpaint=' + (useInpainting ? 'on' : 'OFF') +
             // A206 THE DOLLY STATE IS IN THE STAMP. The user's screenshots showed
             // cam x identical at two very different dolly distances, which is only
             // possible if dollyLatGain is 1 - i.e. the subject pin is not engaged -
@@ -9728,6 +9760,13 @@ function exportSDBundle() {
             files.push({ name: 'dir_bg_depth_completed.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=Math.max(0,Math.min(255,(dE.plug[i]*255)|0)); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
             files.push({ name: 'dir_bg_color_coarse.png', bytes: mk(d => { for (let i=0;i<dN;i++){ d[i*4]=dE.fill[i*3];d[i*4+1]=dE.fill[i*3+1];d[i*4+2]=dE.fill[i*3+2];d[i*4+3]=255; } }) });
             meta.files['dir_mask_inpaint.png'] = 'DIRECTIONAL plug gap mask (white = disocclusion to inpaint), native res';
+            // S6: the texture band by first-uncover angle — the tier the texture stage paints (white) when a tier is set, and the
+            // pose map itself (0 = uncovered at rest … 255 = at the envelope's rim; 0 alpha = not in the band)
+            if (window._qbBandPose && window._qbBandPose.length === dN) { const bpE = window._qbBandPose, tierE = window._qbBandTier;
+                files.push({ name: 'dir_band_first_uncover.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=bpE[i] > 1 ? 0 : Math.round(bpE[i]*255); d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=bpE[i] > 1 ? 0 : 255; } }) });
+                meta.files['dir_band_first_uncover.png'] = 'per band texel the head angle (as a fraction of the envelope, 0–255) at which it is first uncovered; alpha 0 = not in the band';
+                if (tierE) { files.push({ name: 'dir_mask_inpaint_tier.png', bytes: mk(d => { for (let i=0;i<dN;i++){ const v=tierE[i]?255:0; d[i*4]=v;d[i*4+1]=v;d[i*4+2]=v;d[i*4+3]=255; } }) });
+                    meta.files['dir_mask_inpaint_tier.png'] = 'white = the inner tier of the texture band (uncovered inside ' + window._bandTierDeg + '° of head angle): paint this, the wash covers the rest'; meta.band_tier_deg = window._bandTierDeg; } }
             meta.files['dir_bg_depth_completed.png'] = 'DIRECTIONAL completed BG depth (holes capped at far-side rim), native res — ControlNet depth conditioning';
             meta.files['dir_bg_color_coarse.png'] = 'DIRECTIONAL coarse BG fill (replace with diffusion output), native res';
             meta.directionalNativeRes = [dpw, dph];
@@ -16310,8 +16349,16 @@ function bgBuildBackgroundLayerCore() {
                         for (let k = 0; k < 4; k++) { const [cx, cy] = corners[k]; pos[(o + k) * 3] = px(cx); pos[(o + k) * 3 + 1] = py(cy); pos[(o + k) * 3 + 2] = 0;
                             const ot = owners[k], ox = ot % pw, oy = (ot - ox) / pw; uv[(o + k) * 2] = (ox + 0.5) / pw; uv[(o + k) * 2 + 1] = 1 - (oy + 0.5) / ph; }   // texel centres: the nearest-filtered depth and colour of that texel
                         idx[q * 6] = o; idx[q * 6 + 1] = o + 2; idx[q * 6 + 2] = o + 1; idx[q * 6 + 3] = o + 1; idx[q * 6 + 4] = o + 2; idx[q * 6 + 5] = o + 3;
-                        const r = (src[iA * 4] + src[iB * 4]) / 2, g = (src[iA * 4 + 1] + src[iB * 4 + 1]) / 2, b = (src[iA * 4 + 2] + src[iB * 4 + 2]) / 2;
-                        cs[iA * 4] = r; cs[iA * 4 + 1] = g; cs[iA * 4 + 2] = b; cs[iB * 4] = r; cs[iB * 4 + 1] = g; cs[iB * 4 + 2] = b; }
+                        }
+                    // S6: a face's colour is the mean of the two rim texels over the face's RIM SEGMENT (the run of pairs in
+                    // neighbouring lines that share this rim), not of its own two texels: a checkerboard's rows no longer stripe it.
+                    { const key = new Map(); for (let q = 0; q < nP; q++) key.set(SR[2 * q], q);
+                        const segOf = new Int32Array(nP).fill(-1); let nSeg = 0; const acc = [];
+                        for (let q = 0; q < nP; q++) { if (segOf[q] >= 0) continue; const iA0 = SR[2 * q], xA0 = iA0 % pw, yA0 = (iA0 - xA0) / pw; const horiz = (SR[2 * q + 1] - iA0) % pw !== 0 || Math.abs(SR[2 * q + 1] - iA0) === 1; const perp = horiz ? pw : 1;
+                            const mem = [q]; segOf[q] = nSeg; for (const dir of [-perp, perp]) { let cur = iA0 + dir; while (cur >= 0 && cur < N && key.has(cur) && segOf[key.get(cur)] < 0) { const qq = key.get(cur); segOf[qq] = nSeg; mem.push(qq); cur += dir; } }
+                            let r = 0, g = 0, b = 0; for (const qq of mem) { const a = SR[2 * qq], bb = SR[2 * qq + 1]; r += src[a * 4] + src[bb * 4]; g += src[a * 4 + 1] + src[bb * 4 + 1]; b += src[a * 4 + 2] + src[bb * 4 + 2]; }
+                            const n2 = 2 * mem.length; acc.push([r / n2, g / n2, b / n2]); nSeg++; }
+                        for (let q = 0; q < nP; q++) { const [r, g, b] = acc[segOf[q]]; const iA = SR[2 * q], iB = SR[2 * q + 1]; cs[iA * 4] = r; cs[iA * 4 + 1] = g; cs[iA * 4 + 2] = b; cs[iB * 4] = r; cs[iB * 4 + 1] = g; cs[iB * 4 + 2] = b; } }
                     cxS.putImageData(pxS, 0, 0); const texS = new THREE.CanvasTexture(cvS); texS.minFilter = THREE.NearestFilter; texS.magFilter = THREE.NearestFilter; if ('colorSpace' in texS && L.textures.color && 'colorSpace' in L.textures.color) texS.colorSpace = L.textures.color.colorSpace;
                     const dS = new Float32Array(PNq); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) dS[(ph - 1 - y) * pw + x] = dQ[y * pw + x];
                     const dtS = new THREE.DataTexture(dS, pw, ph, THREE.RedFormat, THREE.FloatType); dtS.needsUpdate = true; dtS.flipY = false; dtS.minFilter = THREE.NearestFilter; dtS.magFilter = THREE.NearestFilter; dtS.generateMipmaps = false;
@@ -19674,6 +19721,46 @@ function _wireDebugSheetControls() {
         if (gapSel) gapSel.addEventListener('change', () => bakeGapRule(gapSel.value));
         window._bakeGapRule = bakeGapRule;
     }
+    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions').
+    // far side: membrane (the shipped quick bake) | plane (the rim law + the plane far side, S3–S5 recipe);
+    // fill: wash | mirror (the far side reflected across the rim); margin: off | picture | window (A245, clipped or not);
+    // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
+    // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
+    {
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel' };
+        const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
+        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off' };
+        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions') || 'null'); } catch (e) {}
+        const opt = Object.assign({}, defaults, saved || {});
+        for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
+        const applyPlateOptions = () => {
+            for (const k in els) if (els[k]) opt[k] = els[k].value;
+            try { localStorage.setItem('bgPlateOptions', JSON.stringify(opt)); } catch (e) {}
+            const plane = opt.far === 'plane';
+            window._tearLaw = plane ? 'rim' : undefined; window._farRule = plane ? 'plane' : undefined;
+            window._skyInf = (plane && opt.sky === 'on') ? 1 : 0;
+            window._selfSample = plane && opt.fill === 'mirror';
+            window._plugMargin = opt.margin === 'window' ? 1 : (opt.margin === 'picture' ? 2 : 0);
+            window._stepFaces = plane && opt.faces === 'on';
+            window._bandTierDeg = opt.band === 'all' ? 0 : parseFloat(opt.band) || 0;
+            window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
+        };
+        applyPlateOptions();
+        // the plane recipe is a geometric bake (window._plugGeoBand); the membrane far side is the ordinary Build
+        const bakePlate = () => {
+            applyPlateOptions();
+            if (opt.far !== 'plane') { buildBackgroundLayerWithOverlay(); return; }
+            window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
+            const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
+            showBuildOverlay('Plane bake (rim law · plane far side' + (opt.fill === 'mirror' ? ' · mirrored fill' : ' · wash') + (opt.faces === 'on' ? ' · step faces' : '') + ')… 1–4 min', 240000);
+            requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
+                try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); } catch (e) { console.error('[S6] plane bake failed:', e); }
+                window._bgUserBuiltOnce = true; hideBuildOverlay();
+            }, 30)));
+        };
+        for (const k in els) if (els[k]) els[k].addEventListener('change', () => { applyPlateOptions(); if (window._bgUserBuiltOnce) bakePlate(); });
+        window._bakePlate = bakePlate; window._applyPlateOptions = applyPlateOptions;
+    }
     // A36: SD-region highlight — preview of exactly where diffusion will
     // inpaint (depth-tinted band + bright rim on the plate, dimmed FG).
     document.getElementById('sdRegionsChk')?.addEventListener('change', (e) => {
@@ -19688,7 +19775,7 @@ function _wireDebugSheetControls() {
         if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setH(m.material);
         if (on && (!window._sdMaskTex)) console.warn('[SD-REGIONS] no interior-disocclusion mask yet (run a Quick bake for the cyan inpaint tint) — the orange OUTPAINT marking and the demand backdrop work in every mode, bake or not');
     });
-    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => buildBackgroundLayerWithOverlay());
+    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
     // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
     // pullpush path) — the plane/bake builds are synchronous and would
     // freeze the first seconds of every session. Building is explicit:
