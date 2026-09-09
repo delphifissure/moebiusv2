@@ -8154,6 +8154,7 @@ window._plugCpuSweep = function (opts) {
     const rimFF = (rimL && opts.farField && opts.farField.length === N) ? opts.farField : null;
     if (rimFF) for (let i = 0; i < N; i++) { pFs[i] = rimFF[i]; sPL[i] = bgShiftPxAt(lut, rimFF[i]); }
     const zb = new Float32Array(G), own = new Int32Array(G);      // own: -1 none, -2 FG, >=0 plate texel (source index)
+    const farLip = new Uint8Array(G);   // S3: per pose, 1 = a foreground cell lies against the parallax before the frame edge (a reveal), 0 = none (the frame's own margin: outpaint)
     const seen = new Uint8Array(N); let holeCells = 0, cellsInPlate = 0;
     const t0 = Date.now();
     // A246 OBSERVED HIDDEN LAYER (opts.observe; Addendum 184 phase 1). Per pose, every in-frame
@@ -8240,7 +8241,7 @@ window._plugCpuSweep = function (opts) {
     // demanded, kept their own depth, and tore the plate into patches (the band through the face was a comb).
     const landed = (revealTex && rimFF) ? new Uint8Array(N) : null;
     const splat = (xs, ys, d, id) => { const cx = (xs / sc) | 0, cy = (ys / sc) | 0; if (cx < 0 || cy < 0 || cx >= GW || cy >= GH) return; const c = cy * GW + cx;
-        if (landed && id >= 0 && own[c] !== -2) landed[id] = 1;
+        if (landed && id >= 0 && own[c] !== -2 && farLip[c] && (own[c] < 0 || rimL.joined(rimFF[id], rimFF[own[c]]))) landed[id] = 1;
         if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } };
     const span = (x0, y0, d0, x1, y1, d1, id) => {   // fill the segment between two warped texels (a mesh edge)
         const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) / sc; const steps = Math.ceil(n);
@@ -8256,7 +8257,7 @@ window._plugCpuSweep = function (opts) {
         const mnx = Math.max(0, Math.floor(Math.min(x0, x1, x2, x3) / sc)), mxx = Math.min(GW - 1, Math.floor(Math.max(x0, x1, x2, x3) / sc));
         const mny = Math.max(0, Math.floor(Math.min(y0, y1, y2, y3) / sc)), mxy = Math.min(GH - 1, Math.floor(Math.max(y0, y1, y2, y3) / sc));
         for (let cy = mny; cy <= mxy; cy++) for (let cx = mnx; cx <= mxx; cx++) { const c = cy * GW + cx;
-            if (landed && id >= 0 && own[c] !== -2) landed[id] = 1;
+            if (landed && id >= 0 && own[c] !== -2 && farLip[c] && (own[c] < 0 || rimL.joined(rimFF[id], rimFF[own[c]]))) landed[id] = 1;
             if (own[c] === -1 || d > zb[c] || (d === zb[c] && id === -2)) { zb[c] = d; own[c] = id; if (fgOwn && id === -2) { fgOwn[c] = curTi; fgFar[c] = curFar; } } } };
     const tornStatic = torn;
     for (const [ex, ey] of poses) {
@@ -8298,6 +8299,7 @@ window._plugCpuSweep = function (opts) {
             // inversion lands inside the plate). Outpaint is what inverts OUTSIDE the plate; that is the test.
             const pfO = Math.hypot(fx, fy);
             const doObs = observe && pfO > 0;
+            farLip.fill(doObs ? 0 : 1);   // without the lip walk every uncovered cell counts as a reveal (the previous behaviour)
             const stxO = doObs ? -fx / Math.max(Math.abs(fx), Math.abs(fy)) : 0, styO = doObs ? -fy / Math.max(Math.abs(fx), Math.abs(fy)) : 0;   // one cell per step against the parallax
             const maxWalk = doObs ? Math.ceil(sMaxFG * pfO / sc) + 2 : 0;    // the widest gap any texel can open at this pose (its whole shift), plus rounding
             const rampMax = Math.ceil(4 * Math.max(1, Math.round(4 * pw / 1200)) / sc);   // A246c: the blur ramp's extent in cells (the walk earned 0.4 q on the degraded figure truth; Addendum 185)
@@ -8308,6 +8310,7 @@ window._plugCpuSweep = function (opts) {
                     let wx = (c % GW) + 0.5, wy = ((c / GW) | 0) + 0.5, cFar = -1, cNear = -1;
                     let crossedPlate = 0, kFarWalk = 0, kNearWalk = 0;   // A252
                     for (let k = 0; k < maxWalk; k++) { wx += stxO; wy += styO; const ix = wx | 0, iy = wy | 0; if (ix < 0 || iy < 0 || ix >= GW || iy >= GH) break; const cc = iy * GW + ix; if (own[cc] === -2) { cFar = cc; kFarWalk = k + 1; break; } if (own[cc] >= 0) crossedPlate = 1; }
+                    if (cFar >= 0) farLip[c] = 1;
                     if (cFar >= 0) {
                         const dA0 = fgFar[cFar];   // A252: the far lip before the ramp walk
                         // A246c RAMP FOOT: the first foreground cell beyond a gap is the silhouette's blur ramp (the
@@ -8395,7 +8398,7 @@ window._plugCpuSweep = function (opts) {
         if (revealTex && rimFF) {
             const qR = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
             for (let c = 0; c < G; c++) { const o = own[c]; if (o === -2) continue;
-                if (o < 0) { revealOut++; continue; }
+                if (o < 0 || !farLip[c]) { revealOut++; continue; }   // S3: a cell with no foreground against the parallax is the frame's margin (outpaint), whatever far-field copy lands there
                 if (dQ[o] - rimFF[o] < qR) { obsSelf++; continue; }
                 revealTex[o] = 1; revealIn++; }
             if (landed) for (let i = 0; i < N; i++) if (landed[i] && !revealTex[i] && dQ[i] - rimFF[i] >= qR) { revealTex[i] = 1; revealIn++; }
