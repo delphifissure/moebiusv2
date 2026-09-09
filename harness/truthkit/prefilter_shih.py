@@ -29,11 +29,26 @@ def depth_law(meta, W=0.16, D=0.2):
     return ze, W, D
 
 
-def rims(d, ze, t):
-    """4-neighbour pairs failing the rim law's ratio test; both pixels marked."""
-    e = ze(d); m = np.zeros(d.shape, bool)
-    r = e[1:, :] / e[:-1, :]; bad = np.maximum(r, 1 / r) > t; m[1:, :] |= bad; m[:-1, :] |= bad
-    r = e[:, 1:] / e[:, :-1]; bad = np.maximum(r, 1 / r) > t; m[:, 1:] |= bad; m[:, :-1] |= bad
+def rims(d, ze, t, q=1 / 65535):
+    """4-neighbour pairs the rim law does not join: the eye-distance ratio exceeds t AND the affine rescue fails (the pair is not
+    on one plane by the neighbour on either side: |disp(j) − (2 disp(i) − disp(i−1))| > tol and the mirror test, tol = the
+    two-quantum disparity window at the deeper of the pair, as in bgRimLawFor.joinedIdx). Both pixels of a rim are marked.
+    (A first version used the ratio test alone and marked S15's smoothly receding hills as discontinuities, 35 000 px on the
+    exact map; the median then smeared real geometry, depth median 0.18 → 0.75 m.)"""
+    e = ze(d); disp = 1.0 / e
+    tol = np.abs(1.0 / ze(np.minimum(1, d + q)) - 1.0 / ze(np.maximum(0, d - q))) + 1e-9
+    m = np.zeros(d.shape, bool)
+    for ax in (0, 1):
+        E = np.moveaxis(e, ax, 0); Dp = np.moveaxis(disp, ax, 0); T = np.moveaxis(tol, ax, 0); M = np.moveaxis(m, ax, 0)
+        n = E.shape[0]
+        r = E[1:] / E[:-1]; bad = np.maximum(r, 1 / r) > t                     # pairs (k, k+1), k = 0..n-2
+        tl = np.maximum(T[1:], T[:-1])
+        # rescue from the near side: predict k+1 from (k-1, k); from the far side: predict k from (k+1, k+2)
+        resc = np.zeros_like(bad)
+        pr = 2 * Dp[1:-1] - Dp[:-2]; resc[1:] |= np.abs(Dp[2:] - pr) <= tl[1:]
+        pr2 = 2 * Dp[1:-1] - Dp[2:]; resc[:-1] |= np.abs(Dp[:-2] - pr2) <= tl[:-1]
+        bad &= ~resc
+        M[1:] |= bad; M[:-1] |= bad
     return m
 
 
@@ -68,7 +83,7 @@ def main():
     wins = [max(3, int(round(int(x) * sc)) | 1) for x in a.windows.split(',')]
     d = d0.copy(); t0 = time.time(); log = []
     for k in wins:
-        disc = rims(d, ze, t)
+        disc = rims(d, ze, t, q=1 / 65535)
         d, n = masked_median_pass(d, disc, k)
         log.append((k, int(disc.sum()), n))
     save_png(a.dst, np.clip(d, 0, 1), bits=16)
