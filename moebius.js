@@ -749,7 +749,22 @@ function bgFarSidePlane(dQ, pw, ph) {
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
         nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
         (horizon ? ('ground plane from ' + horizon.nRuns + ' of ' + pw + ' columns (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : ('no ground (' + nRising + ' rising runs, ' + nHoriz + ' horizontal, ' + nGroundIn + ' of ' + nGroundPicks + ' columns on one plane): no bound, no horizon')) + '; ' + (Date.now() - t0) + 'ms');
-    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    // S5 STEP RIMS: a rim between two runs whose lines are parallel within their fit uncertainty is a step inside one
+    // surface (R1 §2.3's prior: a jump inside one continuous surface is a return face; a jump to a surface of another
+    // orientation is open). Both runs need two samples for a slope; sky never steps. Pairs are (near texel, far texel).
+    const stepList = []; let nStepPairs = 0;
+    for (let ax = 0; ax < 2; ax++) { const Lx = L[ax], nLn = nL[ax], st = stepA[ax];
+        for (let l = 0; l < nLn; l++) { const base = ax === 0 ? l * pw : l; let p = 0;
+            while (p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; if (b + 1 >= Lx) break;
+                const jb = base + b * st, j2 = base + (b + 1) * st; const a2 = rs[ax][j2], b2 = re[ax][j2]; const len1 = b - a + 1, len2 = b2 - a2 + 1;   // jb: the run's last texel, at the rim
+                if (len1 >= 2 && len2 >= 2 && !isSky[jb] && !isSky[j2] && !rl.joinedIdx(jb, j2, dQ, pw)) {
+                    const f1 = fit(ax, l, a, b, b), f2 = fit(ax, l, a2, b2, a2);
+                    const u1 = tol[jb] / (2 * (len1 - 1)), u2 = tol[j2] / (2 * (len2 - 1));
+                    if (Math.abs(f1[0] - f2[0]) <= u1 + u2) { const near = disp[jb] >= disp[j2] ? jb : j2, far = near === jb ? j2 : jb; stepList.push(near, far); nStepPairs++; } }
+                p = b + 1; } } }   // one run at a time: every consecutive pair is tested
+    const stepRims = Int32Array.from(stepList);
+    console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel lines (a step inside one surface; its face is synthesised when window._stepFaces is on)');
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8561,7 +8576,7 @@ window._plugGeoBand = function (opts) {
     // (membrane), everything else is its own far side. No constant: span and joinedness both come
     // from the shift law, the resolution and the envelope.
     let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
-    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null;
+    window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null; window._geoStepRims = null;
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
@@ -8606,6 +8621,7 @@ window._plugGeoBand = function (opts) {
             window._geoFarKind = planeFS.farKind; window._geoFarAxis = planeFS.farAxis;
             window._geoFarRim = { j: planeFS.farRimJ, w: planeFS.farRimW, mix: planeFS.farMix, axis: planeFS.farAxis };   // S3: the rims each band texel continues from (its colour)
             window._geoFarField2 = planeFS.farField2; window._geoFarRim2 = { j: planeFS.farRimJ2, w: planeFS.farRimW2, side: planeFS.farSide2, axis: planeFS.farAxis };   // S4: the second layer
+            window._geoStepRims = planeFS.stepRims;   // S5: step rims (near, far) pairs
             { let n2 = 0; for (let i = 0; i < N; i++) if (free[i] && planeFS.farField2[i] >= 0) n2++; console.log('[S4] second layer: ' + planeFS.nLayer2 + ' texels have one (' + n2 + ' of them free): what shows once the first-arriving surface has passed'); }
             let kc = [0, 0, 0, 0, 0], ac = [0, 0, 0]; for (let i = 0; i < N; i++) if (free[i]) { kc[planeFS.farKind[i]]++; ac[planeFS.farAxis[i]]++; }
             console.log('[S3] reach under the plane law: ' + nReach + ' free texels (single ' + kc[1] + ', same plane ' + kc[2] + ', crossing ' + kc[3] + ', midpoint ' + kc[4] + ', none ' + kc[0] + '; row axis ' + ac[1] + ', column axis ' + ac[2] + ')' + (skyOnR ? ('; sky behind ' + nSkyClass) : '')); }
@@ -14557,6 +14573,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) { const sM = bgLayerMesh.userData.sky; scene.remove(sM); sM.geometry.dispose(); if (sM.material.map) sM.material.map.dispose(); sM.material.dispose(); bgLayerMesh.userData.sky = null; }   // S2c sky layer
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) { const p2 = bgLayerMesh.userData.plate2; scene.remove(p2); p2.geometry.dispose(); try { const u = p2.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} p2.material.dispose(); bgLayerMesh.userData.plate2 = null; }   // S4 plate 2
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) { const pS = bgLayerMesh.userData.steps; scene.remove(pS); pS.geometry.dispose(); try { const u = pS.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} pS.material.dispose(); bgLayerMesh.userData.steps = null; }   // S5 step faces
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
@@ -16259,6 +16276,35 @@ function bgBuildBackgroundLayerCore() {
                     } else console.log('[S4] plate 2: no band texel has a second layer');
                 } catch (e2) { console.warn('[S4] plate 2 failed (none):', e2); }
             }
+            // S5 STEP FACES (window._stepFaces === true): one quad per step rim pair, from the near texel to the far texel, each
+            // vertex displaced by the SOURCE depth at its own texel (the FG's law), so the quad is one texel wide at rest and
+            // opens with the parallax exactly as the return face would; coloured with the mean of the two rim texels' colours.
+            if (!!window._stepFaces && bgFarRuleOn() && window._geoStepRims && window._geoStepRims.length >= 2) {   // truthy: the harness passes flags as numbers
+                try {
+                    const tS0 = Date.now(); const SR = window._geoStepRims, nP = SR.length >> 1; const gpS = L.mesh.geometry.parameters || {}; const wS = gpS.width, hS = gpS.height;
+                    const px = (k) => -wS / 2 + k * wS / (pw - 1), py = (r) => hS / 2 - r * hS / (ph - 1);
+                    const pos = new Float32Array(nP * 4 * 3), uv = new Float32Array(nP * 4 * 2), idx = new Uint32Array(nP * 6);
+                    const cImgS = (L.elements && L.elements.color) || L.textures.color.image; const cvS = document.createElement('canvas'); cvS.width = pw; cvS.height = ph; const cxS = cvS.getContext('2d', { willReadFrequently: true }); cxS.drawImage(cImgS, 0, 0, pw, ph); const pxS = cxS.getImageData(0, 0, pw, ph); const cs = pxS.data; const src = cs.slice();
+                    for (let q = 0; q < nP; q++) { const iA = SR[2 * q], iB = SR[2 * q + 1]; const xA = iA % pw, yA = (iA - xA) / pw, xB = iB % pw, yB = (iB - xB) / pw;
+                        const horiz = yA === yB; const o = q * 4;
+                        // corners: the two texels' centres, widened across the line by half a texel each side
+                        const corners = horiz ? [[xA, yA - 0.5], [xB, yB - 0.5], [xA, yA + 0.5], [xB, yB + 0.5]] : [[xA - 0.5, yA], [xA + 0.5, yA], [xB - 0.5, yB], [xB + 0.5, yB]];
+                        const owners = horiz ? [iA, iB, iA, iB] : [iA, iA, iB, iB];
+                        for (let k = 0; k < 4; k++) { const [cx, cy] = corners[k]; pos[(o + k) * 3] = px(cx); pos[(o + k) * 3 + 1] = py(cy); pos[(o + k) * 3 + 2] = 0;
+                            const ot = owners[k], ox = ot % pw, oy = (ot - ox) / pw; uv[(o + k) * 2] = (ox + 0.5) / pw; uv[(o + k) * 2 + 1] = 1 - (oy + 0.5) / ph; }   // texel centres: the nearest-filtered depth and colour of that texel
+                        idx[q * 6] = o; idx[q * 6 + 1] = o + 2; idx[q * 6 + 2] = o + 1; idx[q * 6 + 3] = o + 1; idx[q * 6 + 4] = o + 2; idx[q * 6 + 5] = o + 3;
+                        const r = (src[iA * 4] + src[iB * 4]) / 2, g = (src[iA * 4 + 1] + src[iB * 4 + 1]) / 2, b = (src[iA * 4 + 2] + src[iB * 4 + 2]) / 2;
+                        cs[iA * 4] = r; cs[iA * 4 + 1] = g; cs[iA * 4 + 2] = b; cs[iB * 4] = r; cs[iB * 4 + 1] = g; cs[iB * 4 + 2] = b; }
+                    cxS.putImageData(pxS, 0, 0); const texS = new THREE.CanvasTexture(cvS); texS.minFilter = THREE.NearestFilter; texS.magFilter = THREE.NearestFilter; if ('colorSpace' in texS && L.textures.color && 'colorSpace' in L.textures.color) texS.colorSpace = L.textures.color.colorSpace;
+                    const dS = new Float32Array(PNq); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) dS[(ph - 1 - y) * pw + x] = dQ[y * pw + x];
+                    const dtS = new THREE.DataTexture(dS, pw, ph, THREE.RedFormat, THREE.FloatType); dtS.needsUpdate = true; dtS.flipY = false; dtS.minFilter = THREE.NearestFilter; dtS.magFilter = THREE.NearestFilter; dtS.generateMipmaps = false;
+                    const gS = new THREE.BufferGeometry(); gS.setAttribute('position', new THREE.BufferAttribute(pos, 3)); gS.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); gS.setIndex(new THREE.BufferAttribute(idx, 1));
+                    const matS = matQ.clone(); matS.uniforms.displacementMap.value = dtS; matS.uniforms.map.value = texS; matS.side = THREE.DoubleSide;
+                    const mS = new THREE.Mesh(gS, matS); mS.position.copy(L.mesh.position); mS.rotation.copy(L.mesh.rotation); mS.scale.copy(L.mesh.scale); mS.renderOrder = bgLayerMesh.renderOrder;
+                    bgLayerMesh.userData.steps = mS;
+                    console.log('[S5] step faces: ' + nP + ' quads between parallel-line rims, coloured with the two rim texels\' mean; ' + (Date.now() - tS0) + 'ms');
+                } catch (eS) { console.warn('[S5] step faces failed (none):', eS); }
+            }
             bgLayerMesh.rotation.copy(L.mesh.rotation);
             bgLayerMesh.scale.copy(L.mesh.scale);
             bgLayerMesh.renderOrder = (L.mesh.renderOrder || 0) - 1;
@@ -16354,6 +16400,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh.userData && bgLayerMesh.userData.ring) for (const m of bgLayerMesh.userData.ring) scene.add(m);   // A245 ring
             if (bgLayerMesh.userData && bgLayerMesh.userData.sky) { bgLayerMesh.userData.sky.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.sky); }   // S2c sky layer
             if (bgLayerMesh.userData && bgLayerMesh.userData.plate2) { bgLayerMesh.userData.plate2.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.plate2); }   // S4 plate 2
+            if (bgLayerMesh.userData && bgLayerMesh.userData.steps) { bgLayerMesh.userData.steps.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.steps); }   // S5 step faces
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
@@ -20598,7 +20645,8 @@ function updateCameraAndProjection() {
         // realtime too, where there is no bake at all.
         try { bgEnsureFishtank(); } catch (e) {}
         _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
-        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) _syncBG(bgLayerMesh.userData.plate2);   // S4 plate 2 (its depth-law uniforms were the app defaults: 56 px per head fraction where the hill moves 700)
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) _syncBG(bgLayerMesh.userData.plate2);
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) _syncBG(bgLayerMesh.userData.steps);   // S5 step faces   // S4 plate 2 (its depth-law uniforms were the app defaults: 56 px per head fraction where the hill moves 700)
         // A170: this comment used to say the quick skirt carries its own cloned
         // material and therefore needs its own sync. a169 deleted that material
         _syncBG(typeof mpiMidMesh !== 'undefined' ? mpiMidMesh : null);
