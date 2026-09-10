@@ -8646,6 +8646,9 @@ window._plugGeoBand = function (opts) {
             window._geoFarRim = { j: planeFS.farRimJ, w: planeFS.farRimW, mix: planeFS.farMix, axis: planeFS.farAxis };   // S3: the rims each band texel continues from (its colour)
             window._geoFarField2 = planeFS.farField2; window._geoFarRim2 = { j: planeFS.farRimJ2, w: planeFS.farRimW2, side: planeFS.farSide2, axis: planeFS.farAxis };   // S4: the second layer
             window._geoStepRims = planeFS.stepRims;   // S5: step rims (near, far) pairs
+            // S7 audit exports: the rim texel per side, the side weight, the far kind's disparity, an eye-distance table
+            window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp;
+            { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
             // rim (the same distance into the far run) is the sample. -1 where the rim is another object or the mirror leaves it.
