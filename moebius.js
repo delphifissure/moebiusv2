@@ -620,6 +620,32 @@ function bgFarSidePlane(dQ, pw, ph) {
     // [0, 1]: a three-texel leaf that passes in a hundredth of the envelope no longer outranks the hill behind it,
     // while the floor behind a box, which never passes, still does. Sky runs never pass (infinite length).
     const lutK = bgShiftLUTFor(pw, ph), kAx = [lutK.ex * lutK.pxPerWorld * lutK.D, lutK.ex * lutK.pxPerWorld * lutK.D * bgEnvAspect()];
+    // (S7b D3 tried letting a THIN run borrow the slope of the overlapping, longer run on the neighbouring line when the two
+    // are joined by the rim law at both ends of their overlap — "a plane has one slope along every row". Falsified twice:
+    // S26's beams, where the join admits a FOLD (the beam's side meets the background continuously) and the borrowed slope
+    // moved 84 texels the flat rule had exactly right by 4 cm (P .457 → .448); and the photograph, where 304 847 winning
+    // runs borrowed and the cross-line seams DOUBLED (57 777 → 136 040; plate tears 136 191 → 298 038). Joined at the
+    // overlap's ends does not mean one plane, and on 8-bit curved data the neighbouring line's run is no steadier than the
+    // thin run's own. Removed. The flat continuation of a thin run stands as the least-wrong statement of what is known.)
+    // the candidate of run (rim texel j, at position p on line l) for texel i at position x, seen along axis ax in direction
+    // dir: window, fit, thin evidence (ground continuation / flat), ground cut. One arithmetic for the walk (cand) and the
+    // rebuild from the stored rim texel (pass 3); bit-identical to the two copies it replaced (S2 and the photograph).
+    const evalRun = (ax, l, x, dir, i, j, p, xi, gB) => {
+        const a = rs[ax][j], b = re[ax][j], len = b - a + 1, g = Math.abs(p - x);
+        const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
+        const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
+        const thin = len < g + 1;
+        // THIN EVIDENCE: a run shorter than the gap it is asked to cross has a slope uncertain by more than a
+        // quantum at the far end, so it is not extrapolated: a thin run continues along the fitted ground plane
+        // if it is one of the ground's own runs (S32's 44-row floor in front of a 180-row gap), otherwise at
+        // constant depth. (It was first suspected of S15's horizontal streaks; the plate-only shot after this
+        // change still had them — they were the plate's linearly filtered depth texture, fixed at plateDT.)
+        if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
+        let cut = false; if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; cut = true; }   // the plane continues under the ground: it meets the ground here instead
+        // mv: the slope the VALUE follows along this axis (S7b, D4). The ground cut keeps m = 0 for combine's crossing/same-plane
+        // tests while the value follows the ground plane at its own slope; the join's step bound and the audits need the latter.
+        const mv = cut ? (ax === 1 ? ground.c : ground.b) : m;
+        return { g, p, m, v0, v, w, len, j, thin, cut, mv }; };
     const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
         const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
         // the ground bounds the world only where it is seen: in columns with a ground run of their own. (On the default
@@ -636,17 +662,8 @@ function bgFarSidePlane(dQ, pw, ph) {
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             if (!rim && !rl.joinedIdx(base + (p - dir) * st, j, dQ, pw)) rim = true;
             if (!rim) { p = dir > 0 ? b + 1 : a - 1; continue; }
-            const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
-            const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
-            const thin = len < g + 1;
-            // THIN EVIDENCE: a run shorter than the gap it is asked to cross has a slope uncertain by more than a
-            // quantum at the far end, so it is not extrapolated: a thin run continues along the fitted ground plane
-            // if it is one of the ground's own runs (S32's 44-row floor in front of a 180-row gap), otherwise at
-            // constant depth. (It was first suspected of S15's horizontal streaks; the plate-only shot after this
-            // change still had them — they were the plate's linearly filtered depth texture, fixed at plateDT.)
-            if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
-            if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; nGroundCut++; }   // the plane continues under the ground: it meets the ground here instead
-            const dlt = disp[i] - v;
+            const e = evalRun(ax, l, x, dir, i, j, p, xi, gB); if (e.cut) nGroundCut++;
+            const { w, m, v0, v, thin } = e; const dlt = disp[i] - v;
             if (dlt > tol[i]) { const f0 = g / (kk * dlt), f1 = isSky[j] ? Infinity : (g + len) / (kk * dlt); list.push({ g, p, m, v0, w, len, j, thin, dlt, f0, f1 }); }
             p = dir > 0 ? b + 1 : a - 1; }
         if (!list.length) return null;
@@ -663,6 +680,11 @@ function bgFarSidePlane(dQ, pw, ph) {
             for (const o of list) { if (o === c) continue; if (o.f0 <= c.f1 && o.f1 > c.f1 && (!bn || o.dlt < bn.dlt)) bn = o; }
             if (!bn) { let fm = 1; for (const o of list) if (o !== c && o.f0 > c.f1 && o.f0 < fm) { fm = o.f0; bn = o; } }   // only a run that arrives inside the envelope
             c.next = bn; return c; };
+        // (S7b D2 tried resolving arrivals that are indistinguishable within their uncertainties — |f0_a − f0_b| ≤ df0_a + df0_b,
+        // df0 = f0·(tol_i/2 + g·tol_j/(2(w−1)))/dlt — toward the run with the larger window. Falsified on the photograph:
+        // 227 585 of 1.18 M arrivals were ties, plate tears 136 191 → 148 151, cross-line seams 57 777 → 65 448. The window is
+        // min(len, g+1) and a run's LENGTH is the quantity 8-bit curvature fragments from line to line (median 6–8 texels),
+        // so preferring it prefers the noisiest attribute. Removed; the strict first arrival stands. Kit: S12 identical, S2 4 texels.)
         if (window._farPick !== 'coverage') { let first = null, firstF = Infinity; for (const c of list) if (c.f0 < firstF) { firstF = c.f0; first = c; } nCand++; if (first.thin) nThin++; return withNext(first); }
         // nearest first; each takes the part of its interval no nearer run has taken; the largest share wins
         list.sort((u, v) => u.dlt - v.dlt);   // dlt = disp_i - v: the smallest gap is the nearest run, in front of the others
@@ -718,16 +740,8 @@ function bgFarSidePlane(dQ, pw, ph) {
     // the candidate of run (rim texel j) for texel i on line l at position x, seen along axis ax in direction dir — the
     // same arithmetic as cand's (window, fit, thin evidence, ground cut), without the arrival bookkeeping
     const rebuild = (ax, l, x, dir, i, j) => { if (j < 0) return null;
-        const p = ax === 0 ? j % pw : (j - j % pw) / pw; const a = rs[ax][j], b = re[ax][j], len = b - a + 1, g = Math.abs(p - x);
-        const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;
-        const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;
-        const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1]; const thin = len < g + 1;
-        if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
-        let cut = false; if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; cut = true; }
-        // mv: the slope the VALUE follows along this axis (S7b, D4). The ground cut keeps m = 0 for combine's crossing/same-plane
-        // tests while the value follows the ground plane at its own slope; the join's step bound and the audits need the latter.
-        const mv = cut ? (ax === 1 ? ground.c : ground.b) : m;
-        return { g, p, m, v0, w, len, j, thin, cut, mv }; };
+        const p = ax === 0 ? j % pw : (j - j % pw) / pw; const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;
+        return evalRun(ax, l, x, dir, i, j, p, xi, gB); };
     const cOf = (s4, ax, l, x, dir, i) => { const c = rebuild(ax, l, x, dir, i, cJ[s4][i]); if (c) c.next = rebuild(ax, l, x, dir, i, cN[s4][i]); return c; };
     // S7 PASS 3: combine the two sides per axis, arbitrate the axes, export (unchanged from the single loop)
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
