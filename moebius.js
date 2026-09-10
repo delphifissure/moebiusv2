@@ -19752,9 +19752,9 @@ function _wireDebugSheetControls() {
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
     // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
     {
-        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel' };
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
-        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off' };
+        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off', seams: 'torn' };
         let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions') || 'null'); } catch (e) {}
         const opt = Object.assign({}, defaults, saved || {});
         for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
@@ -19768,6 +19768,7 @@ function _wireDebugSheetControls() {
             window._plugMargin = opt.margin === 'window' ? 1 : (opt.margin === 'picture' ? 2 : 0);
             window._stepFaces = plane && opt.faces === 'on';
             window._bandTierDeg = opt.band === 'all' ? 0 : parseFloat(opt.band) || 0;
+            window._plateStretchInner = plane && opt.seams === 'stretched';   // note §9: the plate's internal seams drawn stretched; the rim stays torn
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
         applyPlateOptions();
