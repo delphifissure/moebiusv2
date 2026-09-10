@@ -15128,6 +15128,7 @@ function bgBuildBackgroundLayerCore() {
             if (!plateColorTex && (window._bandFillBlend === true || !!window._plugMembrane || !!window._plugWashGated || bgRimLawOn())) {
                 try {
                     const tBF0 = Date.now();
+                    const NREL = (typeof bgV2ClaimRelax === 'number') ? bgV2ClaimRelax : 4;   // hoisted: the A215 log below read it out of its block's scope and threw under the rim law, which discarded the whole band fill (S6 finding, see the note)
                     const cImgF = (L.elements && L.elements.color) || L.textures.color.image;
                     const cvF = document.createElement('canvas'); cvF.width = pw; cvF.height = ph;
                     const cxF = cvF.getContext('2d', { willReadFrequently: true });
@@ -15401,7 +15402,6 @@ function bgBuildBackgroundLayerCore() {
                         }
                     }
                     // depth-gated Jacobi smoothing (the a193 relax, same pass count)
-                    const NREL = (typeof bgV2ClaimRelax === 'number') ? bgV2ClaimRelax : 4;
                     for (let p = 0; p < NREL; p++) {
                         const prev = cd.slice();
                         for (let k = 0; k < qt2; k++) {
@@ -15433,7 +15433,7 @@ function bgBuildBackgroundLayerCore() {
                     console.log('[QUICK-BAKE] A215 two-sided band fill: ' + nGated + ' gated / ' + nPocket +
                         ' pocket of ' + nD + ' band px, ' + nBlend + ' ray-blended (8-dir Shepard p=1), ' + NREL +
                         ' relax passes (' + (Date.now() - tBF0) + 'ms); the wash remains only outside the band');
-                } catch (eBF) { console.warn('[QUICK-BAKE] A215 band fill failed, wash kept:', eBF); plateColorTex = null; }
+                } catch (eBF) { console.error('[QUICK-BAKE] A215 BAND FILL FAILED — the plate renders from the quick bake\'s colour target, not the recipe\'s fill:', eBF); plateColorTex = null; window._qbBandFillFailed = String(eBF); }
             }
             const matQ = L.mesh.material.clone();
             if (matQ.uniforms.u_skyInf) { matQ.uniforms.u_skyInf.value = bgSkyInfOn() ? bgSkyZ().Z : 0; matQ.uniforms.u_skyQ.value = bgSkyQ(); }   // S2c: plate texels whose far field is sky
@@ -19762,6 +19762,10 @@ function _wireDebugSheetControls() {
         // the plane recipe is a geometric bake (window._plugGeoBand); the membrane far side is the ordinary Build
         const bakePlate = () => {
             applyPlateOptions();
+            // a select whose value matches no option reads '' (seen on the user's screen: a blank far-side select and the
+            // ordinary quick bake ran with the mirror flag set): fall back to the default and say so
+            for (const k in els) if (els[k] && els[k].value === '') { console.warn('[S6] plate option "' + k + '" had no value; reset to ' + defaults[k]); els[k].value = defaults[k]; opt[k] = defaults[k]; }
+            console.log('[S6] plate bake: ' + Object.keys(opt).map(k => k + '=' + opt[k]).join(' ') + (opt.far === 'plane' ? '' : '  -> NOT the plane recipe: the ordinary Build runs (far side is ' + opt.far + ')'));
             if (opt.far !== 'plane') { buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
             const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
@@ -19788,7 +19792,7 @@ function _wireDebugSheetControls() {
         if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setH(m.material);
         if (on && (!window._sdMaskTex)) console.warn('[SD-REGIONS] no interior-disocclusion mask yet (run a Quick bake for the cyan inpaint tint) — the orange OUTPAINT marking and the demand backdrop work in every mode, bake or not');
     });
-    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
+    document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._applyPlateOptions) window._applyPlateOptions(); /* read the selects now, not the cached copy (a value set from the console fires no change event) */ if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
     // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
     // pullpush path) — the plane/bake builds are synchronous and would
     // freeze the first seconds of every session. Building is explicit:
