@@ -18,13 +18,13 @@ const OUT = path.join(H, 'shots', 'ui_path', process.env.TAG || 'run'); fs.mkdir
     const opts = (process.env.OPTS || 'plane,wash,picture,off,35,off').split(',');
     const OFFS = (process.env.OFFS || '0.05:0,0.1:0,0.2:0,0.301:0.068').split(',').map(s => s.split(':').map(Number));
     const bakeViaUI = async (setSel) => {
-        await page.evaluate((o) => { const ids = ['bgPlateFarSel', 'bgPlateFillSel', 'bgPlateMarginSel', 'bgPlateFacesSel', 'bgPlateBandSel', 'bgPlateSkySel'];
-            if (o.opts) ids.forEach((id, i) => { document.getElementById(id).value = o.opts[i]; });
+        await page.evaluate((o) => { const ids = ['bgPlateFarSel', 'bgPlateFillSel', 'bgPlateMarginSel', 'bgPlateFacesSel', 'bgPlateBandSel', 'bgPlateSkySel', 'bgPlateSeamSel', 'bgPlateJoinSel'];   // OPTS may give 6 or 8 (seams, join)
+            if (o.opts) ids.forEach((id, i) => { if (o.opts[i] !== undefined && document.getElementById(id)) document.getElementById(id).value = o.opts[i]; });
             window._plugSweepCapture = true; if (o.env) bgViewFadeEndDeg = o.env;
             if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }   // FLAGS=_plateStretchInner=1: window flags the panel has no select for yet   // ENV=60: bake the geometry to a wider envelope (the fade stays a design choice)
             if (!window._uiBakeWrapped) { const orig = window._plugGeoBand; window._plugGeoBand = function () { const r = orig.apply(this, arguments); window._uiBakeCount = (window._uiBakeCount || 0) + 1; return r; }; window._uiBakeWrapped = true; }
             window._uiBakeTarget = (window._uiBakeCount || 0) + 1;
-            if (o.change) { const [k, v] = o.change.split('='); const id = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel' }[k]; const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('change')); }
+            if (o.change) { const [k, v] = o.change.split('='); const id = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel' }[k]; const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('change')); }
             else document.getElementById('bgLayerBuildBtn').click(); }, setSel);
         const t0 = Date.now(); let done = false; for (let t = 0; t < 600 && !done; t++) { done = await page.evaluate(() => (window._uiBakeCount || 0) >= window._uiBakeTarget).catch(() => false); if (!done) await new Promise(r2 => setTimeout(r2, 1000)); } if (!done) console.log('  BAKE DID NOT COMPLETE (no _plugGeoBand call within 600 s)');
         console.log('  bake via UI done in ' + ((Date.now() - t0) / 1000).toFixed(0) + ' s; selects now: ' + await page.evaluate(() => ['bgPlateFarSel', 'bgPlateFillSel', 'bgPlateMarginSel', 'bgPlateFacesSel', 'bgPlateBandSel', 'bgPlateSkySel'].map(id => JSON.stringify(document.getElementById(id).value)).join(' ')));
