@@ -709,6 +709,10 @@ function bgFarSidePlane(dQ, pw, ph) {
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
         const cs4 = [cand(0, y, x, -1, i), cand(0, y, x, +1, i), cand(1, x, y, -1, i), cand(1, x, y, +1, i)];
         for (let s4 = 0; s4 < 4; s4++) { const c = cs4[s4]; if (c) { cJ[s4][i] = c.j; if (c.next) cN[s4][i] = c.next.j; } } }
+    // (S7 tried pooling each candidate's fit across the neighbouring lines that continue the same far surface, one plane per
+    // piece within tol. Falsified on the photograph: adjacent lines' far runs do not lie on one plane within tol (median worst
+    // RMS/tol 1.5 on merge attempts, 5 977 pieces from 8 609 nodes, plate tears 139 206 vs 136 191). Removed; the far field's
+    // continuity is enforced after the fact instead — the rim law across lines — in _plugGeoBand.)
     // the candidate of run (rim texel j) for texel i on line l at position x, seen along axis ax in direction dir — the
     // same arithmetic as cand's (window, fit, thin evidence, ground cut), without the arrival bookkeeping
     const rebuild = (ax, l, x, dir, i, j) => { if (j < 0) return null;
@@ -8637,6 +8641,53 @@ window._plugGeoBand = function (opts) {
         // a one-texel notch, never carried the cave through its left half) and measured the slide from the edge texel's
         // depth (a ramp end 48 texels short of the head's body). Removed (rule 7); the rim arm's walk below is untouched.
         if (planeFS) for (let i = 0; i < N; i++) if (planeFS.farField[i] < dQ[i]) { free[i] = 1; nReach++; }
+        // S7 THE FAR FIELD OBEYS THE RIM LAW ACROSS LINES (window._farJoin, on unless 0). The plane law solves each line on
+        // its own, so adjacent lines disagree wherever they chose different runs or axes, and the plate is torn along every
+        // such seam (the seam audit, note §10a: 41 % cross-line, 45 % row-versus-column; along a line the law is
+        // continuous). The plate's tear test is the rim law's join: an edge holds when the eye-distance ratio across it is
+        // within t. So the far field is made t-Lipschitz across the free set — in log disparity, no step larger than log t
+        // per texel along either axis — with the smallest change to the per-line estimates in the sup norm: the midpoint of
+        // the upper and lower Lipschitz envelopes (McShane–Whitney), each a chessboard distance transform, two raster passes.
+        // Closed form, O(N), deterministic. A plane's slope is far below the bound and is left exactly as it is (the kit);
+        // a ribbon seam of ratio r becomes a ramp of log r / log t texels; a genuine step between two far surfaces becomes a
+        // ramp too (a skin between two backgrounds, never the foreground; where two surfaces are known, plate 2 carries the
+        // second). The rim (free against not free) is not constrained and stays a cliff; sky texels are the sky layer's.
+        // (Two iterative forms were tried first — projections onto the second-difference constraints, ungated and gated by
+        // the extrapolation uncertainty — and did not converge within their budgets: 24–37 s, tears 32 224 / 112 734 of
+        // 136 191. Removed.)
+        if (planeFS && !(window._farJoin === 0 || window._farJoin === false)) { const tJ0 = Date.now(); const rlJ = bgRimLawFor(pw, ph); const FF = planeFS.farField;
+            const skyOnJ = bgSkyInfOn(), sqJ = skyOnJ ? bgSkyQ() : -1; const dom = new Uint8Array(N); let nDom = 0;
+            for (let i = 0; i < N; i++) if (free[i] && !(skyOnJ && FF[i] < sqJ)) { dom[i] = 1; nDom++; }
+            const lg = new Float64Array(N), envHi = new Float64Array(N), envLo = new Float64Array(N); const c = Math.log(rlJ.t) * (1 - 1e-4); const INF = 1e30;   // a hair inside the bound: the plate's test runs on float32 depths
+            for (let i = 0; i < N; i++) { if (dom[i]) { lg[i] = Math.log(rlJ.dispAt(FF[i])); envHi[i] = lg[i]; envLo[i] = -lg[i]; } else { envHi[i] = INF; envLo[i] = INF; } }
+            let nViol0 = 0; for (let i = 0; i < N; i++) { if (!dom[i]) continue; const x = i % pw; if (x < pw - 1 && dom[i + 1] && Math.abs(lg[i + 1] - lg[i]) > c) nViol0++; if (i + pw < N && dom[i + pw] && Math.abs(lg[i + pw] - lg[i]) > c) nViol0++; }
+            // Chessboard (L-infinity) distance transforms: envHi = min_j (lg_j + c·d(i, j)), envLo = min_j (-lg_j + c·d(i, j)). The
+            // plate's tear test checks a triangle's diagonal edge as well as its axis edges, so the bound must hold per diagonal
+            // step too (L1 would allow t² across a diagonal, rejected at every ramp's kink: 87 849 triangles). Forward and
+            // backward raster passes over the eight neighbours are exact for the chessboard metric.
+            const chess = (arr) => {
+                for (let i = 0; i < N; i++) { const x = i % pw; let v = arr[i];
+                    if (x > 0 && arr[i - 1] + c < v) v = arr[i - 1] + c;
+                    if (i >= pw) { if (arr[i - pw] + c < v) v = arr[i - pw] + c; if (x > 0 && arr[i - pw - 1] + c < v) v = arr[i - pw - 1] + c; if (x < pw - 1 && arr[i - pw + 1] + c < v) v = arr[i - pw + 1] + c; }
+                    arr[i] = v; }
+                for (let i = N - 1; i >= 0; i--) { const x = i % pw; let v = arr[i];
+                    if (x < pw - 1 && arr[i + 1] + c < v) v = arr[i + 1] + c;
+                    if (i + pw < N) { if (arr[i + pw] + c < v) v = arr[i + pw] + c; if (x < pw - 1 && arr[i + pw + 1] + c < v) v = arr[i + pw + 1] + c; if (x > 0 && arr[i + pw - 1] + c < v) v = arr[i + pw - 1] + c; }
+                    arr[i] = v; } };
+            chess(envHi); chess(envLo);
+            // the midpoint of the upper envelope and the lower envelope (which is -envLo); then the reach: a far texel must stay
+            // behind its own texel, so the midpoint is capped at the texel's own disparity and the upper envelope is taken once
+            // more (it only lowers, i.e. pushes farther, in a cone around a capped texel, and is t-Lipschitz again)
+            const u = new Float64Array(N), u0 = new Float64Array(N); let nCap = 0;
+            for (let i = 0; i < N; i++) { if (!dom[i]) { envHi[i] = INF; continue; } u0[i] = Math.exp(lg[i]); let m = 0.5 * (envHi[i] - envLo[i]); const cap = Math.log(rlJ.dispAt(dQ[i])); if (m > cap) { m = cap; nCap++; } envHi[i] = m; }
+            chess(envHi); for (let i = 0; i < N; i++) if (dom[i]) u[i] = Math.exp(envHi[i]);
+            let nViol1 = 0; for (let i = 0; i < N; i++) { if (!dom[i]) continue; const x = i % pw; const a = Math.log(u[i]); if (x < pw - 1 && dom[i + 1] && Math.abs(Math.log(u[i + 1]) - a) > c * (1 + 1e-9)) nViol1++; if (i + pw < N && dom[i + pw] && Math.abs(Math.log(u[i + pw]) - a) > c * (1 + 1e-9)) nViol1++; }
+        // back to depth; a far texel must stay behind its own (the reach) — the same clamp the plane law applies
+            let nMoved = 0, sMoved = 0, mxMoved = 0;
+            for (let i = 0; i < N; i++) { if (!dom[i]) continue; const v = u[i]; if (v === u0[i]) continue;
+                let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rlJ.dispAt(md) < v) lo = md; else hi = md; }
+                const nd = Math.min(dQ[i], 0.5 * (lo + hi)); const dlt = Math.abs(nd - FF[i]); if (dlt > 0) { nMoved++; sMoved += dlt; if (dlt > mxMoved) mxMoved = dlt; } FF[i] = nd; }
+            console.log('[S7] far field joined across lines (t-Lipschitz envelope midpoint): ' + nDom + ' free texels, ' + nViol0 + ' edges beyond the ratio t before, ' + nViol1 + ' after; ' + nCap + ' capped at their own depth; ' + nMoved + ' texels moved (mean ' + (nMoved ? (sMoved / nMoved).toFixed(4) : '0') + ', max ' + mxMoved.toFixed(4) + ' of the normalised depth); ' + (Date.now() - tJ0) + 'ms'); }
         // S2c: the far side's CLASS. Every walk remembers how far it came from a sky rim and from a non-sky
         // rim; a free texel nearer to a sky rim than to any other far rim has sky behind it (R3 D2's
         // "above the horizon", with the nearest rim standing in for the horizon estimator until one exists).
@@ -8668,7 +8719,7 @@ window._plugGeoBand = function (opts) {
             window._geoFarField2 = planeFS.farField2; window._geoFarRim2 = { j: planeFS.farRimJ2, w: planeFS.farRimW2, side: planeFS.farSide2, axis: planeFS.farAxis };   // S4: the second layer
             window._geoStepRims = planeFS.stepRims;   // S5: step rims (near, far) pairs
             // S7 audit exports: the rim texel per side, the side weight, the far kind's disparity, an eye-distance table
-            window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp;
+            window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp; window._geoFarRimW = planeFS.farRimW;
             { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
