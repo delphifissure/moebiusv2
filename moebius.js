@@ -15943,12 +15943,22 @@ function bgBuildBackgroundLayerCore() {
                                 const outP = new srcP.constructor(srcP.length); let nK = 0, nDropP = 0, nSkyP = 0;
                                 const tornP = window._plugSweepCapture ? new Uint8Array(PNq) : null;   // S6 audit: plate texels touched by a dropped triangle (plate-index rows)
                                 const skyOnP = bgSkyInfOn(), sqP = bgSkyQ();   // S2c: sky plate texels are the sky layer's job (drawn behind everything at infinity)
+                                // S6 (window._plateStretchInner): an unjoined plate edge between two CARRIERS is drawn, stretched — both
+                                // sides are far surfaces, so the skin is between two backgrounds, never a foreground clone; the plate's
+                                // internal cliffs are what opened as slits past 35° on the live pass (note §9). Edges that touch an
+                                // own-depth texel (the foreground rim, the occluder's interior) stay torn: that is the disocclusion.
+                                const carP = (!!window._plateStretchInner && window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : null;
+                                let carS = null; if (carP) { carS = new Uint8Array(PNq); for (let y = 0; y < ph; y++) { const s0 = y * pw, d0 = (ph - 1 - y) * pw; for (let x = 0; x < pw; x++) carS[s0 + x] = carP[d0 + x]; } }
+                                let nStretchP = 0;
                                 for (let t = 0; t < srcP.length; t += 3) {
                                     const a = tiP(srcP[t]), b = tiP(srcP[t + 1]), c = tiP(srcP[t + 2]);
                                     if (skyOnP && pS[a] < sqP && pS[b] < sqP && pS[c] < sqP) { nSkyP++; continue; }
-                                    if (rlP.joinedIdx(a, b, pS, pw) && rlP.joinedIdx(b, c, pS, pw) && rlP.joinedIdx(a, c, pS, pw)) { outP[nK++] = srcP[t]; outP[nK++] = srcP[t + 1]; outP[nK++] = srcP[t + 2]; }
+                                    let keep = rlP.joinedIdx(a, b, pS, pw) && rlP.joinedIdx(b, c, pS, pw) && rlP.joinedIdx(a, c, pS, pw);
+                                    if (!keep && carS && carS[a] && carS[b] && carS[c]) { keep = true; nStretchP++; }
+                                    if (keep) { outP[nK++] = srcP[t]; outP[nK++] = srcP[t + 1]; outP[nK++] = srcP[t + 2]; }
                                     else { nDropP++; if (tornP) { tornP[a] = 1; tornP[b] = 1; tornP[c] = 1; } }
                                 }
+                                if (carS) console.log('[S6] plate internal cliffs stretched: ' + nStretchP + ' unjoined triangles between carriers kept');
                                 if (tornP) { const src = new Uint8Array(PNq); for (let y = 0; y < ph; y++) { const s0 = y * pw, d0 = (ph - 1 - y) * pw; for (let x = 0; x < pw; x++) src[d0 + x] = tornP[s0 + x]; } window._qbPlateTorn = src; }   // source rows, like the other dumps
                                 gQ.setIndex(new THREE.BufferAttribute(outP.slice(0, nK), 1));
                                 console.log('[S2b] plate torn at its own rims: ' + nDropP + ' of ' + (srcP.length / 3 | 0) + ' triangles dropped (' + (100 * nDropP / Math.max(1, srcP.length / 3)).toFixed(2) + '%)' + (skyOnP ? '; ' + nSkyP + ' sky triangles left to the sky layer' : ''));
