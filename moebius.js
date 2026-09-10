@@ -700,9 +700,30 @@ function bgFarSidePlane(dQ, pw, ph) {
     const farRimJ = new Int32Array(2 * N).fill(-1), farRimW = new Int32Array(2 * N), farMix = new Float32Array(N);
     // S4: the second layer per texel — its disparity, the rim run it comes from (texel, window, side along the axis)
     const farDisp2 = new Float32Array(N).fill(-1), farField2 = new Float32Array(N).fill(-1), farRimJ2 = new Int32Array(N).fill(-1), farRimW2 = new Int32Array(N), farSide2 = new Int8Array(N); let nLayer2 = 0;
+    // S7 PASS 1: the chosen candidate per texel and side (row -, row +, column -, column +), stored by its rim texel, and
+    // its second layer's rim texel. Pass 3 rebuilds the candidate from the rim texel: from the per-line fit today
+    // (bit-identical to the single loop it replaces), from a plane pooled across the lines that see the same far
+    // surface next (the seam audit, note §10a: the plate's seams are cross-line disagreements and axis flips).
+    const cJ = [new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1)];
+    const cN = [new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1)];
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
-        const row = combine(0, cand(0, y, x, -1, i), cand(0, y, x, +1, i), x, i);
-        const colR = combine(1, cand(1, x, y, -1, i), cand(1, x, y, +1, i), y, i);
+        const cs4 = [cand(0, y, x, -1, i), cand(0, y, x, +1, i), cand(1, x, y, -1, i), cand(1, x, y, +1, i)];
+        for (let s4 = 0; s4 < 4; s4++) { const c = cs4[s4]; if (c) { cJ[s4][i] = c.j; if (c.next) cN[s4][i] = c.next.j; } } }
+    // the candidate of run (rim texel j) for texel i on line l at position x, seen along axis ax in direction dir — the
+    // same arithmetic as cand's (window, fit, thin evidence, ground cut), without the arrival bookkeeping
+    const rebuild = (ax, l, x, dir, i, j) => { if (j < 0) return null;
+        const p = ax === 0 ? j % pw : (j - j % pw) / pw; const a = rs[ax][j], b = re[ax][j], len = b - a + 1, g = Math.abs(p - x);
+        const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;
+        const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;
+        const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1]; const thin = len < g + 1;
+        if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
+        if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; }
+        return { g, p, m, v0, w, len, j, thin }; };
+    const cOf = (s4, ax, l, x, dir, i) => { const c = rebuild(ax, l, x, dir, i, cJ[s4][i]); if (c) c.next = rebuild(ax, l, x, dir, i, cN[s4][i]); return c; };
+    // S7 PASS 3: combine the two sides per axis, arbitrate the axes, export (unchanged from the single loop)
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
+        const row = combine(0, cOf(0, 0, y, x, -1, i), cOf(1, 0, y, x, +1, i), x, i);
+        const colR = combine(1, cOf(2, 1, x, y, -1, i), cOf(3, 1, x, y, +1, i), y, i);
         // Two rims that agree on ONE plane (kind 2) are a positive detection of a surface continuing behind the
         // occluder; an axis whose two rims are different surfaces (kinds 3, 4) only says a boundary lies somewhere
         // in the gap. So an axis with the same-plane finding wins outright, and the nearer rim decides only when
