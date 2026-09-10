@@ -701,6 +701,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     // S4: the second layer per texel — its disparity, the rim run it comes from (texel, window, side along the axis)
     const farDisp2 = new Float32Array(N).fill(-1), farField2 = new Float32Array(N).fill(-1), farRimJ2 = new Int32Array(N).fill(-1), farRimW2 = new Int32Array(N), farSide2 = new Int8Array(N); let nLayer2 = 0;
     const farM = new Float32Array(N);   // S7: the winning candidate's slope along its axis (disparity per texel) — the legitimate step the join allows along that line
+    const farCut = new Uint8Array(N), farAxV = new Float32Array(2 * N).fill(-1), farAxS = new Float32Array(2 * N).fill(-1);   // S7b audit: ground-cut flag; the row and column candidates' values and uncertainties
     // S7 PASS 1: the chosen candidate per texel and side (row -, row +, column -, column +), stored by its rim texel, and
     // its second layer's rim texel. Pass 3 rebuilds the candidate from the rim texel: from the per-line fit today
     // (bit-identical to the single loop it replaces), from a plane pooled across the lines that see the same far
@@ -722,8 +723,11 @@ function bgFarSidePlane(dQ, pw, ph) {
         const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;
         const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1]; const thin = len < g + 1;
         if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
-        if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; }
-        return { g, p, m, v0, w, len, j, thin }; };
+        let cut = false; if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; cut = true; }
+        // mv: the slope the VALUE follows along this axis (S7b, D4). The ground cut keeps m = 0 for combine's crossing/same-plane
+        // tests while the value follows the ground plane at its own slope; the join's step bound and the audits need the latter.
+        const mv = cut ? (ax === 1 ? ground.c : ground.b) : m;
+        return { g, p, m, v0, w, len, j, thin, cut, mv }; };
     const cOf = (s4, ax, l, x, dir, i) => { const c = rebuild(ax, l, x, dir, i, cJ[s4][i]); if (c) c.next = rebuild(ax, l, x, dir, i, cN[s4][i]); return c; };
     // S7 PASS 3: combine the two sides per axis, arbitrate the axes, export (unchanged from the single loop)
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
@@ -756,7 +760,12 @@ function bgFarSidePlane(dQ, pw, ph) {
             const nx = pick[1] === 4 ? (sideL ? pick[4] : pick[3]) : (cs && cs.next);
             if (nx) { const pos = axv === 1 ? x : y; let v2 = isSky[nx.j] ? 0 : (nx.v0 + nx.m * (pos - nx.p)); if (v2 < dispFloor) v2 = dispFloor; if (v2 > disp[i]) v2 = disp[i];
                 if (Math.abs(v2 - pick[0]) > tol[i]) { farDisp2[i] = v2; farRimJ2[i] = nx.j; farRimW2[i] = nx.w; farSide2[i] = sideL ? -1 : 1; nLayer2++; } } }
-        farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++; { const cW = pick[5] >= 0.5 ? (pick[3] || pick[4]) : (pick[4] || pick[3]); farM[i] = cW ? cW.m : 0; } }
+        farDisp[i] = v; farKind[i] = pick[1]; farAxis[i] = axv; kindCount[pick[1]]++;
+        { const cW = pick[5] >= 0.5 ? (pick[3] || pick[4]) : (pick[4] || pick[3]);
+            farM[i] = pick[1] === 2 ? (disp[pick[4].j] - disp[pick[3].j]) / (pick[4].p - pick[3].p) : (cW ? cW.mv : 0); farCut[i] = cW && cW.cut ? 1 : 0; }
+        // S7b audit: the two axes' values and the uncertainty of each (tol/2 at the rim plus the slope uncertainty times the distance, the nearer side)
+        { const sig = (pk) => { if (!pk) return -1; const c = pk[5] >= 0.5 ? (pk[3] || pk[4]) : (pk[4] || pk[3]); return c ? tol[i] / 2 + c.g * tol[c.j] / (2 * Math.max(1, c.w - 1)) : -1; };
+            farAxV[2 * i] = row ? row[0] : -1; farAxV[2 * i + 1] = colR ? colR[0] : -1; farAxS[2 * i] = sig(row); farAxS[2 * i + 1] = sig(colR); } }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
     const sqDisp = skyOn ? rl.dispAt(sq) : -1;
     for (let i = 0; i < N; i++) { if (!farAxis[i]) continue; const v = farDisp[i];
@@ -809,7 +818,7 @@ function bgFarSidePlane(dQ, pw, ph) {
                 p = b + 1; } } }   // one run at a time: every consecutive pair is tested
     const stepRims = Int32Array.from(stepList);
     console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel planes (a step inside one surface; its face is synthesised when window._stepFaces is on); rejected: ' + nStepNotPar + ' not parallel, ' + nStepNoPerp + ' without a gradient across the line');
-    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, farCut, farAxV, farAxS, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8746,6 +8755,7 @@ window._plugGeoBand = function (opts) {
             window._geoStepRims = planeFS.stepRims;   // S5: step rims (near, far) pairs
             // S7 audit exports: the rim texel per side, the side weight, the far kind's disparity, an eye-distance table
             window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp; window._geoFarRimW = planeFS.farRimW;
+            window._geoFarM = planeFS.farM; window._geoFarCut = planeFS.farCut; window._geoFarAxV = planeFS.farAxV; window._geoFarAxS = planeFS.farAxS; window._geoFarDisp2 = planeFS.farDisp2; window._geoFarRimJ2 = planeFS.farRimJ2; window._geoFarSide2 = planeFS.farSide2;   // S7b audit
             { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
