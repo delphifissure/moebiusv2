@@ -7,7 +7,7 @@ const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
-const WT = '/workspace/mm', H = path.join(WT, 'harness');
+const H = __dirname, WT = path.resolve(__dirname, '..');
 const OUT = process.env.OUT || '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad';
 
 (async () => {

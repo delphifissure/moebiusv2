@@ -7,7 +7,7 @@ const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
-const WT = '/workspace/mm', H = path.join(WT, 'harness');
+const H = __dirname, WT = path.resolve(__dirname, '..');
 const ASSET = process.argv[2] || 'troll';
 const SRC = { troll: ['defaultImgColor.png','defaultImgDepth.png'],
               star: ['starwatcher_color.png','starwatcher_depth.png'],

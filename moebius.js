@@ -2844,6 +2844,10 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_sdHighlight: { value: false },   // A36: SD-region preview
         u_sdMask: { value: null },
         u_sdMaskTexel: { value: new THREE.Vector2(1/1024, 1/1024) },
+        // C (note S17): the PLACEHOLDER CLASS per plate texel, what the SD-regions view tints and the bundle's inpaint mask —
+        // 1 paint (a synthesised colour inside the texture tier, or no tier), 2 band outside the tier (the wash may stay),
+        // 3 carrier-only (coloured for continuity, never demanded), 4 plate 2. u_sdMask (the band) stays the tear/stretch gate.
+        u_sdPaint: { value: null }, u_sdPaintAll: { value: false }, u_sdPaintOnly: { value: false },
         // A210: the SOURCE FRAME rect in world x/y (the content mesh rect).
         // The user's classification rule: anything OUTSIDE this rect is
         // OUTPAINT demand, anything inside is INPAINT (disocclusions). The
@@ -2950,6 +2954,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform bool u_useDepthGrad;   uniform float u_depthGradThreshold;
         uniform bool u_cutSharp; // RUNG cut: certified-asset threshold override (0.008)
         uniform bool u_sdHighlight; uniform sampler2D u_sdMask; uniform vec2 u_sdMaskTexel;
+        uniform sampler2D u_sdPaint; uniform bool u_sdPaintAll; uniform bool u_sdPaintOnly;   // C: placeholder class (see the uniform table)
         uniform vec2 u_frameC; uniform vec2 u_frameH;   // A210: source frame rect, world x/y
         uniform float u_frameZ;                         // A210b: the frame plane (ray test)
         uniform bool u_useBgIslands; uniform sampler2D u_bgIslandMask;
@@ -3474,7 +3479,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
     // source UV and cannot address beyond-frame space at all). The previous
     // depth-graded tint is retired: colour now carries the in/out semantic.
     const sdHighlightLogicGLSL = `
-        if (u_sdHighlight) {
+        if (u_sdHighlight || u_sdPaintOnly) {
             if (u_isBackgroundLayer) {
                 // A210b: for CONTENT-BEARING fragments the classification is
                 // the content's own x/y against the frame rect — skirt/apron
@@ -3484,23 +3489,29 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // is classified at the far volume extent it sits on.)
                 bool outFrame = (abs(vWorldPos.x - u_frameC.x) > u_frameH.x + 1e-5) ||
                                 (abs(vWorldPos.y - u_frameC.y) > u_frameH.y + 1e-5);
-                if (outFrame) {
+                // C: the tint follows the PLACEHOLDER CLASS (u_sdPaint), not the band: the wash is painted on the carriers
+                // with a far side (the plane colour's domain), and band texels that are their own far side keep the source.
+                float cls = u_sdPaintAll ? 1.0 : texture2D(u_sdPaint, vUv).r;
+                if (u_sdPaintOnly) {
+                    originalColor.rgb = (outFrame || cls > 0.5) ? vec3(1.0) : vec3(0.0);   // the check view: white = placeholder
+                } else if (outFrame) {
                     originalColor.rgb = mix(originalColor.rgb, vec3(1.0, 0.45, 0.05), 0.65);
-                } else {
-                    float sdm = texture2D(u_sdMask, vUv).r;
-                    if (sdm > 0.5) {
-                        float edge = 0.0;
-                        for (int k = 0; k < 4; k++) {
-                            vec2 o = (k == 0) ? vec2( 2.0, 0.0) : (k == 1) ? vec2(-2.0, 0.0)
-                                   : (k == 2) ? vec2(0.0,  2.0) : vec2(0.0, -2.0);
-                            if (texture2D(u_sdMask, vUv + o * u_sdMaskTexel).r < 0.5) edge = 1.0;
-                        }
-                        originalColor.rgb = mix(originalColor.rgb, vec3(0.15, 0.75, 1.0), 0.55);
-                        if (edge > 0.5) originalColor.rgb = mix(originalColor.rgb, vec3(1.0), 0.75);
+                } else if (cls > 0.5) {
+                    float edge = 0.0;
+                    if (!u_sdPaintAll) for (int k = 0; k < 4; k++) {
+                        vec2 o = (k == 0) ? vec2( 2.0, 0.0) : (k == 1) ? vec2(-2.0, 0.0)
+                               : (k == 2) ? vec2(0.0,  2.0) : vec2(0.0, -2.0);
+                        if (texture2D(u_sdPaint, vUv + o * u_sdMaskTexel).r < 0.5) edge = 1.0;
                     }
+                    vec3 tint = (cls < 1.5) ? vec3(0.15, 0.75, 1.0)      // 1 paint: cyan
+                              : (cls < 2.5) ? vec3(0.35, 0.40, 0.85)     // 2 band outside the tier: blue
+                              : (cls < 3.5) ? vec3(0.10, 0.70, 0.50)     // 3 carrier-only: teal
+                                            : vec3(1.00, 0.20, 0.90);    // 4 plate 2: magenta
+                    originalColor.rgb = mix(originalColor.rgb, tint, 0.55);
+                    if (edge > 0.5) originalColor.rgb = mix(originalColor.rgb, vec3(1.0), 0.75);
                 }
             } else {
-                originalColor.rgb *= 0.35;   // dim FG so the regions read through
+                originalColor.rgb = u_sdPaintOnly ? vec3(0.0) : originalColor.rgb * 0.35;   // dim FG so the regions read through
             }
         }
     `;
@@ -8589,6 +8600,7 @@ window._plugGeoBand = function (opts) {
     opts = opts || {};
     const t0 = Date.now();
     window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
+    window._qbPlatePaint = null; window._qbPlate2Has = null; window._qbSkyColor = null; window._qbMargin = null;   // C: the bundle's captures are this bake's or nothing
     window._geoLipDeep = null; window._geoLipNear = null; window._geoLipSpread = null; window._geoKind = null; window._geoProv = null; window._geoClass = null; window._geoPost = null; window._geoRampDrop = null;   // A252
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
@@ -9687,22 +9699,39 @@ function _renderBufferToCanvas(postProcessQuad, texA, texB, mode, w, h) {
 }
 
 // Minimal STORE-only ZIP writer (no dependencies, no compression).
+const _crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+function _crc32(d) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < d.length; i++) c = _crcTable[(c ^ d[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// C: a 16-bit greyscale PNG, synchronous and without a library (the canvas cannot write 16 bits). PNG (ISO/IEC 15948 / RFC 2083):
+// IHDR bit depth 16, colour type 0; IDAT is a zlib stream (RFC 1950) of the filtered scanlines (filter byte 0, big-endian
+// samples) in STORED deflate blocks (RFC 1951 §3.2.4, at most 65 535 bytes each) with the Adler-32 trailer. ~3 MB per plate.
+function _png16Gray(u16, w, h) {
+    const rowLen = 1 + 2 * w, raw = new Uint8Array(rowLen * h);
+    for (let y = 0; y < h; y++) { const o = y * rowLen; raw[o] = 0; for (let x = 0; x < w; x++) { const v = u16[y * w + x]; raw[o + 1 + 2 * x] = v >> 8; raw[o + 2 + 2 * x] = v & 255; } }
+    const nBlk = Math.max(1, Math.ceil(raw.length / 65535)); const z = new Uint8Array(2 + raw.length + nBlk * 5 + 4); let p = 0;
+    z[p++] = 0x78; z[p++] = 0x01;
+    for (let b = 0; b < nBlk; b++) { const s0 = b * 65535, len = Math.min(65535, raw.length - s0); z[p++] = (b === nBlk - 1) ? 1 : 0; z[p++] = len & 255; z[p++] = (len >> 8) & 255; z[p++] = (~len) & 255; z[p++] = ((~len) >> 8) & 255; z.set(raw.subarray(s0, s0 + len), p); p += len; }
+    let a = 1, bs = 0; for (let i = 0; i < raw.length; i++) { a = (a + raw[i]) % 65521; bs = (bs + a) % 65521; } const adler = ((bs << 16) | a) >>> 0;
+    z[p++] = adler >>> 24; z[p++] = (adler >>> 16) & 255; z[p++] = (adler >>> 8) & 255; z[p++] = adler & 255;
+    const chunk = (type, data) => { const t = new TextEncoder().encode(type); const out = new Uint8Array(12 + data.length); const dv = new DataView(out.buffer); dv.setUint32(0, data.length); out.set(t, 4); out.set(data, 8); const cd = new Uint8Array(4 + data.length); cd.set(t, 0); cd.set(data, 4); dv.setUint32(8 + data.length, _crc32(cd)); return out; };
+    const ihdr = new Uint8Array(13); const dv = new DataView(ihdr.buffer); dv.setUint32(0, w); dv.setUint32(4, h); ihdr[8] = 16; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+    const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', z.subarray(0, p)), chunk('IEND', new Uint8Array(0))];
+    let tot = 0; for (const q of parts) tot += q.length; const out = new Uint8Array(tot); let o = 0; for (const q of parts) { out.set(q, o); o += q.length; } return out;
+}
 function _makeZip(files) { // files: [{name, bytes(Uint8Array)}]
     const enc = new TextEncoder();
-    const crcTable = (() => {
-        const t = new Uint32Array(256);
-        for (let n = 0; n < 256; n++) {
-            let c = n;
-            for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-            t[n] = c >>> 0;
-        }
-        return t;
-    })();
-    const crc32 = (d) => {
-        let c = 0xFFFFFFFF;
-        for (let i = 0; i < d.length; i++) c = crcTable[(c ^ d[i]) & 0xFF] ^ (c >>> 8);
-        return (c ^ 0xFFFFFFFF) >>> 0;
-    };
+    const crc32 = _crc32;
     const chunks = [], central = [];
     let offset = 0;
     const u16 = (v) => new Uint8Array([v & 255, (v >> 8) & 255]);
@@ -9890,9 +9919,87 @@ function exportSDBundle() {
                 'mask_fg_occluder.png': 'white = foreground occluder band (exclude from fill sampling; keeps original pixels)'
             }
         };
+        meta.poseDependent = ['color.png', 'depth_completed.png', 'mask_inpaint.png', 'mask_outpaint.png', 'mask_fg_occluder.png'];   // C: the screen-space contract is this pose's
+        // ===== C: THE PLANE BAKE'S OWN SET (native resolution, 16-bit depths; note S17) =====
+        // The dir_*/out_* sets below are v1's: bgDirectionalExport and bgExtendExport are assigned in buildBackgroundLayer's v1
+        // branch, after the quick bake's return, so a bundle written after a plane bake carried none of the plane bake and the
+        // pass-1 src_* trio instead (a depth that is not the one on screen). Every array here is the quick bake's own capture —
+        // the same arrays harness/a257_probe.js dumps — so the bundle IS the bake.
+        let planeSet = false;
+        if (bgFarRuleOn() && window._bgQuickBaked && window._qbPlateF && window._qbDQ && window._qbSize) {
+            try {
+                const pw = window._qbSize.pw, ph = window._qbSize.ph, N = pw * ph;
+                const flipIdx = (i) => { const x = i % pw, y = (i - x) / pw; return (ph - 1 - y) * pw + x; };   // flipped-row arrays (plateF, plateF2) -> source rows
+                const tag16 = ' [16-bit grey PNG, native ' + pw + 'x' + ph + ', rows top-first; value/65535 = normalised disparity, 1 near, 0 far]';
+                const tag8 = ' [8-bit PNG, native ' + pw + 'x' + ph + ', rows top-first]';
+                const gray16 = (name, get, desc) => { const u = new Uint16Array(N); for (let i = 0; i < N; i++) u[i] = Math.max(0, Math.min(65535, Math.round(get(i) * 65535))); files.push({ name, bytes: _png16Gray(u, pw, ph) }); meta.files[name] = desc + tag16; };
+                const mkC = (W, Hh, fill) => { const cv = document.createElement('canvas'); cv.width = W; cv.height = Hh; const cc = cv.getContext('2d'); const id = cc.createImageData(W, Hh); fill(id.data); cc.putImageData(id, 0, 0); return _canvasToPngBytes(cv); };
+                const mask8 = (name, get, desc) => { files.push({ name, bytes: mkC(pw, ph, (d) => { for (let i = 0; i < N; i++) { const v = get(i); d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255; } }) }); meta.files[name] = desc + tag8; };
+                const rgba8 = (name, arr, desc) => { files.push({ name, bytes: mkC(pw, ph, (d) => { for (let i = 0; i < N; i++) { d[i * 4] = arr[i * 4]; d[i * 4 + 1] = arr[i * 4 + 1]; d[i * 4 + 2] = arr[i * 4 + 2]; d[i * 4 + 3] = 255; } }) }); meta.files[name] = desc + tag8; };
+                const pF = window._qbPlateF, dQ = window._qbDQ, dis = window._qbDisocc, car = window._qbCarrier, paint = window._qbPlatePaint, tier = window._qbBandTier, bp = window._qbBandPose;
+                const cnt = (a, pred) => { if (!a) return null; let n = 0; for (let i = 0; i < N; i++) if (pred ? pred(a[i]) : a[i]) n++; return n; };
+                // source
+                { const L0 = mediaLayers[0]; const img = L0 && ((L0.elements && L0.elements.color) || (L0.textures && L0.textures.color && L0.textures.color.image));
+                  if (img) { const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; cv.getContext('2d').drawImage(img, 0, 0, pw, ph); files.push({ name: 'plane_source_color.png', bytes: _canvasToPngBytes(cv) }); meta.files['plane_source_color.png'] = 'the source picture at the plate grid' + tag8; } }
+                gray16('plane_source_depth16.png', (i) => dQ[i], 'the source depth the bake used (a86/a89 dequantised, conditioned)');
+                // plate 1
+                gray16('plane_plate_depth16.png', (i) => pF[flipIdx(i)], 'plate 1 depth: the plane far field on the carriers, the source depth elsewhere — the depth conditioning for plane_plate_color');
+                if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) rgba8('plane_plate_color.png', window._qbPlateColor, 'plate 1 colour: the source outside the placeholder set, the wash (rim-window means, harmonic membrane) on it — the image to inpaint where plane_mask_inpaint is white');
+                if (paint) {
+                    mask8('plane_mask_inpaint.png', (i) => paint[i] ? 255 : 0, 'white = every plate-1 texel whose colour is a placeholder (classes 1-3): the inpaint region');
+                    mask8('plane_mask_class.png', (i) => paint[i] * 60, '0 = source colour; 60 = class 1 paint (uncovered inside the tier, or no tier set); 120 = class 2 band outside the tier (the wash may stay); 180 = class 3 carrier-only (coloured for continuity, never demanded)');
+                    if (tier) mask8('plane_mask_inpaint_tier.png', (i) => paint[i] === 1 ? 255 : 0, 'white = class 1 only: paint this, the wash covers the rest (tier ' + window._bandTierDeg + ' deg of head angle)');
+                }
+                if (dis) mask8('plane_mask_band.png', (i) => dis[i] ? 255 : 0, 'white = the texture band (texels some pose in the envelope uncovers, + pinholes, + one texel of rounding)');
+                if (car) mask8('plane_mask_carriers.png', (i) => car[i] ? 255 : 0, 'white = the carriers (plate-1 vertices at the far depth: the band plus the landers that keep the sheet continuous)');
+                if (window._qbPlateTorn && window._qbPlateTorn.length === N) mask8('plane_plate_torn.png', (i) => window._qbPlateTorn[i] ? 255 : 0, 'white = plate-1 texels torn from the plate (open under the rim law)');
+                if (bp && bp.length === N) { files.push({ name: 'plane_band_first_uncover.png', bytes: mkC(pw, ph, (d) => { for (let i = 0; i < N; i++) { const v = bp[i] > 1 ? 0 : Math.round(bp[i] * 255); d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = bp[i] > 1 ? 0 : 255; } }) }); meta.files['plane_band_first_uncover.png'] = 'per band texel the head angle at which it is first uncovered, as a fraction of the envelope (0-255); alpha 0 = not in the band' + tag8; }
+                // plate 2
+                const pF2 = window._qbPlateF2, has2 = window._qbPlate2Has;
+                if (pF2 && pF2.length === N && has2) {
+                    gray16('plane_plate2_depth16.png', (i) => pF2[flipIdx(i)], 'plate 2 depth: the second far surface where one exists (plane_plate2_mask), plate 1 elsewhere');
+                    if (window._qbPlateColor2 && window._qbPlateColor2.length === 4 * N) rgba8('plane_plate2_color.png', window._qbPlateColor2, 'plate 2 colour: rim-window means of its own rims — every masked texel is a placeholder');
+                    mask8('plane_plate2_mask.png', (i) => has2[i] ? 255 : 0, 'white = texels that carry a second far surface (all placeholders): inpaint these on plane_plate2_color');
+                }
+                // sky
+                const skyOn = bgSkyInfOn(); const sq = bgSkyQ();
+                if (skyOn) { mask8('plane_sky_mask.png', (i) => dQ[i] < sq ? 255 : 0, 'white = source sky texels (depth below the sky threshold), rendered on the plane at infinity');
+                    if (window._qbSkyColor && window._qbSkyColor.length === 4 * N) rgba8('plane_sky_color.png', window._qbSkyColor, 'the sky layer texture: the source where it is sky, below it each column continues the lowest sky colour (placeholder); clamp-extended three window widths beyond the frame at render'); }
+                // the margin (A245 strips): the plate clamp-extended by (Mx, My) texels, exactly as the strips render it
+                const mg = window._qbMargin;
+                if (mg && window._plugMargin) { const Mx = mg.Mx, My = mg.My, W2 = pw + 2 * Mx, H2 = ph + 2 * My, N2 = W2 * H2;
+                    const src = (i2) => { const x2 = i2 % W2, y2 = (i2 - x2) / W2; const x = Math.max(0, Math.min(pw - 1, x2 - Mx)), y = Math.max(0, Math.min(ph - 1, y2 - My)); return y * pw + x; };
+                    const inM = (i2) => { const x2 = i2 % W2, y2 = (i2 - x2) / W2; return x2 < Mx || y2 < My || x2 >= Mx + pw || y2 >= My + ph; };
+                    files.push({ name: 'plane_out_mask_outpaint.png', bytes: mkC(W2, H2, (d) => { for (let i = 0; i < N2; i++) { const v = inM(i) ? 255 : 0; d[i * 4] = v; d[i * 4 + 1] = v; d[i * 4 + 2] = v; d[i * 4 + 3] = 255; } }) });
+                    if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) files.push({ name: 'plane_out_color.png', bytes: mkC(W2, H2, (d) => { const c = window._qbPlateColor; for (let i = 0; i < N2; i++) { const j = src(i); d[i * 4] = c[j * 4]; d[i * 4 + 1] = c[j * 4 + 1]; d[i * 4 + 2] = c[j * 4 + 2]; d[i * 4 + 3] = 255; } }) });
+                    { const u = new Uint16Array(N2); for (let i = 0; i < N2; i++) u[i] = Math.max(0, Math.min(65535, Math.round(pF[flipIdx(src(i))] * 65535))); files.push({ name: 'plane_out_depth16.png', bytes: _png16Gray(u, W2, H2) }); }
+                    const tagM = ' [' + W2 + 'x' + H2 + ' = plate + margin (' + Mx + ', ' + My + ') texels each side, rows top-first]';
+                    meta.files['plane_out_mask_outpaint.png'] = 'white = the beyond-frame margin the strips show clamp-extended: the outpaint region' + tagM;
+                    meta.files['plane_out_color.png'] = 'plate 1 colour edge-extended into the margin (outpaint seed)' + tagM;
+                    meta.files['plane_out_depth16.png'] = 'plate 1 depth edge-extended into the margin (16-bit)' + tagM;
+                    meta.plane_margin = { Mx, My, clip: mg.clip, note: 'clip = picture: the strips are drawn only inside the frame\'s rest footprint; window: the whole portal' }; }
+                const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
+                meta.plane = {
+                    nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null,
+                    depth: { convention: 'normalised disparity d in [0,1] (1 = near, 0 = far); the app maps d to view depth with outerVolumeDepth / innerVolumeDepth / currentNormPortalPlane (the portal depth law)', outerVolumeDepth: (typeof outerVolumeDepth === 'number') ? outerVolumeDepth : null, innerVolumeDepth: (typeof innerVolumeDepth === 'number') ? innerVolumeDepth : null, currentNormPortalPlane: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : null,
+                             sourceGrid: window._qbSrcGrid ?? null, sourceNoiseSigma: window._qbSrcNoise ?? null, visibleStep: window._qbVisStep ?? null, effectiveQuantum: window._qbSrcQuantum ?? null, skyThreshold: skyOn ? sq : null },
+                    envelope: { halfAngleHDeg: bgViewFadeEndDeg, halfAngleVDeg: (typeof bgViewFadeEndDegV === 'number') ? bgViewFadeEndDegV : null, aspect: bgEnvAspect(), eyeDistanceD: Dm, terrarium: [terrariumWidth, terrariumHeight] },
+                    groundPlane: window._geoGround || null, bandTierDeg: window._bandTierDeg || 0,
+                    counts: { band: cnt(dis), carriers: cnt(car), placeholders: cnt(paint), paintClass1: cnt(paint, (v) => v === 1), bandOutsideTier: cnt(paint, (v) => v === 2), carrierOnly: cnt(paint, (v) => v === 3), plate2: has2 ? cnt(has2) : 0, sky: skyOn ? cnt(dQ, (v) => v < sq) : 0, torn: cnt(window._qbPlateTorn), clones: window._qbCloneCount ?? null },
+                    placeholderClasses: { 1: 'paint: synthesised colour uncovered inside the tier (or no tier)', 2: 'band outside the tier: synthesised, the wash may stay', 3: 'carrier-only: synthesised for continuity, never demanded', 4: 'plate 2 (its own files)' },
+                    liveView: 'SD regions: cyan = class 1, blue = 2, teal = 3, magenta = plate 2, orange = beyond the frame, backdrop = uncovered',
+                    notes: ['16-bit files clamp d to [0,1]: sky texels (plate depth a hair below 0 under the plane at infinity) read 0 — use plane_sky_mask, not a threshold, to find them',
+                            'plate 2 depth equals plate 1 where plane_plate2_mask is black (the vertex rides plate 1)',
+                            'no reimport of this set exists yet; the legacy Import SD Inpaint Result builds a patch mesh from one colour+depth pair'] };
+                planeSet = true;
+                console.log('[SD-BUNDLE] plane set: ' + files.filter(f => f.name.startsWith('plane_')).length + ' files at ' + pw + 'x' + ph + '; counts ' + JSON.stringify(meta.plane.counts));
+            } catch (eP) { console.error('[SD-BUNDLE] plane set FAILED:', eP); }
+        }
         // Source-space artifacts (view-independent — this is the set the
         // diffusion stage should actually consume; build the BG layer first).
-        if (typeof srcBandTargetA !== 'undefined' && srcBandTargetA && bgDepthTarget && bgColorTarget) {
+        if (planeSet) {
+            meta.legacy_omitted = { files: ['src_band_mask.png', 'src_bg_depth_completed.png', 'src_bg_color_baked.png'], reason: 'pass-1 (fronts band) build products at canvas size, not the plane bake on screen; the plane_* set replaces them' };
+        } else if (typeof srcBandTargetA !== 'undefined' && srcBandTargetA && bgDepthTarget && bgColorTarget) {
             addFile('src_band_mask.png', srcBandTargetA.texture, null, 12);
             addFile('src_bg_depth_completed.png',
                 (typeof mediaLayers !== 'undefined' && mediaLayers[0] && mediaLayers[0].textures.bgDepthBand)
@@ -14839,7 +14946,7 @@ function bgBuildBackgroundLayerCore() {
             renderer.setRenderTarget(null);
             // quick mode replaces any prior stack
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.ring) { for (const m of bgLayerMesh.userData.ring) { scene.remove(m); m.geometry.dispose(); } bgLayerMesh.userData.ring = null; }   // A245 ring
-            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) { const sM = bgLayerMesh.userData.sky; scene.remove(sM); sM.geometry.dispose(); if (sM.material.map) sM.material.map.dispose(); sM.material.dispose(); bgLayerMesh.userData.sky = null; }   // S2c sky layer
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.sky) { const sM = bgLayerMesh.userData.sky; scene.remove(sM); sM.geometry.dispose(); const mpS = sM.material.map || (sM.material.uniforms && sM.material.uniforms.map && sM.material.uniforms.map.value); if (mpS) mpS.dispose(); sM.material.dispose(); bgLayerMesh.userData.sky = null; }   // S2c sky layer
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) { const p2 = bgLayerMesh.userData.plate2; scene.remove(p2); p2.geometry.dispose(); try { const u = p2.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} p2.material.dispose(); bgLayerMesh.userData.plate2 = null; }   // S4 plate 2
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) { const pS = bgLayerMesh.userData.steps; scene.remove(pS); pS.geometry.dispose(); try { const u = pS.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} pS.material.dispose(); bgLayerMesh.userData.steps = null; }   // S5 step faces
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
@@ -15205,6 +15312,7 @@ function bgBuildBackgroundLayerCore() {
             // cloned), mixed by the same weight as the depth (the line through two rims, or one side). The band's
             // outer ring takes those colours as Dirichlet values and the interior is the harmonic membrane between
             // them (Perez, Gangnet & Blake 2003), so the fill is smooth in 2D and made only of far-surface colours.
+            let platePaintDT = null;   // C: the placeholder class texture (flipped rows like maskF); null -> the band (maskDT) stands in
             if (!plateColorTex && bgFarRuleOn() && window._geoFarRim && window._geoFarRim.j && window._geoFarRim.j.length === 2 * PNq) {
                 try {
                     const tPC0 = Date.now(); const FR = window._geoFarRim;
@@ -15224,6 +15332,13 @@ function bgBuildBackgroundLayerCore() {
                         if (jA >= 0 && mA > 0) { winMean(jA, FR.w[2 * i], ax, -1); r += mA * acc[0]; g += mA * acc[1]; b += mA * acc[2]; }
                         if (jB >= 0 && mA < 1) { winMean(jB, FR.w[2 * i + 1], ax, +1); r += (1 - mA) * acc[0]; g += (1 - mA) * acc[1]; b += (1 - mA) * acc[2]; }
                         col[i * 3] = r; col[i * 3 + 1] = g; col[i * 3 + 2] = b; hasC[i] = 1; nCol++; }
+                    // C: the placeholder classes — hasC is the truth of "this texel's colour is synthesised" (S17 §2)
+                    { const tierP = (window._qbBandTier && window._qbBandTier.length === PNq) ? window._qbBandTier : null; const paint = new Uint8Array(PNq); const cntP = [0, 0, 0, 0];
+                        for (let i = 0; i < PNq; i++) { if (!hasC[i]) continue; const c = !disocc[i] ? 3 : (tierP && !tierP[i]) ? 2 : 1; paint[i] = c; cntP[c]++; }
+                        window._qbPlatePaint = paint;
+                        const pfP = new Float32Array(PNq); for (let y = 0; y < ph; y++) { const s0 = y * pw, d0 = (ph - 1 - y) * pw; for (let x = 0; x < pw; x++) pfP[d0 + x] = paint[s0 + x]; }
+                        platePaintDT = new THREE.DataTexture(pfP, pw, ph, THREE.RedFormat, THREE.FloatType); platePaintDT.needsUpdate = true; platePaintDT.flipY = false; platePaintDT.minFilter = THREE.NearestFilter; platePaintDT.magFilter = THREE.NearestFilter; platePaintDT.generateMipmaps = false;
+                        console.log('[C] placeholder classes: paint ' + cntP[1] + ', band outside the tier ' + cntP[2] + ', carrier-only ' + cntP[3] + ' (' + nCol + ' synthesised texels of ' + PNq + ')'); }
                     // ring = domain texels (band with a far side) touching anything outside the domain, Dirichlet; interior = membrane unknowns.
                     // (Measured with "touching a non-band texel": the box's outline texels were interior, because the band's margin
                     // — texels whose plate depth is their own — surrounds the silhouette; the 150 ring texels left were the floor
@@ -15263,7 +15378,7 @@ function bgBuildBackgroundLayerCore() {
                     plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
                     if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
                     console.log('[S3] plane colour: ' + nCol + ' band texels coloured from their own rims (' + nRing + ' ring as Dirichlet, ' + nU + ' interior by the membrane, ' + mgC.sweeps[0][1] + ' cycles, err ' + (mgC.residual).toFixed(2) + '/255); ' + (Date.now() - tPC0) + 'ms');
-                } catch (ePC) { console.warn('[S3] plane colour failed, falling back to the membrane:', ePC); plateColorTex = null; }
+                } catch (ePC) { console.warn('[S3] plane colour failed, falling back to the membrane:', ePC); plateColorTex = null; platePaintDT = null; window._qbPlatePaint = null; }
             }
             // ===== A213 DEPTH-GATED BAND FILL (default) =====
             // The a212 attribution chain convicted the wash: it is one-sided
@@ -15653,9 +15768,11 @@ function bgBuildBackgroundLayerCore() {
             // the FG). Default to matching the FG (0); window._plugZBias restores it.
             matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) + (window._plugZBias ? -0.004 : 0);
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
+            if (matQ.uniforms.u_sdPaint) matQ.uniforms.u_sdPaint.value = platePaintDT || maskDT;   // C: the SD-regions tint reads the placeholder class (the band where no plane colour ran)
             // A84: the FG material needs the mask too — the stretch cut is
             // gated by reveal backing (see the fragment shader).
             if (L.mesh.material.uniforms.u_sdMask) { L.mesh.material.uniforms.u_sdMask.value = maskDT; L.mesh.material.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
+            if (L.mesh.material.uniforms.u_sdPaint) L.mesh.material.uniforms.u_sdPaint.value = platePaintDT || maskDT;
             // ================================================================
             // A161 THE DEPTH TEST IS THE GATE — THE MASK CANNOT BE
             // ================================================================
@@ -16461,6 +16578,7 @@ function bgBuildBackgroundLayerCore() {
                     const barX = (typeof terrariumWidth === 'number') ? Math.max(0, (terrariumWidth - w0) / 2) * pw / w0 : 0;
                     const barY = (typeof terrariumHeight === 'number') ? Math.max(0, (terrariumHeight - h0) / 2) * ph / h0 : 0;
                     const M = Math.ceil(sMaxM) + 1, Mx = Math.ceil(sMaxM + barX) + 1, My = Math.ceil(sMaxM + barY) + 1;
+                    window._qbMargin = { M, Mx, My, clip: window._plugMargin === 2 ? 'picture' : 'window' };   // C: for the bundle's out_* set
                     const segW = ((gp0.widthSegments || 1) | 0), segH = ((gp0.heightSegments || 1) | 0);
                     const mw = w0 * Mx / pw, mh = h0 * My / ph;                     // margin in world units, per axis
                     const uM = Mx / pw, vM = My / ph;                                // margin in texture units
@@ -16511,9 +16629,23 @@ function bgBuildBackgroundLayerCore() {
                     for (let x = 0; x < pw; x++) { if (colHas[x]) continue; nNoSky++; let xs = -1; for (let r = 1; r < pw; r++) { if (x - r >= 0 && colHas[x - r]) { xs = x - r; break; } if (x + r < pw && colHas[x + r]) { xs = x + r; break; } }
                         if (xs < 0) break; for (let y = 0; y < ph; y++) { const o4 = (y * pw + x) * 4, s4 = (y * pw + xs) * 4; cs[o4] = cs[s4]; cs[o4 + 1] = cs[s4 + 1]; cs[o4 + 2] = cs[s4 + 2]; } }
                     cxS.putImageData(pxS, 0, 0);
+                    window._qbSkyColor = new Uint8ClampedArray(cs);   // C: the sky layer's texture (source rows) for the bundle
                     const texS = new THREE.CanvasTexture(cvS); texS.wrapS = texS.wrapT = THREE.ClampToEdgeWrapping; texS.minFilter = THREE.LinearFilter; texS.magFilter = THREE.LinearFilter;
                     const srcT = L.textures && L.textures.color; if (srcT) { if ('colorSpace' in texS && 'colorSpace' in srcT) texS.colorSpace = srcT.colorSpace; if ('encoding' in texS && 'encoding' in srcT) texS.encoding = srcT.encoding; }
-                    const matS = new THREE.MeshBasicMaterial({ map: texS, depthTest: true, depthWrite: true, side: THREE.DoubleSide });
+                    // C: the sky layer takes the SD-regions view too — below the source sky each column is the continued horizon colour
+                    // (a placeholder, class 1) and beyond the frame the clamp-extended margin (outpaint). A raw ShaderMaterial samples
+                    // and writes the texel unconverted, as the plate's own shader does, so the colours match the MeshBasicMaterial it replaces.
+                    const skyPaintF = new Float32Array(PNq); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) if (!(dQ[y * pw + x] < sqS)) skyPaintF[(ph - 1 - y) * pw + x] = 1;
+                    const skyPaintDT = new THREE.DataTexture(skyPaintF, pw, ph, THREE.RedFormat, THREE.FloatType); skyPaintDT.needsUpdate = true; skyPaintDT.flipY = false; skyPaintDT.minFilter = THREE.NearestFilter; skyPaintDT.magFilter = THREE.NearestFilter; skyPaintDT.generateMipmaps = false;
+                    const matS = new THREE.ShaderMaterial({
+                        uniforms: { map: { value: texS }, u_sdPaint: { value: skyPaintDT }, u_sdHighlight: { value: !!window._sdHighlightOn }, u_sdPaintOnly: { value: !!window._sdPaintOnlyOn } },
+                        vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+                        fragmentShader: 'uniform sampler2D map; uniform sampler2D u_sdPaint; uniform bool u_sdHighlight; uniform bool u_sdPaintOnly; varying vec2 vUv;\n' +
+                            'void main() { vec4 c = texture2D(map, vUv); bool outF = (vUv.x < 0.0 || vUv.x > 1.0 || vUv.y < 0.0 || vUv.y > 1.0); float cls = outF ? 0.0 : texture2D(u_sdPaint, vUv).r;\n' +
+                            '  if (u_sdPaintOnly) { c.rgb = (outF || cls > 0.5) ? vec3(1.0) : vec3(0.0); }\n' +
+                            '  else if (u_sdHighlight) { if (outF) c.rgb = mix(c.rgb, vec3(1.0, 0.45, 0.05), 0.65); else if (cls > 0.5) c.rgb = mix(c.rgb, vec3(0.15, 0.75, 1.0), 0.55); }\n' +
+                            '  gl_FragColor = c; }',
+                        depthTest: true, depthWrite: true, side: THREE.DoubleSide });
                     const skyMesh = new THREE.Mesh(gS, matS);
                     skyMesh.position.copy(L.mesh.position); skyMesh.rotation.copy(L.mesh.rotation); skyMesh.scale.copy(L.mesh.scale);
                     skyMesh.position.z = L.mesh.position.z - Zs;
@@ -16534,7 +16666,7 @@ function bgBuildBackgroundLayerCore() {
                     const has2 = new Uint8Array(PNq); let n2 = 0; const carQ4 = (window._carrierReplace && window._carrierReplace.length === PNq) ? window._carrierReplace : disocc;   // S5: carriers
                     const car2 = (window._carrier2Replace && window._carrier2Replace.length === PNq) ? window._carrier2Replace : null;
                     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (ff2[i] >= 0 && ff2[i] < dQ[i] - q2x && (carQ4[i] || (car2 && car2[i]))) { has2[i] = 1; n2++; } }   // S5: plate 2 on its own carriers too
-                    window._qbPlateF2 = null; window._qbPlateColor2 = null;
+                    window._qbPlateF2 = null; window._qbPlateColor2 = null; window._qbPlate2Has = null;
                     if (n2 > 0 && L.mesh.geometry.index) {
                         const plateF2 = new Float32Array(plateF);
                         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (has2[i]) plateF2[(ph - 1 - y) * pw + x] = ff2[i]; }
@@ -16553,9 +16685,10 @@ function bgBuildBackgroundLayerCore() {
                             for (let k = 0; k < n; k++) { const tt = j + side * k * st; r += s2c[tt * 4]; g += s2c[tt * 4 + 1]; b += s2c[tt * 4 + 2]; } c2[i * 4] = r / n; c2[i * 4 + 1] = g / n; c2[i * 4 + 2] = b / n; }
                         cx2.putImageData(px2, 0, 0); const tex2 = new THREE.CanvasTexture(cv2); tex2.minFilter = THREE.LinearFilter; tex2.magFilter = THREE.LinearFilter; if ('colorSpace' in tex2 && L.textures.color && 'colorSpace' in L.textures.color) tex2.colorSpace = L.textures.color.colorSpace;
                         const mat2 = matQ.clone(); mat2.uniforms.displacementMap.value = plateDT2; mat2.uniforms.map.value = tex2;
+                        if (mat2.uniforms.u_sdPaint) { const p2f = new Float32Array(PNq); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) if (has2[y * pw + x]) p2f[(ph - 1 - y) * pw + x] = 4; const p2DT = new THREE.DataTexture(p2f, pw, ph, THREE.RedFormat, THREE.FloatType); p2DT.needsUpdate = true; p2DT.flipY = false; p2DT.minFilter = THREE.NearestFilter; p2DT.magFilter = THREE.NearestFilter; p2DT.generateMipmaps = false; mat2.uniforms.u_sdPaint.value = p2DT; }   // C: every plate-2 texel is a placeholder (class 4)
                         const m2 = new THREE.Mesh(g2, mat2); m2.position.copy(L.mesh.position); m2.rotation.copy(L.mesh.rotation); m2.scale.copy(L.mesh.scale); m2.renderOrder = bgLayerMesh.renderOrder;
                         bgLayerMesh.userData.plate2 = m2;
-                        if (window._plugSweepCapture) { window._qbPlateF2 = plateF2; window._qbPlateColor2 = c2.slice(); }
+                        if (window._plugSweepCapture) { window._qbPlateF2 = plateF2; window._qbPlateColor2 = c2.slice(); window._qbPlate2Has = has2; }
                         console.log('[S4] plate 2: ' + n2 + ' band texels carry a second layer; ' + ((nK2 / 3) | 0) + ' of ' + ((src2.length / 3) | 0) + ' triangles kept; ' + (Date.now() - t20) + 'ms');
                     } else console.log('[S4] plate 2: no band texel has a second layer');
                 } catch (e2) { console.warn('[S4] plate 2 failed (none):', e2); }
@@ -16592,6 +16725,7 @@ function bgBuildBackgroundLayerCore() {
                     const dtS = new THREE.DataTexture(dS, pw, ph, THREE.RedFormat, THREE.FloatType); dtS.needsUpdate = true; dtS.flipY = false; dtS.minFilter = THREE.NearestFilter; dtS.magFilter = THREE.NearestFilter; dtS.generateMipmaps = false;
                     const gS = new THREE.BufferGeometry(); gS.setAttribute('position', new THREE.BufferAttribute(pos, 3)); gS.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); gS.setIndex(new THREE.BufferAttribute(idx, 1));
                     const matS = matQ.clone(); matS.uniforms.displacementMap.value = dtS; matS.uniforms.map.value = texS; matS.side = THREE.DoubleSide;
+                    if (matS.uniforms.u_sdPaintAll) matS.uniforms.u_sdPaintAll.value = true;   // C: a step face's colour is a rim mean — a placeholder over its whole area
                     const mS = new THREE.Mesh(gS, matS); mS.position.copy(L.mesh.position); mS.rotation.copy(L.mesh.rotation); mS.scale.copy(L.mesh.scale); mS.renderOrder = bgLayerMesh.renderOrder;
                     bgLayerMesh.userData.steps = mS;
                     console.log('[S5] step faces: ' + nP + ' quads between parallel-plane rims, one colour per rim segment (the mean of its rim texels); ' + (Date.now() - tS0) + 'ms');
@@ -20001,7 +20135,7 @@ function _wireDebugSheetControls() {
         const on = !!e.target.checked;
         window._sdHighlightOn = on;   // A210: the demand backdrop follows this
         const setH = (mm) => { if (mm && mm.uniforms && mm.uniforms.u_sdHighlight) mm.uniforms.u_sdHighlight.value = on; };
-        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) setH(bgLayerMesh.material);
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setH(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setH(ud.plate2.material); if (ud.steps) setH(ud.steps.material); if (ud.sky) setH(ud.sky.material); if (ud.back) setH(ud.back.material); }   // C: plate 2, step faces, sky, backs follow the toggle (the ring shares plate 1's material)
         for (const Lx of mediaLayers) if (Lx.mesh) setH(Lx.mesh.material);
         if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr.mesh) setH(Lr.mesh.material);
         if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setH(m.material);
@@ -20009,6 +20143,15 @@ function _wireDebugSheetControls() {
         if (typeof mpiStripMeshes !== 'undefined' && mpiStripMeshes) for (const m of mpiStripMeshes) setH(m.material);
         if (on && (!window._sdMaskTex)) console.warn('[SD-REGIONS] no interior-disocclusion mask yet (run a Quick bake for the cyan inpaint tint) — the orange OUTPAINT marking and the demand backdrop work in every mode, bake or not');
     });
+    // C: the placeholder-only check view (harness/c_audit.js): every fragment white where its colour is a placeholder, black
+    // elsewhere, the foreground black, the demand backdrop white — so "tint == placeholder set" is a pixel count, not an opinion.
+    window._applySdPaintOnly = (on) => {
+        window._sdPaintOnlyOn = !!on;
+        const setP = (mm) => { if (mm && mm.uniforms && mm.uniforms.u_sdPaintOnly) mm.uniforms.u_sdPaintOnly.value = !!on; };
+        for (const Lx of mediaLayers) if (Lx.mesh) setP(Lx.mesh.material);
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setP(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setP(ud.plate2.material); if (ud.steps) setP(ud.steps.material); if (ud.sky) setP(ud.sky.material); if (ud.back) setP(ud.back.material); }
+        if (typeof bgSDDemandMesh !== 'undefined' && bgSDDemandMesh && bgSDDemandMesh.material.uniforms.u_paintOnly) bgSDDemandMesh.material.uniforms.u_paintOnly.value = !!on;
+    };
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._applyPlateOptions) window._applyPlateOptions(); /* read the selects now, not the cached copy (a value set from the console fires no change event) */ if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
     // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
     // pullpush path) — the plane/bake builds are synchronous and would
@@ -22850,10 +22993,11 @@ function bgEnsureSDDemandBackdrop(fC, fH) {
             uniforms: { u_frameC: { value: new THREE.Vector2(0, 0) },
                         u_frameH: { value: new THREE.Vector2(1, 1) },
                         u_frameZ: { value: 0.0 },
-                        u_px:     { value: 0.002 } },
+                        u_px:     { value: 0.002 },
+                        u_paintOnly: { value: false } },   // C: the check view
             vertexShader: `varying vec3 vW; void main() { vW = (modelMatrix * vec4(position,1.0)).xyz;
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-            fragmentShader: `uniform vec2 u_frameC; uniform vec2 u_frameH; uniform float u_frameZ; uniform float u_px; varying vec3 vW;
+            fragmentShader: `uniform vec2 u_frameC; uniform vec2 u_frameH; uniform float u_frameZ; uniform float u_px; uniform bool u_paintOnly; varying vec3 vW;
                 void main() {
                     // A210b: the backdrop sits AT the far volume extent, so
                     // its own x/y IS where the missing far content would
@@ -22865,6 +23009,7 @@ function bgEnsureSDDemandBackdrop(fC, fH) {
                     vec3 c = (m2 > 0.0) ? vec3(1.0, 0.45, 0.05)      // outpaint
                                         : vec3(0.10, 0.55, 0.95);    // unfilled inpaint
                     if (abs(m2) < u_px) c = vec3(1.0);               // the frame line
+                    if (u_paintOnly) { gl_FragColor = vec4(1.0); return; }   // C: uncovered = missing content = placeholder
                     gl_FragColor = vec4(c, 0.85);
                 }`,
             transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
@@ -22884,6 +23029,7 @@ function bgEnsureSDDemandBackdrop(fC, fH) {
     bgSDDemandMesh.scale.set(6 * Math.max(terrariumWidth, fH[0] * 2),
                              6 * Math.max(terrariumHeight, fH[1] * 2), 1);
     const u = bgSDDemandMesh.material.uniforms;
+    if (u.u_paintOnly) u.u_paintOnly.value = !!window._sdPaintOnlyOn;
     u.u_frameC.value.set(fC[0], fC[1]);
     u.u_frameH.value.set(fH[0], fH[1]);
     u.u_frameZ.value = (typeof fC.z === 'number') ? fC.z : portalPlaneWorldZ;
