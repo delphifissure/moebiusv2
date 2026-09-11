@@ -847,7 +847,7 @@ function bgFarSidePlane(dQ, pw, ph) {
                 p = b + 1; } } }   // one run at a time: every consecutive pair is tested
     const stepRims = Int32Array.from(stepList);
     console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel planes (a step inside one surface; its face is synthesised when window._stepFaces is on); rejected: ' + nStepNotPar + ' not parallel, ' + nStepNoPerp + ' without a gradient across the line');
-    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, farCut, farAxV, farAxS, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, groundTex, groundCol, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, farCut, farAxV, farAxS, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8785,6 +8785,7 @@ window._plugGeoBand = function (opts) {
             // S7 audit exports: the rim texel per side, the side weight, the far kind's disparity, an eye-distance table
             window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp; window._geoFarRimW = planeFS.farRimW;
             window._geoFarM = planeFS.farM; window._geoFarCut = planeFS.farCut; window._geoFarAxV = planeFS.farAxV; window._geoFarAxS = planeFS.farAxS; window._geoFarDisp2 = planeFS.farDisp2; window._geoFarRimJ2 = planeFS.farRimJ2; window._geoFarSide2 = planeFS.farSide2;   // S7b audit
+            window._geoGround = planeFS.ground ? { a: planeFS.ground.a, b: planeFS.ground.b, c: planeFS.ground.c } : null; window._geoGroundTex = planeFS.groundTex; window._geoGroundCol = planeFS.groundCol;   // S12 audit: the ground plane (disparity = a + b x + c y) and its texels/columns
             { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
