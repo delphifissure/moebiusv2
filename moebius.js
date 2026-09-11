@@ -404,7 +404,8 @@ function bgRimLawFor(pwArg, phArg) {
     const gmin = (typeof window._rimGrazeDeg === 'number' && window._rimGrazeDeg > 0) ? window._rimGrazeDeg : 2;
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;   // S2c: sky is joined to nothing but sky
     const qKey = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);   // S9: the law caches q; a new depth map with another quantum must rebuild it
-    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|q' + qKey.toExponential(3) + '|sky' + (skyOn ? sq.toExponential(3) : '0');
+    const gKey = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : qKey;
+    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|q' + qKey.toExponential(3) + '|g' + gKey.toExponential(3) + '|sky' + (skyOn ? sq.toExponential(3) : '0');
     if (_bgRimLaw && _bgRimLaw.key === key) return _bgRimLaw;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
     const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
@@ -432,6 +433,14 @@ function bgRimLawFor(pwArg, phArg) {
     const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
     const dispAt = (d) => 1 / zeAt(d);
     const tolAt = (d) => Math.abs(dispAt(Math.min(1, d + q)) - dispAt(Math.max(0, d - q))) + 1e-9;
+    // S10: two tolerances with two meanings. tolAt (above) is the JOIN tolerance — q is the effective quantum, the visible
+    // step on a source finer than the display can show. tolAtG is the PRECISION tolerance — the source's own grid — for
+    // the statistics that ask "does this sample lie on this plane given how precisely it was measured": the ground-plane
+    // detection and its inlier tests, and the slope-uncertainty forms. Measured on S32 with the visible step in both roles:
+    // every hedge texel became a ground inlier (238 400 of 360 000 against 34 400), the ground plane was wrong, the reveal
+    // vanished (recall 0.81 → 0.02). The grid is what the sample's precision is; the visible step is what a difference means.
+    const qg = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : q;
+    const tolAtG = (d) => Math.abs(dispAt(Math.min(1, d + qg)) - dispAt(Math.max(0, d - qg))) + 1e-9;
     const joinedIdx = (i, j, dQ, pwv2) => {
         const pw2 = pwv2 || pwv, N2 = dQ.length;
         const dA = dQ[i], dB = dQ[j];
@@ -445,7 +454,7 @@ function bgRimLawFor(pwArg, phArg) {
         if (xn >= 0 && xn < pw2 && yn >= 0 && (yn * pw2 + xn) < N2) { const pr = 2 * b - dispAt(dQ[yn * pw2 + xn]); if (Math.abs(a - pr) <= tol) return true; }
         return false;
     };
-    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, q };
+    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, tolAtG, q, qg };
     console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
     return _bgRimLaw;
 }
@@ -466,7 +475,11 @@ function bgRimLawOn() { return window._tearLaw === 'rim'; }
 // The shift LUT, the rim law (sky is joined to nothing but sky) and the reach carry the same
 // rule, so the sweep and the render agree.
 function bgSkyInfOn() { return !!window._skyInf; }
-function bgSkyQ() { const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255); return 0.5 * q; }
+// S10: the sky threshold is "source depth below half a step of the SOURCE" — the estimator's zero, a property of the grid,
+// not a tolerance. It reads the grid (window._qbSrcGrid), not the effective quantum: under the visible-step floor the
+// threshold on S32's 16-bit ground would have been 168× larger and classed the far ground as sky (recall 0.81 → 0.02).
+// On 8-bit maps grid = effective quantum, so nothing changes there.
+function bgSkyQ() { const g = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : ((typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255)); return 0.5 * g; }
 function bgSkyZ() {
     const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
     const _cz = (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2;
@@ -510,7 +523,8 @@ function bgFarSidePlane(dQ, pw, ph) {
     const N = pw * ph, rl = bgRimLawFor(pw, ph), skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
     const t0 = Date.now();
     const disp = new Float32Array(N), tol = new Float32Array(N), isSky = new Uint8Array(N);
-    for (let i = 0; i < N; i++) { const d = dQ[i]; const s = skyOn && d < sq; isSky[i] = s ? 1 : 0; disp[i] = s ? 0 : rl.dispAt(d); tol[i] = rl.tolAt(d); }
+    const tolG = new Float32Array(N);   // S10: the source's precision (grid) for the fit statistics; tol[] is the join tolerance (visible step)
+    for (let i = 0; i < N; i++) { const d = dQ[i]; const s = skyOn && d < sq; isSky[i] = s ? 1 : 0; disp[i] = s ? 0 : rl.dispAt(d); tol[i] = rl.tolAt(d); tolG[i] = rl.tolAtG ? rl.tolAtG(d) : tol[i]; }
     const dispFloor = skyOn ? 0 : rl.dispAt(0);
     // runs per axis: rs/re = start/end POSITION along the line of the run containing texel i; prefix sums for O(1) line fits
     const L = [pw, ph], nL = [ph, pw], stepA = [1, pw];
@@ -566,13 +580,13 @@ function bgFarSidePlane(dQ, pw, ph) {
     let ground = null, nGroundPicks = 0, nGroundIn = 0, nHoriz = 0, nRising = 0; const groundTex = new Uint8Array(N), groundCol = new Uint8Array(pw); { const picks = []; const rising = [];
         for (let x = 0; x < pw; x++) { let y = 0;
             while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j]; const len = b - a + 1;
-                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tol[j] / (2 * Math.max(1, len - 1));
+                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tolG[j] / (2 * Math.max(1, len - 1));
                     if (f[0] > unc) { // the zero row and its bar: least-squares standard errors from the run's own residual (floored at the quantisation bound), 3 sigma
                         let ss = 0; for (let yy = a; yy <= b; yy++) { const e = f[1] + f[0] * yy - disp[yy * pw + x]; ss += e * e; }
-                        const sig = Math.max(Math.sqrt(ss / len), tol[j] / 4), pbar = (a + b) / 2, vbar = f[1] + f[0] * pbar;
+                        const sig = Math.max(Math.sqrt(ss / len), tolG[j] / 4), pbar = (a + b) / 2, vbar = f[1] + f[0] * pbar;
                         const dm = sig * Math.sqrt(12 / (len * (len * len - 1) || 1)), dv = sig / Math.sqrt(len);
                         const z = -f[1] / f[0], dz = 3 * (dv / f[0] + Math.abs(vbar) * dm / (f[0] * f[0]));
-                        rising.push({ x, a, b, len, m: f[0], v0: f[1], tol: tol[j], z, dz }); } }
+                        rising.push({ x, a, b, len, m: f[0], v0: f[1], tol: tolG[j], z, dz }); } }
                 y = b + 1; } }
         nRising = rising.length;
         if (rising.length) { // interval stabbing: the row covered by the most run-length of [z - dz, z + dz] bars
@@ -591,7 +605,7 @@ function bgFarSidePlane(dQ, pw, ph) {
             const b0 = pair.length ? med(pair) : 0, a0 = med(picks.map(p => p.v0 - b0 * p.x));
             // inliers: picks whose mean |residual| to the robust plane is within their own bound; least squares over them
             let Sxx = 0, Sxy = 0, Syy = 0, Sx = 0, Sy = 0, Sn = 0, Sxv = 0, Syv = 0, Sv = 0;
-            for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(a0 + b0 * p.x + c0 * yy - disp[jj]) / tol[jj]; } if (se / p.len > 1) continue; nGroundIn++;   // mean residual in units of each sample's own bound
+            for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(a0 + b0 * p.x + c0 * yy - disp[jj]) / tolG[jj]; } if (se / p.len > 1) continue; nGroundIn++;   // mean residual in units of each sample's own bound
                 for (let yy = p.a; yy <= p.b; yy++) { const v = disp[yy * pw + p.x], x = p.x; Sxx += x * x; Sxy += x * yy; Syy += yy * yy; Sx += x; Sy += yy; Sn++; Sxv += x * v; Syv += yy * v; Sv += v; } }
             let sol = [a0, b0, c0];
             if (Sn >= 3) { const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
@@ -603,7 +617,7 @@ function bgFarSidePlane(dQ, pw, ph) {
             // behind her; a plane that most horizontal runs reject is not a ground, and there is then no bound.
             if (sol[2] > 0 && nGroundIn * 2 >= nGroundPicks) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
                 // the texels of the ground's own runs (a thin ground run continues along the fitted plane, not its own noisy line)
-                for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tol[jj]; } if (se / p.len <= 1) { groundCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } } }
+                for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tolG[jj]; } if (se / p.len <= 1) { groundCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } } }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0]; const sqDispK = skyOn ? rl.dispAt(sq) : -1;
@@ -779,7 +793,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         { const cW = pick[5] >= 0.5 ? (pick[3] || pick[4]) : (pick[4] || pick[3]);
             farM[i] = pick[1] === 2 ? (disp[pick[4].j] - disp[pick[3].j]) / (pick[4].p - pick[3].p) : (cW ? cW.mv : 0); farCut[i] = cW && cW.cut ? 1 : 0; }
         // S7b audit: the two axes' values and the uncertainty of each (tol/2 at the rim plus the slope uncertainty times the distance, the nearer side)
-        { const sig = (pk) => { if (!pk) return -1; const c = pk[5] >= 0.5 ? (pk[3] || pk[4]) : (pk[4] || pk[3]); return c ? tol[i] / 2 + c.g * tol[c.j] / (2 * Math.max(1, c.w - 1)) : -1; };
+        { const sig = (pk) => { if (!pk) return -1; const c = pk[5] >= 0.5 ? (pk[3] || pk[4]) : (pk[4] || pk[3]); return c ? tolG[i] / 2 + c.g * tolG[c.j] / (2 * Math.max(1, c.w - 1)) : -1; };
             farAxV[2 * i] = row ? row[0] : -1; farAxV[2 * i + 1] = colR ? colR[0] : -1; farAxS[2 * i] = sig(row); farAxS[2 * i + 1] = sig(colR); } }
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
     const sqDisp = skyOn ? rl.dispAt(sq) : -1;
@@ -810,11 +824,11 @@ function bgFarSidePlane(dQ, pw, ph) {
     const stepList = []; let nStepPairs = 0, nStepNoPerp = 0, nStepNotPar = 0;
     const fTex = (pw / 2) / Math.tan(rl.hfov / 2), cx0 = (pw - 1) / 2, cy0 = (ph - 1) / 2;
     const perpSlopeAx = (axP, j) => { const x = j % pw, y = (j - x) / pw; const lP = axP === 0 ? y : x; const aP = rs[axP][j], bP = re[axP][j]; const lenP = bP - aP + 1;
-        if (lenP < 2) return null; const fP = fit(axP, lP, aP, bP, aP); return [fP[0], tol[j] / (2 * (lenP - 1))]; };
+        if (lenP < 2) return null; const fP = fit(axP, lP, aP, bP, aP); return [fP[0], tolG[j] / (2 * (lenP - 1))]; };
     // the plane through texel j: slope mL (uncertainty uL) along axis ax, fitted disparity dL at j, slope gP on the other axis
     const planeAt = (ax, j, mL, uL, dL, gP) => { const x = j % pw - cx0, y = (j - (j % pw)) / pw - cy0;
         const A = ax === 0 ? mL : gP[0], B = ax === 0 ? gP[0] : mL, uA = ax === 0 ? uL : gP[1], uB = ax === 0 ? gP[1] : uL;
-        return [A, B, (dL - A * x - B * y) / fTex, uA, uB, (tol[j] / 2 + Math.abs(x) * uA + Math.abs(y) * uB) / fTex]; };
+        return [A, B, (dL - A * x - B * y) / fTex, uA, uB, (tolG[j] / 2 + Math.abs(x) * uA + Math.abs(y) * uB) / fTex]; };
     const parallelPlanes = (P, Q) => { const [A1, B1, C1, a1, b1, c1] = P, [A2, B2, C2, a2, b2, c2] = Q;
         return Math.abs(A1 * B2 - A2 * B1) <= Math.abs(B2) * a1 + Math.abs(A1) * b2 + Math.abs(B1) * a2 + Math.abs(A2) * b1
             && Math.abs(B1 * C2 - B2 * C1) <= Math.abs(C2) * b1 + Math.abs(B1) * c2 + Math.abs(C1) * b2 + Math.abs(B2) * c1
@@ -825,7 +839,7 @@ function bgFarSidePlane(dQ, pw, ph) {
                 const jb = base + b * st, j2 = base + (b + 1) * st; const a2 = rs[ax][j2], b2 = re[ax][j2]; const len1 = b - a + 1, len2 = b2 - a2 + 1;   // jb: the run's last texel, at the rim
                 if (len1 >= 2 && len2 >= 2 && !isSky[jb] && !isSky[j2] && !rl.joinedIdx(jb, j2, dQ, pw)) {
                     const f1 = fit(ax, l, a, b, b), f2 = fit(ax, l, a2, b2, a2);
-                    const u1 = tol[jb] / (2 * (len1 - 1)), u2 = tol[j2] / (2 * (len2 - 1));
+                    const u1 = tolG[jb] / (2 * (len1 - 1)), u2 = tolG[j2] / (2 * (len2 - 1));
                     const g1 = perpSlope(jb), g2 = perpSlope(j2);   // the gradient across the line, from the two texels' runs on the other axis
                     if (!g1 || !g2) nStepNoPerp++;
                     else if (parallelPlanes(planeAt(ax, jb, f1[0], u1, f1[1], g1), planeAt(ax, j2, f2[0], u2, f2[1], g2))) { const near = disp[jb] >= disp[j2] ? jb : j2, far = near === jb ? j2 : jb; stepList.push(near, far); nStepPairs++; }
@@ -941,7 +955,7 @@ function bgSourceQuantum(arr, n) {
     for (const g of CAND) {
         let ok = true;
         for (let i = 0; i < n && ok; i += stride) {
-            if (Math.abs(arr[i] * g - Math.round(arr[i] * g)) > 1e-3) ok = false;
+            if (Math.abs(arr[i] * g - Math.round(arr[i] * g)) > g * 2.384e-7) ok = false;   // S10: float32-aware (see a89)
         }
         if (ok) return 1 / g;
     }
@@ -10494,7 +10508,7 @@ function _v2StretchLayer(pw, ph, dArr) {
         for (const g of [255, 4095, 65535]) {
             let ok = true;
             for (let i = 0; i < N && ok; i += step)
-                if (Math.abs(dArr[i] * g - Math.round(dArr[i] * g)) > 1e-3) ok = false;
+                if (Math.abs(dArr[i] * g - Math.round(dArr[i] * g)) > g * 2.384e-7) ok = false;   // S10: float32-aware (see a89)
             if (ok) { q = 1 / g; break; }
         }
     }
@@ -13739,7 +13753,11 @@ function bgBuildBackgroundLayerCore() {
                 for (const g of CAND) {
                     let ok = true;
                     for (let i = 0; i < PNq && ok; i += Math.max(1, (PNq / 20000) | 0)) {
-                        if (Math.abs(dQ[i] * g - Math.round(dQ[i] * g)) > 1e-3) ok = false;
+                        // S10: the test must admit float32. The A99 decoder stores n/65535 in float32 (24-bit mantissa), whose
+                        // rounding reaches g·2^-24 ≈ 0.004 on the 65535 grid for values near 1 — above the 1e-3 the test used, so
+                        // every 16-bit photograph read as "continuous" (§13a) while the kit's scenes, all below 0.5, passed.
+                        // Tolerance g·2^-22 (two ulps at magnitude 1): 6e-5 for 255, 1e-3 for 4095, 0.0156 for 65535.
+                        if (Math.abs(dQ[i] * g - Math.round(dQ[i] * g)) > g * 2.384e-7) ok = false;
                     }
                     if (ok) { _qStep = 1 / g; break; }
                 }
@@ -13774,7 +13792,29 @@ function bgBuildBackgroundLayerCore() {
                     for (let x = 0; x < pw; x += st) for (let y = 1; y < ph - 1; y += st) { const o = y * pw + x; d2.push(Math.abs(dQ[o + pw] - 2 * dQ[o] + dQ[o - pw])); }
                     d2.sort((a, b) => a - b); const med = d2.length ? d2[d2.length >> 1] : 0;
                     _qSigma = med / (0.6745 * Math.sqrt(6)); _qNoise3 = 3 * _qSigma;
-                    const qEff = _qStep;   // the noise term is not applied (falsified; see above) — window._noiseTol removed with it
+                    // S10 THE VISIBLE STEP IS THE FLOOR OF EVERY TOLERANCE. k is the screen displacement in source texels across
+                    // the depth range at the envelope rim (the a102 shift envelope; a127b prints it); 1/k is the depth step that
+                    // moves a texel by one texel there — below it a step shows nothing, even at the rim (a133 says the same the
+                    // other way: when 1/k < the grid, the fold-correct step is finer than the data). A source whose grid is
+                    // finer than 1/k (16-bit, or a true float) is not more precise than the display can show, so the effective
+                    // quantum — what the rim law's tolAt, the plane law's tol[], the tear floors, the band margins and the sky
+                    // threshold read — is max(grid, 1/k). Derived from the bake's own geometry (resolution, envelope, D, pn),
+                    // no constant. On 8-bit maps q8 = 2.2 × (1/k) on the photograph, so the floor is inactive and the path is
+                    // byte-identical; the 8-bit quantum worked because it happened to sit just above the visible step (§13c).
+                    // window._visStep = 0 disables the floor (A/B: the detected-grid regime, 1/65535 on a 16-bit map).
+                    const _kLut = bgShiftLUTFor(pw, ph), _kVis = Math.max(Math.abs(_kLut.m0), Math.abs(_kLut.m1)), _tauVis = 1 / Math.max(1e-6, _kVis);
+                    // S10c THE FLOOR APPLIES ONLY TO A SOURCE THAT IS NOISIER THAN ITS GRID. The kit's exact 16-bit scenes (σ = 0:
+                    // their median second difference is exactly zero, quantisation is their only error) need the grid: with the
+                    // visible step as the join tolerance S32's far ground read as one flat surface and its reveal vanished
+                    // (recall 0.81 → 0.02 with the floor everywhere; P 0.73 → 0.08 with the precision tests kept at the grid),
+                    // S31 lost 13 points of precision — small slopes integrate over long runs into large depths, so the
+                    // affine-continuity tests are precision tests even though a single step of 1/k is invisible. σ > 0 (the
+                    // S9 diagnostic) says the source's texel-scale jitter exceeds its grid, i.e. the grid is not its precision;
+                    // only then is the visible step the floor. No constant: σ is exactly 0 on quantised and exact data.
+                    const _noisy = _qSigma > 0;
+                    const qEff = (window._visStep === 0 || !_noisy) ? _qStep : Math.max(_qStep, _tauVis);
+                    window._qbVisStep = _tauVis;
+                    console.log('[S10] visible step 1/k = ' + _tauVis.toExponential(3) + ' depth (k = ' + _kVis.toFixed(0) + ' px at cone ' + bgViewFadeEndDeg + 'deg)' + (_qStep > 0 ? ' = ' + (_tauVis / _qStep).toFixed(2) + ' × the grid 1/' + Math.round(1 / _qStep) : '; no grid (float source)') + '; effective quantum ' + qEff.toExponential(3) + (qEff > _qStep ? ' (the visible step; the grid is finer than the display can show)' : ' (the grid)') + (window._visStep === 0 ? ' [floor OFF]' : (!_noisy && _qStep > 0 && _tauVis > _qStep ? ' [floor not applied: σ = 0, the source is exact to its grid]' : '')));
                     let nO = 0, nN = 0; for (const v of d2) { if (v > 2 * _qStep) nO++; if (v > 2 * qEff) nN++; } _brkOld = nO / Math.max(1, d2.length); _brkNew = nN / Math.max(1, d2.length);
                     window._qbSrcGrid = _qStep; window._qbSrcNoise = _qSigma; window._qbSrcQuantum = qEff;   // A160d: the tear's noise floor, now the effective quantum
                     console.log('[S9] source noise (diagnostic): σ = ' + _qSigma.toExponential(2) + (_qStep > 0 ? ' = ' + (_qSigma / _qStep).toFixed(2) + ' × the grid; 3σ would be ' + (_qNoise3 / _qStep).toFixed(2) + ' × the grid' : ' — NO GRID DETECTED: the tolerances fall back to 1/255 and the tear floors to 0 (3σ = ' + _qNoise3.toExponential(2) + ' = ' + (_qNoise3 * 255).toFixed(3) + ' of an 8-bit step)') + '; sampled triples beyond 2× the grid: ' + (100 * _brkOld).toFixed(1) + '%');
@@ -13837,6 +13877,9 @@ function bgBuildBackgroundLayerCore() {
                         '63 texels, so tearing more only opens more of it. Complete the plate first.');
                 }
             } catch (e) { console.warn('[QUICK-BAKE] a127b k unavailable:', e); }
+            // (S10 tried running a86 at the visible step on sources whose grid is finer than it — quantise to the step the display
+            // can show, reconstruct one-step staircases as ramps. Falsified on DA3-16: seams 27 267 → 29 939, tears 84 289 →
+            // 88 727, holes unchanged. Removed; a86 stays at the grid.)
             if (window._noDequant !== true && _qStep > 0) {
                 const _qDen = Math.round(1 / _qStep);
                 const lvQ = new Int32Array(PNq);

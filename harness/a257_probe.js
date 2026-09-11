@@ -20,7 +20,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'a257probe', proces
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (/A25[2-7]\]|A246\]|A244\]|\[S3\]|\[S4\]|\[S5\]|\[S6\]|\[S7\]|\[S9\]|\[S2[bc]\]|FAILED|rror/.test(t)) console.log('  [page:log] ' + t.slice(0, 400)); });
+    page.on('console', m => { const t = m.text(); if (/A25[2-7]\]|A246\]|A244\]|\[S3\]|\[S4\]|\[S5\]|\[S6\]|\[S7\]|\[S9\]|\[S10\]|a89:|\[S2[bc]\]|FAILED|rror/.test(t)) console.log('  [page:log] ' + t.slice(0, 400)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const meta = await page.evaluate(async (o) => {
