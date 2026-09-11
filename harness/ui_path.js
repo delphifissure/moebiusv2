@@ -12,7 +12,7 @@ const OUT = path.join(H, 'shots', 'ui_path', process.env.TAG || 'run'); fs.mkdir
     const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
-    page.on('console', m => { const t = m.text(); if (/\[S6\]|\[S7\]|\[S5\]|\[S3\] far side|A245 plug margin|QUICK-BAKE\] (a126|a162|A21[26]|all-viewpoint)|\[S2b\] sweep|failed|rror/.test(t)) console.log('  [page:log] ' + t.slice(0, 260)); });
+    page.on('console', m => { const t = m.text(); if (/\[S6\]|\[S7\]|\[S9\]|\[S5\]|\[S3\] far side|A245 plug margin|QUICK-BAKE\] (a126|a162|A21[26]|all-viewpoint)|\[S2b\] sweep|failed|rror/.test(t)) console.log('  [page:log] ' + t.slice(0, 260)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth && window._bakePlate); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
     const opts = (process.env.OPTS || 'plane,wash,picture,off,35,off').split(',');

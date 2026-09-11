@@ -403,7 +403,8 @@ function bgRimLawFor(pwArg, phArg) {
     const D = Math.max(1e-3, Math.abs(_cz - _pz));
     const gmin = (typeof window._rimGrazeDeg === 'number' && window._rimGrazeDeg > 0) ? window._rimGrazeDeg : 2;
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;   // S2c: sky is joined to nothing but sky
-    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|sky' + (skyOn ? sq.toExponential(3) : '0');
+    const qKey = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);   // S9: the law caches q; a new depth map with another quantum must rebuild it
+    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|q' + qKey.toExponential(3) + '|sky' + (skyOn ? sq.toExponential(3) : '0');
     if (_bgRimLaw && _bgRimLaw.key === key) return _bgRimLaw;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
     const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
@@ -13742,9 +13743,42 @@ function bgBuildBackgroundLayerCore() {
                     }
                     if (ok) { _qStep = 1 / g; break; }
                 }
-                window._qbSrcQuantum = _qStep;   // A160d: the tear's noise floor
                 if (!_qStep) console.log('[QUICK-BAKE] a89: depth is continuous (no quantisation grid found) — dequantise skipped');
                 else console.log('[QUICK-BAKE] a89: source depth quantum = 1/' + Math.round(1 / _qStep) + (Math.round(1/_qStep) === 255 ? ' (8-bit)' : ''));
+                // S9 THE NOISE TERM. Every tolerance downstream (the rim law's tolAt, the plane law's run test and candidate
+                // admission, the tear floors, the band's one-quantum margins, the sky threshold) reads window._qbSrcQuantum as
+                // the source's noise floor. The grid is that floor only when quantisation is the largest error: on a 16-bit
+                // export of a neural estimator the grid is 1/65535 while the estimator's texel-scale jitter is far larger, and
+                // every tolerance was hundreds of times too tight (note §11b: 79 % of row triples broke runs, seams +40 %).
+                // The quantity the affine rescue cannot predict is the second difference Δ² of the raw depth along a line, so
+                // its scale is the tolerance's natural unit: σ = median|Δ²| / (0.6745·√6) — the median absolute deviation
+                // scaled to a Gaussian σ (1/Φ⁻¹(3/4)), and Var(Δ²) = 6σ² for independent noise — and the floor is the 3σ
+                // bound, the convention this file already uses for the tracker's jitter (a143). On quantised input the
+                // median second difference is 0, so q_eff = max(grid, 3σ) = grid: 8-bit maps and the exact kit scenes are
+                // untouched by construction (measured: identity on S2 and the 8-bit photograph). Only the effective quantum
+                // changes; the dequantiser (a86) and the ordering clamp (a135) keep the true grid (_qStep). window._noiseTol = 0
+                // disables the term for A/B. Measured on the raw dQ, before the dequantiser and despeckle touch it.
+                // FALSIFIED AS A TOLERANCE (Sprint 9, note §13), kept as a DIAGNOSTIC. Two facts came out of the measurement:
+                // (1) the a89 grid test misses every 16-bit photograph — float32 holds n/65535 to ±0.002 on the 65535 grid,
+                // above the 1e-3 test (the kit's scenes pass only because their values stay below 0.5) — so 16-bit maps run
+                // as "continuous" and every consumer falls back to 1/255 (the tear floors to 0): the tolerance regime the
+                // 16-bit runs of §11b/§12 actually used was the 8-bit one, not 1/65535; (2) the 3σ term (5.5e-5 on DA3, 70×
+                // tighter than that fallback) fragmented the run structure ten-fold (DA3: 85 runs/row vs 8; same-plane pairs
+                // 67 679 → 12 056; DA2: holes 417/438/868 px on the user's path). The estimator's texel-scale jitter has a
+                // heavy tail of about one 8-bit step; the Gaussian core is not the tolerance. So q_eff = the grid, always;
+                // σ and the break fractions are logged and exported (window._qbSrcNoise) for the record.
+                let _qNoise3 = 0, _qSigma = 0, _brkOld = 0, _brkNew = 0;
+                {
+                    const st = Math.max(1, Math.round(Math.sqrt(PNq / 40000))), d2 = [];
+                    for (let y = 0; y < ph; y += st) for (let x = 1; x < pw - 1; x += st) { const o = y * pw + x; d2.push(Math.abs(dQ[o + 1] - 2 * dQ[o] + dQ[o - 1])); }
+                    for (let x = 0; x < pw; x += st) for (let y = 1; y < ph - 1; y += st) { const o = y * pw + x; d2.push(Math.abs(dQ[o + pw] - 2 * dQ[o] + dQ[o - pw])); }
+                    d2.sort((a, b) => a - b); const med = d2.length ? d2[d2.length >> 1] : 0;
+                    _qSigma = med / (0.6745 * Math.sqrt(6)); _qNoise3 = 3 * _qSigma;
+                    const qEff = _qStep;   // the noise term is not applied (falsified; see above) — window._noiseTol removed with it
+                    let nO = 0, nN = 0; for (const v of d2) { if (v > 2 * _qStep) nO++; if (v > 2 * qEff) nN++; } _brkOld = nO / Math.max(1, d2.length); _brkNew = nN / Math.max(1, d2.length);
+                    window._qbSrcGrid = _qStep; window._qbSrcNoise = _qSigma; window._qbSrcQuantum = qEff;   // A160d: the tear's noise floor, now the effective quantum
+                    console.log('[S9] source noise (diagnostic): σ = ' + _qSigma.toExponential(2) + (_qStep > 0 ? ' = ' + (_qSigma / _qStep).toFixed(2) + ' × the grid; 3σ would be ' + (_qNoise3 / _qStep).toFixed(2) + ' × the grid' : ' — NO GRID DETECTED: the tolerances fall back to 1/255 and the tear floors to 0 (3σ = ' + _qNoise3.toExponential(2) + ' = ' + (_qNoise3 * 255).toFixed(3) + ' of an 8-bit step)') + '; sampled triples beyond 2× the grid: ' + (100 * _brkOld).toFixed(1) + '%');
+                }
             }
             // A127b PRINT k. k is the screen displacement in SOURCE TEXELS
             // between the near and far ends of the depth range, at the rim of
