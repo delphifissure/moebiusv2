@@ -1,0 +1,86 @@
+{
+ "bristlecone": {
+  "native": [
+   1536,
+   1024
+  ],
+  "working": [
+   1008,
+   672
+  ],
+  "repo_depth": true,
+  "da3_seconds": 14.4,
+  "distinct16": 40431,
+  "note": "working size = DA3 processed size; depth not resampled"
+ },
+ "octopus": {
+  "native": [
+   2229,
+   1482
+  ],
+  "working": [
+   1008,
+   672
+  ],
+  "repo_depth": true,
+  "da3_seconds": 13.1,
+  "distinct16": 40018,
+  "note": "working size = DA3 processed size; depth not resampled"
+ },
+ "room": {
+  "native": [
+   2047,
+   1362
+  ],
+  "working": [
+   1008,
+   672
+  ],
+  "repo_depth": true,
+  "da3_seconds": 12.4,
+  "distinct16": 47236,
+  "note": "working size = DA3 processed size; depth not resampled"
+ },
+ "silverwarrior": {
+  "native": [
+   3000,
+   3000
+  ],
+  "working": [
+   1008,
+   1008
+  ],
+  "repo_depth": true,
+  "da3_seconds": 22.0,
+  "distinct16": 47116,
+  "note": "working size = DA3 processed size; depth not resampled"
+ },
+ "starwatcher": {
+  "native": [
+   1920,
+   1323
+  ],
+  "working": [
+   1008,
+   700
+  ],
+  "repo_depth": true,
+  "da3_seconds": 12.9,
+  "distinct16": 56740,
+  "note": "working size = DA3 processed size; depth not resampled"
+ },
+ "vermeer": {
+  "native": [
+   473,
+   530
+  ],
+  "working": [
+   896,
+   1008
+  ],
+  "repo_depth": false,
+  "da3_seconds": 18.4,
+  "distinct16": 62449,
+  "note": "working size = DA3 processed size; depth not resampled"
+ }
+}

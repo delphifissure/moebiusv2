@@ -13920,7 +13920,7 @@ function bgBuildBackgroundLayerCore() {
                     // S9 diagnostic) says the source's texel-scale jitter exceeds its grid, i.e. the grid is not its precision;
                     // only then is the visible step the floor. No constant: σ is exactly 0 on quantised and exact data.
                     const _noisy = _qSigma > 0;
-                    const qEff = (window._visStep === 0 || !_noisy) ? _qStep : Math.max(_qStep, _tauVis);
+                    const qEff = (window._visStep === 0 || (!_noisy && window._visStep !== 1)) ? _qStep : Math.max(_qStep, _tauVis);   // B: window._visStep = 1 forces the floor (harness A/B of the sigma gate on sky-heavy pictures, where the median second difference is 0 although the rest of the map is noisy)
                     window._qbVisStep = _tauVis;
                     console.log('[S10] visible step 1/k = ' + _tauVis.toExponential(3) + ' depth (k = ' + _kVis.toFixed(0) + ' px at cone ' + bgViewFadeEndDeg + 'deg)' + (_qStep > 0 ? ' = ' + (_tauVis / _qStep).toFixed(2) + ' × the grid 1/' + Math.round(1 / _qStep) : '; no grid (float source)') + '; effective quantum ' + qEff.toExponential(3) + (qEff > _qStep ? ' (the visible step; the grid is finer than the display can show)' : ' (the grid)') + (window._visStep === 0 ? ' [floor OFF]' : (!_noisy && _qStep > 0 && _tauVis > _qStep ? ' [floor not applied: σ = 0, the source is exact to its grid]' : '')));
                     let nO = 0, nN = 0; for (const v of d2) { if (v > 2 * _qStep) nO++; if (v > 2 * qEff) nN++; } _brkOld = nO / Math.max(1, d2.length); _brkNew = nN / Math.max(1, d2.length);
