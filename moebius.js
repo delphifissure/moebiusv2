@@ -405,8 +405,7 @@ function bgRimLawFor(pwArg, phArg) {
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;   // S2c: sky is joined to nothing but sky
     const qKey = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);   // S9: the law caches q; a new depth map with another quantum must rebuild it
     const gKey = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : qKey;
-    const qMap = (window._noiseTiles && window._qbQuantumMap && window._qbQuantumMap.length === pwv * phv) ? window._qbQuantumMap : null;   // S14: per-texel effective quantum (source rows)
-    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|q' + qKey.toExponential(3) + '|g' + gKey.toExponential(3) + '|sky' + (skyOn ? sq.toExponential(3) : '0') + '|m' + (qMap ? window._qbQuantumMapId : 0);
+    const key = pwv + 'x' + phv + '|' + innerVolumeDepth + '|' + outerVolumeDepth + '|' + pn + '|' + D.toFixed(5) + '|' + gmin + '|q' + qKey.toExponential(3) + '|g' + gKey.toExponential(3) + '|sky' + (skyOn ? sq.toExponential(3) : '0');
     if (_bgRimLaw && _bgRimLaw.key === key) return _bgRimLaw;
     const layerAspect = pwv / phv, frameAspect = terrariumWidth / terrariumHeight;
     const layerW = (layerAspect > frameAspect) ? terrariumWidth : terrariumHeight * layerAspect;
@@ -434,8 +433,6 @@ function bgRimLawFor(pwArg, phArg) {
     const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
     const dispAt = (d) => 1 / zeAt(d);
     const tolAt = (d) => Math.abs(dispAt(Math.min(1, d + q)) - dispAt(Math.max(0, d - q))) + 1e-9;
-    const tolAtQ = (d, qq) => Math.abs(dispAt(Math.min(1, d + qq)) - dispAt(Math.max(0, d - qq))) + 1e-9;   // S14: at a given quantum
-    const tolAtI = (d, i) => qMap ? tolAtQ(d, qMap[i]) : tolAt(d);                                          // S14: at texel i's quantum (source rows)
     // S10: two tolerances with two meanings. tolAt (above) is the JOIN tolerance — q is the effective quantum, the visible
     // step on a source finer than the display can show. tolAtG is the PRECISION tolerance — the source's own grid — for
     // the statistics that ask "does this sample lie on this plane given how precisely it was measured": the ground-plane
@@ -450,14 +447,14 @@ function bgRimLawFor(pwArg, phArg) {
         if (skyOn && (dA < sq || dB < sq)) return (dA < sq) && (dB < sq);
         if (joined(dA, dB)) return true;
         const xi = i % pw2, yi = (i - xi) / pw2, xj = j % pw2, yj = (j - xj) / pw2, dx = xj - xi, dy = yj - yi;
-        const a = dispAt(dA), b = dispAt(dB), tol = qMap ? Math.max(tolAtQ(dA, qMap[i]), tolAtQ(dB, qMap[j])) : Math.max(tolAt(dA), tolAt(dB));   // S14: the pair's own quanta
+        const a = dispAt(dA), b = dispAt(dB), tol = Math.max(tolAt(dA), tolAt(dB));
         const xp = xi - dx, yp = yi - dy;
         if (xp >= 0 && xp < pw2 && yp >= 0 && (yp * pw2 + xp) < N2) { const pr = 2 * a - dispAt(dQ[yp * pw2 + xp]); if (Math.abs(b - pr) <= tol) return true; }
         const xn = xj + dx, yn = yj + dy;
         if (xn >= 0 && xn < pw2 && yn >= 0 && (yn * pw2 + xn) < N2) { const pr = 2 * b - dispAt(dQ[yn * pw2 + xn]); if (Math.abs(a - pr) <= tol) return true; }
         return false;
     };
-    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, tolAtG, tolAtQ, tolAtI, q, qg, qMap };
+    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, tolAtG, q, qg };
     console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
     return _bgRimLaw;
 }
@@ -527,7 +524,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     const t0 = Date.now();
     const disp = new Float32Array(N), tol = new Float32Array(N), isSky = new Uint8Array(N);
     const tolG = new Float32Array(N);   // S10: the source's precision (grid) for the fit statistics; tol[] is the join tolerance (visible step)
-    for (let i = 0; i < N; i++) { const d = dQ[i]; const s = skyOn && d < sq; isSky[i] = s ? 1 : 0; disp[i] = s ? 0 : rl.dispAt(d); tol[i] = rl.tolAtI ? rl.tolAtI(d, i) : rl.tolAt(d); tolG[i] = rl.tolAtG ? rl.tolAtG(d) : tol[i]; }
+    for (let i = 0; i < N; i++) { const d = dQ[i]; const s = skyOn && d < sq; isSky[i] = s ? 1 : 0; disp[i] = s ? 0 : rl.dispAt(d); tol[i] = rl.tolAt(d); tolG[i] = rl.tolAtG ? rl.tolAtG(d) : tol[i]; }
     const dispFloor = skyOn ? 0 : rl.dispAt(0);
     // runs per axis: rs/re = start/end POSITION along the line of the run containing texel i; prefix sums for O(1) line fits
     const L = [pw, ph], nL = [ph, pw], stepA = [1, pw];
@@ -13925,41 +13922,15 @@ function bgBuildBackgroundLayerCore() {
                     const _noisy = _qSigma > 0;
                     const qEff = (window._visStep === 0 || (!_noisy && window._visStep !== 1)) ? _qStep : Math.max(_qStep, _tauVis);   // B: window._visStep = 1 forces the floor (harness A/B of the sigma gate on sky-heavy pictures, where the median second difference is 0 although the rest of the map is noisy)
                     window._qbVisStep = _tauVis;
-                    // S14 (window._noiseTiles): THE NOISE IS REGIONAL. One median over the whole map calls a sky picture exact (S19 §3.4:
-                    // more than half its second differences are zero in the flat sky) while its figure is as noisy as the troll. Per
-                    // 32x32 tile the third differences are measured — Δ³ annihilates any quadratic surface (finite differences of
-                    // order 3), so curvature does not read as noise; white texel noise has var(Δ³) = 20 σ² (1+9+9+1), and uniform
-                    // quantisation error alone (var q²/12) gives σ₃ = sqrt(20/12) q = 1.29 q. A tile is NOISY when its MAD-σ₃ exceeds
-                    // that: the source's texel jitter there is above what its grid can explain. The per-texel effective quantum is the
-                    // visible-step floor in noisy tiles and the grid elsewhere (window._qbQuantumMap, source rows), read by the rim
-                    // law's join tolerance and by the plane law's tol[]; the global scalars keep the σ gate above. Measured offline
-                    // first (research/s21): kit 0–0.6 % noisy tiles (S7's canopy 3.7 %), troll DA3 39 %, the sky pictures 17–59 %
-                    // with the sky exact; 8-bit maps 0 %.
-                    window._qbQuantumMap = null; window._qbNoiseTileFrac = null;
-                    if (window._noiseTiles && _qStep > 0) {
-                        const TT = 32, ntx = Math.ceil(pw / TT), nty = Math.ceil(ph / TT); const qMap = new Float32Array(PNq).fill(_qStep); const qFloor = Math.max(_qStep, _tauVis);
-                        const thr = Math.sqrt(20 / 12) * _qStep; let nNoisy = 0, nTexF = 0; const s3s = [];
-                        for (let ty = 0; ty < nty; ty++) for (let tx = 0; tx < ntx; tx++) {
-                            const x0 = tx * TT, y0 = ty * TT, x1 = Math.min(pw, x0 + TT), y1 = Math.min(ph, y0 + TT); const v = [];
-                            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const o = y * pw + x;
-                                if (x >= 1 && x < pw - 2) v.push(Math.abs(dQ[o + 2] - 3 * dQ[o + 1] + 3 * dQ[o] - dQ[o - 1]));
-                                if (y >= 1 && y < ph - 2) v.push(Math.abs(dQ[o + 2 * pw] - 3 * dQ[o + pw] + 3 * dQ[o] - dQ[o - pw])); }
-                            if (!v.length) continue; v.sort((a, b) => a - b); const s3 = v[v.length >> 1] / (0.6745 * Math.sqrt(20));
-                            // S14b (window._noiseTiles === 2): the S10 gate itself applied per tile — the tile's median |Δ²| is nonzero. On the
-                            // troll's DA3 map the Δ³ level test left 59 % of tiles at the grid and fragmented the runs there (10 → 136 per row):
-                            // DA3's smooth regions are below the quantisation level in Δ³ but their second differences still exceed the grid's
-                            // tolerance often enough to break every run. Flat regions (sky, planes) have a median of exactly 0.
-                            let noisy = s3 > thr;
-                            if (window._noiseTiles === 2) { const v2 = [];
-                                for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { const o = y * pw + x;
-                                    if (x >= 1 && x < pw - 1) v2.push(Math.abs(dQ[o + 1] - 2 * dQ[o] + dQ[o - 1]));
-                                    if (y >= 1 && y < ph - 1) v2.push(Math.abs(dQ[o + pw] - 2 * dQ[o] + dQ[o - pw])); }
-                                v2.sort((a, b) => a - b); noisy = v2.length > 0 && v2[v2.length >> 1] > 0; }
-                            if (noisy) { nNoisy++; s3s.push(s3 / _qStep); for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) { qMap[y * pw + x] = qFloor; nTexF++; } } }
-                        s3s.sort((a, b) => a - b);
-                        window._qbQuantumMap = qMap; window._qbQuantumMapId = (window._qbQuantumMapId || 0) + 1; window._qbNoiseTileFrac = nNoisy / (ntx * nty);
-                        console.log('[S14] noise tiles: ' + nNoisy + ' of ' + (ntx * nty) + ' (' + (100 * nNoisy / (ntx * nty)).toFixed(1) + '%) have MAD-σ₃ above the quantisation level ' + Math.sqrt(20 / 12).toFixed(2) + ' × grid' + (s3s.length ? ' (median ' + s3s[s3s.length >> 1].toFixed(2) + ' × grid among them)' : '') + '; per-texel quantum = ' + qFloor.toExponential(3) + ' (the floor) on ' + (100 * nTexF / PNq).toFixed(1) + '% of texels, the grid ' + _qStep.toExponential(3) + ' elsewhere; global q_eff unchanged (' + qEff.toExponential(3) + ')');
-                    }
+                    // S14 (2026-09-12, note S21) — A REGIONAL NOISE GATE WAS BUILT AND REMOVED (rule 7). Per 32x32 tile the source's
+                    // noise was tested (the MAD-σ of third differences against the quantisation level sqrt(20/12)·grid; or this gate's own
+                    // median |Δ²| > 0 per tile) and the visible-step floor applied per texel in noisy tiles only. The tiles found the
+                    // noise where a viewer would put it (the trunk, the sunflowers, the figure; the sky exact), but on the four sky
+                    // pictures the result equalled the forced-floor arm of S19 in every number (layer 2 −30…−80 %, seams +10–25 %,
+                    // holes both ways); the Δ³ rule fragmented the troll's DA3 runs (10 → 136 per row) where its "exact" tiles are not
+                    // segmentable at the grid; the per-tile gate cost S15 (P 0.723 → 0.717, depth 0.184 → 0.213 m) and was identical to
+                    // this global gate on the troll. The flat sky never needed the floor and the figure's floor bought nothing measurable:
+                    // the region of the floor is not the question, its value is. The offline instrument stays in research/s21.
                     console.log('[S10] visible step 1/k = ' + _tauVis.toExponential(3) + ' depth (k = ' + _kVis.toFixed(0) + ' px at cone ' + bgViewFadeEndDeg + 'deg)' + (_qStep > 0 ? ' = ' + (_tauVis / _qStep).toFixed(2) + ' × the grid 1/' + Math.round(1 / _qStep) : '; no grid (float source)') + '; effective quantum ' + qEff.toExponential(3) + (qEff > _qStep ? ' (the visible step; the grid is finer than the display can show)' : ' (the grid)') + (window._visStep === 0 ? ' [floor OFF]' : (!_noisy && _qStep > 0 && _tauVis > _qStep ? ' [floor not applied: σ = 0, the source is exact to its grid]' : '')));
                     let nO = 0, nN = 0; for (const v of d2) { if (v > 2 * _qStep) nO++; if (v > 2 * qEff) nN++; } _brkOld = nO / Math.max(1, d2.length); _brkNew = nN / Math.max(1, d2.length);
                     window._qbSrcGrid = _qStep; window._qbSrcNoise = _qSigma; window._qbSrcQuantum = qEff;   // A160d: the tear's noise floor, now the effective quantum
