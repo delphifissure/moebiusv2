@@ -14048,7 +14048,7 @@ function bgBuildBackgroundLayerCore() {
             // on both sides and unaffected.
             {
                 const TOLd = 0.02;
-                let nFleck = 0;
+                let nFleck = 0, nLine = 0;   // S13: nLine = texels the line rule kept
                 const w25 = new Float32Array(25);
                 for (let pass = 0; pass < 2; pass++) {
                     let moved = 0;
@@ -14072,6 +14072,16 @@ function bgBuildBackgroundLayerCore() {
                             if (Math.abs(v - d0) <= TOLd) own++;
                         }
                         if (own >= 8) continue;
+                        // S13 (window._despeckleLines): a texel through which a ONE-TEXEL LINE passes is not a fleck. Along each of the
+                        // four directions of the same 5x5 window (row, column, the two diagonals) the 4 neighbours (2 each side) all
+                        // within TOLd of d0 attest a line at least 5 texels long — the window's own extent, no new constant. The
+                        // 8-of-25 majority alone is a two-texel WIDTH threshold: it erased S5's one-column poles over 71 % of their
+                        // length (S18 §2). Flecks (1–4 texels in any direction) still take the median.
+                        if (window._despeckleLines) { let line = false;
+                            for (const dd of [[1, 0], [0, 1], [1, 1], [1, -1]]) { let n = 0;
+                                for (let k = -2; k <= 2; k++) { if (!k) continue; if (Math.abs(src[i + k * (dd[1] * pw + dd[0])] - d0) <= TOLd) n++; }
+                                if (n === 4) { line = true; break; } }
+                            if (line) { nLine++; continue; } }
                         w25.sort();
                         dQ[i] = w25[12];
                         moved++;
@@ -14079,7 +14089,8 @@ function bgBuildBackgroundLayerCore() {
                     nFleck += moved;
                     if (!moved) break;
                 }
-                if (nFleck) { dqDirty = true; console.log('[QUICK-BAKE] despeckle: ' + nFleck + 'px of fragmented depth median-snapped'); }
+                if (nFleck) { dqDirty = true; console.log('[QUICK-BAKE] despeckle: ' + nFleck + 'px of fragmented depth median-snapped' + (window._despeckleLines ? ('; [S13] ' + nLine + ' minority texels kept because a one-texel line passes through them') : '')); }
+                else if (window._despeckleLines && nLine) console.log('[QUICK-BAKE] despeckle: 0px snapped; [S13] ' + nLine + ' minority texels kept because a one-texel line passes through them');
             }
             const RB = Math.max(8, bgBandMaxGrowPx | 0);
             // FULL-INTERIOR FAR ENVELOPE (A38). A single radius-RB floor
@@ -16275,6 +16286,7 @@ function bgBuildBackgroundLayerCore() {
                                     if (skyOnP && pS[a] < sqP && pS[b] < sqP && pS[c] < sqP) { nSkyP++; continue; }
                                     let keep = rlP.joinedIdx(a, b, pS, pw) && rlP.joinedIdx(b, c, pS, pw) && rlP.joinedIdx(a, c, pS, pw);
                                     if (!keep && carS && carS[a] && carS[b] && carS[c]) { keep = true; nStretchP++; }
+                                    if (!keep && window._plateKeepAll) { keep = true; nStretchP++; }   // S13b ablation (harness): no plate tear at all — are the far-pose holes tears or coverage?
                                     if (keep) { outP[nK++] = srcP[t]; outP[nK++] = srcP[t + 1]; outP[nK++] = srcP[t + 2]; }
                                     else { nDropP++; if (tornP) { tornP[a] = 1; tornP[b] = 1; tornP[c] = 1; } }
                                 }
