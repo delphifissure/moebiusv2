@@ -20117,7 +20117,8 @@ function _wireDebugSheetControls() {
             window._plugMargin = opt.margin === 'window' ? 1 : (opt.margin === 'picture' ? 2 : 0);
             window._stepFaces = plane && opt.faces === 'on';
             window._bandTierDeg = opt.band === 'all' ? 0 : parseFloat(opt.band) || 0;
-            window._plateStretchInner = plane && opt.seams === 'stretched';   // note §9: the plate's internal seams drawn stretched; the rim stays torn
+            window._plateStretchInner = plane && (opt.seams === 'stretched' || opt.seams === 'all');   // note §9: the plate's internal seams drawn stretched; the rim stays torn
+            window._plateKeepAll = plane && opt.seams === 'all';   // S20: no plate tear at all (the rim stretched too) — the far-pose holes were plate rim tears (silverwarrior 1 635 -> 2 px)
             window._farJoin = (plane && opt.join === 'on') ? 1 : 0;   // note §10: the far field joined across lines (closed scenes); off for open, layered ones
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
