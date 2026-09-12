@@ -232,7 +232,66 @@ def S30_dolly(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': r, 'element': 'dolly family: subject at the window plane'}
 
 
+# ---- Sprint 16 (2026-09-12): the porous-silhouette family (S7's class), one variable per scene, S7's room and framing ----
+def _porous_room(W, H):
+    depth = 1.2 * W
+    return depth, room(W, H, depth, back_tex=lambda p: tex_noise(p, scale=W * 0.2, base=(0.55, 0.7, 0.95), amp=0.15, axes=(0, 1)))
+
+def P1_canopy_sparse(W=0.16, H=0.09):
+    """E6 porous, density low: S7's crown with a third of the discs (300 of 900), same disc size."""
+    depth, prims = _porous_room(W, H)
+    prims.append(Cylinder([-W * 0.05, -H / 2, -0.35 * W], [-W * 0.05, H * 0.05, -0.35 * W], W * 0.012, tex_solid((0.35, 0.25, 0.18)), THING, 'trunk'))
+    prims.append(Canopy([-W * 0.05, H * 0.2, -0.35 * W], [W * 0.22, H * 0.28, W * 0.12], 300, W * 0.012, tex_solid((0.25, 0.5, 0.2)), name='crown'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, sparse (300 discs)'}
+
+def P2_canopy_dense(W=0.16, H=0.09):
+    """E6 porous, density high: 1800 discs (twice S7)."""
+    depth, prims = _porous_room(W, H)
+    prims.append(Cylinder([-W * 0.05, -H / 2, -0.35 * W], [-W * 0.05, H * 0.05, -0.35 * W], W * 0.012, tex_solid((0.35, 0.25, 0.18)), THING, 'trunk'))
+    prims.append(Canopy([-W * 0.05, H * 0.2, -0.35 * W], [W * 0.22, H * 0.28, W * 0.12], 1800, W * 0.012, tex_solid((0.25, 0.5, 0.2)), name='crown'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, dense (1800 discs)'}
+
+def P3_canopy_fine(W=0.16, H=0.09):
+    """E6 porous, leaf size small: discs at half S7's radius, four times as many (same covered area)."""
+    depth, prims = _porous_room(W, H)
+    prims.append(Cylinder([-W * 0.05, -H / 2, -0.35 * W], [-W * 0.05, H * 0.05, -0.35 * W], W * 0.012, tex_solid((0.35, 0.25, 0.18)), THING, 'trunk'))
+    prims.append(Canopy([-W * 0.05, H * 0.2, -0.35 * W], [W * 0.22, H * 0.28, W * 0.12], 3600, W * 0.006, tex_solid((0.25, 0.5, 0.2)), name='crown'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, fine leaves (3600 discs, r/2)'}
+
+def P4_canopy_layered(W=0.16, H=0.09):
+    """E6 porous, layered: S7's crown and a second crown behind it, offset right and 0.3 W deeper, seen through the first."""
+    depth, prims = _porous_room(W, H)
+    prims.append(Cylinder([-W * 0.05, -H / 2, -0.35 * W], [-W * 0.05, H * 0.05, -0.35 * W], W * 0.012, tex_solid((0.35, 0.25, 0.18)), THING, 'trunk'))
+    prims.append(Canopy([-W * 0.05, H * 0.2, -0.35 * W], [W * 0.22, H * 0.28, W * 0.12], 900, W * 0.012, tex_solid((0.25, 0.5, 0.2)), name='crown'))
+    prims.append(Cylinder([W * 0.12, -H / 2, -0.65 * W], [W * 0.12, H * 0.1, -0.65 * W], W * 0.012, tex_solid((0.3, 0.22, 0.16)), THING, 'trunk2'))
+    prims.append(Canopy([W * 0.12, H * 0.22, -0.65 * W], [W * 0.2, H * 0.26, W * 0.12], 900, W * 0.012, tex_solid((0.2, 0.42, 0.22)), seed=23, name='crown2'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, two crowns layered'}
+
+def P5_fence(W=0.16, H=0.09):
+    """E6 porous, regular: a picket fence — 13 vertical slats 1.2 % of W wide with 2.5 % gaps, 0.35 W in front of the back wall."""
+    depth, prims = _porous_room(W, H)
+    pitch = W * 0.037; sw = W * 0.012; z = -0.35 * W
+    for k in range(13):
+        x = -W * 0.22 + k * pitch
+        prims.append(Box([x, -H / 2, z - 0.004 * W], [x + sw, H * 0.15, z + 0.004 * W], lambda p: tex_stripes(p, scale=W * 0.01, c1=(0.75, 0.7, 0.6), c2=(0.6, 0.55, 0.45), axis=1), THING, f'slat{k}'))
+    prims.append(Box([-W * 0.24, H * 0.02, z - 0.004 * W], [W * 0.26, H * 0.04, z + 0.004 * W], tex_solid((0.7, 0.65, 0.55)), THING, 'rail'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, picket fence (regular slats)'}
+
+def P6_grille(W=0.16, H=0.09):
+    """E6 porous, regular in both axes: a grille of thin bars (0.6 % of W) on a 3 % pitch, 0.35 W in front of the back wall."""
+    depth, prims = _porous_room(W, H)
+    pitch = W * 0.03; bw = W * 0.006; z = -0.35 * W
+    for k in range(16):
+        x = -W * 0.24 + k * pitch
+        prims.append(Box([x, -H * 0.4, z - 0.003 * W], [x + bw, H * 0.4, z + 0.003 * W], tex_solid((0.25, 0.25, 0.28)), THING, f'vbar{k}'))
+    for k in range(9):
+        y = -H * 0.4 + k * pitch
+        prims.append(Box([-W * 0.24, y, z - 0.003 * W], [W * 0.24, y + bw, z + 0.003 * W], tex_solid((0.25, 0.25, 0.28)), THING, f'hbar{k}'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, grille (thin bars both axes)'}
+
+
 SCENES = {
+    'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
     'S31': S31_hedge, 'S32': S32_hedge_open,
     'S27': S27_fishtank, 'S11': S11_rounded, 'S1': S1_corner, 'S2': S2_contact, 'S3': lambda W=0.16, H=0.09: S2_contact(W, H, floating=True),

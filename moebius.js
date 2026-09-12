@@ -618,6 +618,54 @@ function bgFarSidePlane(dQ, pw, ph) {
             if (sol[2] > 0 && nGroundIn * 2 >= nGroundPicks) { ground = { a: sol[0], b: sol[1], c: sol[2], nRuns: nGroundIn, nPicks: nGroundPicks, nHoriz, nRising, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y, rowZeroAt: (x) => -(sol[0] + sol[1] * x) / sol[2] };
                 // the texels of the ground's own runs (a thin ground run continues along the fitted plane, not its own noisy line)
                 for (const p of picks) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tolG[jj]; } if (se / p.len <= 1) { groundCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) groundTex[yy * pw + p.x] = 1; } } } } }
+    // S16 (window._ceilCut) THE CEILING — the ground's mirror. A horizontal surface ABOVE the eye has disparity falling
+    // downward along a column (slope -1/(h·D) for a surface h above the eye); the highest such surface is the falling run
+    // with the smallest |slope|, and parallel horizontal planes share the horizon (H&Z ch. 8), so a falling run is a
+    // ceiling candidate only if its zero-disparity row is the ground's horizon (or the falling runs' own consensus row
+    // when there is no ground). The ceiling bounds the world from above exactly as the ground does from below: a
+    // candidate extrapolation that passes ABOVE the ceiling on a rest ray (a wall continued past the corner) is cut at
+    // the ceiling. Measured need (S23 §2): on the grille P6 and the canopy S7 the wall beyond a bar's lower end was
+    // extrapolated 300 rows up the merged bar+ceiling run onto ceiling texels — 13 331 texels of wash above the grille,
+    // 49 % of its over-claim; the fence P5, whose slats end against the flat wall, had none. Same arithmetic, same
+    // acceptance (the plane must explain the majority of the columns with a horizontal falling run), no new constant.
+    let ceil = null, nCeilPicks = 0, nCeilIn = 0, nFallH = 0, nFalling = 0; const ceilTex = new Uint8Array(N), ceilCol = new Uint8Array(pw);
+    if (window._ceilCut) { const picksC = []; const falling = [];
+        for (let x = 0; x < pw; x++) { let y = 0;
+            while (y < ph) { const j = y * pw + x; const a = rs[1][j], b = re[1][j], len = b - a + 1;
+                if (len >= 2 && !isSky[j]) { const f = fit(1, x, a, b, 0); const unc = tolG[j] / (2 * Math.max(1, len - 1));
+                    if (f[0] < -unc) { let ss = 0; for (let yy = a; yy <= b; yy++) { const e = f[1] + f[0] * yy - disp[yy * pw + x]; ss += e * e; }
+                        const sig = Math.max(Math.sqrt(ss / len), tolG[j] / 4), pbar = (a + b) / 2, vbar = f[1] + f[0] * pbar;
+                        const dm = sig * Math.sqrt(12 / (len * (len * len - 1) || 1)), dv = sig / Math.sqrt(len);
+                        const z = -f[1] / f[0], dz = 3 * (dv / Math.abs(f[0]) + Math.abs(vbar) * dm / (f[0] * f[0]));
+                        falling.push({ x, a, b, len, m: f[0], v0: f[1], tol: tolG[j], z, dz }); } }
+                y = b + 1; } }
+        nFalling = falling.length;
+        if (falling.length) { let zHc;
+            if (ground) zHc = null;   // the ground's horizon, per column (rowZeroAt)
+            else { const ev = []; for (const r of falling) { ev.push([r.z - r.dz, r.len]); ev.push([r.z + r.dz, -r.len]); }
+                ev.sort((u, v) => u[0] - v[0] || v[1] - u[1]); let cur = 0, best = -1, kBest = -1; for (let k = 0; k < ev.length; k++) { cur += ev[k][1]; if (cur > best) { best = cur; kBest = k; } }
+                zHc = kBest + 1 < ev.length ? 0.5 * (ev[kBest][0] + ev[kBest + 1][0]) : ev[kBest][0]; }
+            const perCol = new Array(pw).fill(null);
+            for (const r of falling) { const zh = ground ? ground.rowZeroAt(r.x) : zHc; if (Math.abs(r.z - zh) > r.dz) continue; nFallH++; if (!perCol[r.x] || Math.abs(r.m) < Math.abs(perCol[r.x].m)) perCol[r.x] = r; }
+            for (let x = 0; x < pw; x++) if (perCol[x]) picksC.push(perCol[x]); }
+        nCeilPicks = picksC.length;
+        const medC = (arr) => { if (!arr.length) return NaN; const s2 = Float64Array.from(arr).sort(); return (s2.length & 1) ? s2[s2.length >> 1] : 0.5 * (s2[(s2.length >> 1) - 1] + s2[s2.length >> 1]); };
+        if (picksC.length >= 2) {
+            const c0 = medC(picksC.map(p => p.m));
+            const pair = []; const stride = Math.max(1, Math.floor(picksC.length * picksC.length / 2 / 40000));
+            for (let u = 0, k = 0; u < picksC.length; u++) for (let v = u + 1; v < picksC.length; v++, k++) if (k % stride === 0) pair.push((picksC[v].v0 - picksC[u].v0) / (picksC[v].x - picksC[u].x));
+            const b0 = pair.length ? medC(pair) : 0, a0 = medC(picksC.map(p => p.v0 - b0 * p.x));
+            let Sxx = 0, Sxy = 0, Syy = 0, Sx = 0, Sy = 0, Sn = 0, Sxv = 0, Syv = 0, Sv = 0;
+            for (const p of picksC) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(a0 + b0 * p.x + c0 * yy - disp[jj]) / tolG[jj]; } if (se / p.len > 1) continue; nCeilIn++;
+                for (let yy = p.a; yy <= p.b; yy++) { const v = disp[yy * pw + p.x], x = p.x; Sxx += x * x; Sxy += x * yy; Syy += yy * yy; Sx += x; Sy += yy; Sn++; Sxv += x * v; Syv += yy * v; Sv += v; } }
+            let sol = [a0, b0, c0];
+            if (Sn >= 3) { const M = [[Sn, Sx, Sy], [Sx, Sxx, Sxy], [Sy, Sxy, Syy]], r = [Sv, Sxv, Syv];
+                const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+                const dM = det(M); if (Math.abs(dM) > 1e-12) { const s2 = []; for (let k = 0; k < 3; k++) { const Mk = M.map((row) => row.slice()); for (let rr = 0; rr < 3; rr++) Mk[rr][k] = r[rr]; s2.push(det(Mk) / dM); } if (s2[2] < 0) sol = s2; } }
+            if (sol[2] < 0 && nCeilIn * 2 >= nCeilPicks) { ceil = { a: sol[0], b: sol[1], c: sol[2], nRuns: nCeilIn, nPicks: nCeilPicks, nHoriz: nFallH, nFalling, nTex: Sn, at: (x, y) => sol[0] + sol[1] * x + sol[2] * y };
+                for (const p of picksC) { let se = 0; for (let yy = p.a; yy <= p.b; yy++) { const jj = yy * pw + p.x; se += Math.abs(sol[0] + sol[1] * p.x + sol[2] * yy - disp[jj]) / tolG[jj]; } if (se / p.len <= 1) { ceilCol[p.x] = 1; for (let yy = p.a; yy <= p.b; yy++) ceilTex[yy * pw + p.x] = 1; } } } }
+        console.log('[S16] ceiling: ' + (ceil ? ('plane a ' + ceil.a.toFixed(4) + ' b ' + ceil.b.toExponential(2) + ' c ' + ceil.c.toExponential(3) + ' from ' + nCeilIn + ' of ' + nCeilPicks + ' columns (' + nFallH + ' horizontal falling runs of ' + nFalling + ')') : ('none (' + nFalling + ' falling runs, ' + nFallH + ' horizontal, ' + nCeilIn + ' of ' + nCeilPicks + ' columns on one plane)')));
+    }
     // per texel, per side: the candidate run's rim position, its line (slope, value at the rim), window, run length
     const farField = new Float32Array(N), farKind = new Uint8Array(N), farAxis = new Uint8Array(N), farDisp = new Float32Array(N);
     let nThin = 0, nCand = 0, nGroundCut = 0; const kindCount = [0, 0, 0, 0, 0]; const sqDispK = skyOn ? rl.dispAt(sq) : -1;
@@ -645,7 +693,8 @@ function bgFarSidePlane(dQ, pw, ph) {
     // the candidate of run (rim texel j, at position p on line l) for texel i at position x, seen along axis ax in direction
     // dir: window, fit, thin evidence (ground continuation / flat), ground cut. One arithmetic for the walk (cand) and the
     // rebuild from the stored rim texel (pass 3); bit-identical to the two copies it replaced (S2 and the photograph).
-    const evalRun = (ax, l, x, dir, i, j, p, xi, gB) => {
+    let nCeilCut = 0;
+    const evalRun = (ax, l, x, dir, i, j, p, xi, gB, gC) => {
         const a = rs[ax][j], b = re[ax][j], len = b - a + 1, g = Math.abs(p - x);
         const w = Math.min(len, g + 1); const wa = dir > 0 ? p : p - w + 1, wb = dir > 0 ? p + w - 1 : p;   // g+1 samples put the slope's uncertainty at half a quantum over g texels
         const f = fit(ax, l, wa, wb, p); let v = f[1] + f[0] * (x - p), m = f[0], v0 = f[1];
@@ -657,9 +706,10 @@ function bgFarSidePlane(dQ, pw, ph) {
         // change still had them — they were the plate's linearly filtered depth texture, fixed at plateDT.)
         if (thin) { if (ax === 1 && ground && groundTex[j]) { m = ground.c; v0 = ground.at(xi, p); v = ground.at(xi, x); } else { m = 0; v0 = f[1]; v = f[1]; } }
         let cut = false; if (gB > dispFloor && v < gB - tol[i]) { v = gB; m = 0; v0 = gB; cut = true; }   // the plane continues under the ground: it meets the ground here instead
+        let cutC = false; if (gC !== undefined && gC > dispFloor && v < gC - tol[i]) { v = gC; m = 0; v0 = gC; cut = true; cutC = true; nCeilCut++; }   // S16: the plane continues above the ceiling: it meets the ceiling
         // mv: the slope the VALUE follows along this axis (S7b, D4). The ground cut keeps m = 0 for combine's crossing/same-plane
         // tests while the value follows the ground plane at its own slope; the join's step bound and the audits need the latter.
-        const mv = cut ? (ax === 1 ? ground.c : ground.b) : m;
+        const mv = cut ? (cutC ? (ax === 1 ? ceil.c : ceil.b) : (ax === 1 ? ground.c : ground.b)) : m;
         return { g, p, m, v0, v, w, len, j, thin, cut, mv }; };
     const cand = (ax, l, x, dir, i) => {   // dir +1 / -1 along the line; returns null or {g, p, m, v0, w, len}
         const Lx = L[ax], st = stepA[ax], base = ax === 0 ? l * pw : l;
@@ -667,6 +717,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         // photograph a 12-column, 209-texel "ground" at the water's edge cut nine million candidates across the whole
         // frame and left every reveal empty; the kit's scenes have a ground run in every column, so nothing changes there.)
         const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;   // the ground's disparity on this texel's rest ray (a bound below the horizon)
+        const gC = (ceil && ceilCol[xi]) ? ceil.at(xi, yi) : -Infinity;   // S16: the ceiling's disparity on this texel's rest ray (a bound above the horizon)
         let p = dir > 0 ? re[ax][i] + 1 : rs[ax][i] - 1; const list = []; const kk = kAx[ax];
         // A far side lies BEYOND A RIM. Runs break on curvature (second differences over the tolerance), so one joined
         // surface can be several runs; a neighbouring run of the texel's own surface that sits a hair behind it is not
@@ -677,7 +728,7 @@ function bgFarSidePlane(dQ, pw, ph) {
         while (p >= 0 && p < Lx) { const j = base + p * st; const a = rs[ax][j], b = re[ax][j]; const len = b - a + 1; const g = Math.abs(p - x);
             if (!rim && !rl.joinedIdx(base + (p - dir) * st, j, dQ, pw)) rim = true;
             if (!rim) { p = dir > 0 ? b + 1 : a - 1; continue; }
-            const e = evalRun(ax, l, x, dir, i, j, p, xi, gB); if (e.cut) nGroundCut++;
+            const e = evalRun(ax, l, x, dir, i, j, p, xi, gB, gC); if (e.cut) nGroundCut++;
             const { w, m, v0, v, thin } = e; const dlt = disp[i] - v;
             if (dlt > tol[i]) { const f0 = g / (kk * dlt), f1 = isSky[j] ? Infinity : (g + len) / (kk * dlt); list.push({ g, p, m, v0, w, len, j, thin, dlt, f0, f1 }); }
             p = dir > 0 ? b + 1 : a - 1; }
@@ -756,7 +807,8 @@ function bgFarSidePlane(dQ, pw, ph) {
     // same arithmetic as cand's (window, fit, thin evidence, ground cut), without the arrival bookkeeping
     const rebuild = (ax, l, x, dir, i, j) => { if (j < 0) return null;
         const p = ax === 0 ? j % pw : (j - j % pw) / pw; const xi = i % pw, yi = (i - xi) / pw; const gB = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;
-        return evalRun(ax, l, x, dir, i, j, p, xi, gB); };
+        const gC = (ceil && ceilCol[xi]) ? ceil.at(xi, yi) : -Infinity;   // S16
+        return evalRun(ax, l, x, dir, i, j, p, xi, gB, gC); };
     const cOf = (s4, ax, l, x, dir, i) => { const c = rebuild(ax, l, x, dir, i, cJ[s4][i]); if (c) c.next = rebuild(ax, l, x, dir, i, cN[s4][i]); return c; };
     // S7 PASS 3: combine the two sides per axis, arbitrate the axes, export (unchanged from the single loop)
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
@@ -811,7 +863,7 @@ function bgFarSidePlane(dQ, pw, ph) {
     const nR = nRuns[0], nC = nRuns[1]; const med = (arr) => { if (!arr.length) return 0; const s = arr.slice().sort((a, b) => a - b); return s[s.length >> 1]; };
     console.log('[S3] far side by the plane law: ' + nR + ' row runs (' + (nR / ph).toFixed(1) + '/row, median length ' + med(runLen[0]) + '), ' + nC + ' column runs (' + (nC / pw).toFixed(1) + '/col, median ' + med(runLen[1]) + '); ' +
         'texels with a far side ' + (kindCount[1] + kindCount[2] + kindCount[3] + kindCount[4]) + ' (single ' + kindCount[1] + ', same plane ' + kindCount[2] + ', crossing ' + kindCount[3] + ', midpoint ' + kindCount[4] + '); ' +
-        nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground; ' +
+        nThin + ' of ' + nCand + ' candidate extrapolations reach beyond their run (thin evidence), ' + nGroundCut + ' cut at the ground' + (window._ceilCut ? (' (' + nCeilCut + ' at the ceiling)') : '') + '; ' +
         (horizon ? ('ground plane from ' + horizon.nRuns + ' of ' + pw + ' columns (' + horizon.nTex + ' texels; ' + ground.nRising + ' rising runs, ' + ground.nHoriz + ' horizontal by the shared vanishing line, ' + ground.nPicks + ' lowest per column): horizon row ' + horizon.rowC.toFixed(1) + ' of ' + ph + ' at the centre (' + horizon.rowL.toFixed(1) + ' left, ' + horizon.rowR.toFixed(1) + ' right)') : ('no ground (' + nRising + ' rising runs, ' + nHoriz + ' horizontal, ' + nGroundIn + ' of ' + nGroundPicks + ' columns on one plane): no bound, no horizon')) + '; ' + (Date.now() - t0) + 'ms');
     // S5 STEP RIMS: a rim between two runs whose lines are parallel within their fit uncertainty is a step inside one
     // surface (R1 §2.3's prior: a jump inside one continuous surface is a return face; a jump to a surface of another
@@ -847,7 +899,7 @@ function bgFarSidePlane(dQ, pw, ph) {
                 p = b + 1; } } }   // one run at a time: every consecutive pair is tested
     const stepRims = Int32Array.from(stepList);
     console.log('[S5] step rims: ' + nStepPairs + ' rim pairs between parallel planes (a step inside one surface; its face is synthesised when window._stepFaces is on); rejected: ' + nStepNotPar + ' not parallel, ' + nStepNoPerp + ' without a gradient across the line');
-    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, groundTex, groundCol, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, farCut, farAxV, farAxS, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
+    return { farField, farDisp, farKind, farAxis, farRimJ, farRimW, farMix, farField2, farDisp2, farRimJ2, farRimW2, farSide2, nLayer2, horizon, ground, groundTex, groundCol, ceil, ceilTex, ceilCol, nThin, nCand, nGroundCut, kindCount, stepRims, nStepPairs, farM, farCut, farAxV, farAxS, _fit: fit, _rs: rs, _re: re, _disp: disp, _cand: cand, _combine: combine, _tol: tol };
 }
 function bgFoldStepPerCell(pwArg) {
     const T = (typeof window._foldFactor === 'number') ? window._foldFactor : Math.SQRT2;
@@ -8797,7 +8849,8 @@ window._plugGeoBand = function (opts) {
             // S7 audit exports: the rim texel per side, the side weight, the far kind's disparity, an eye-distance table
             window._geoFarRimJ = planeFS.farRimJ; window._geoFarMix = planeFS.farMix; window._geoFarDisp = planeFS.farDisp; window._geoFarRimW = planeFS.farRimW;
             window._geoFarM = planeFS.farM; window._geoFarCut = planeFS.farCut; window._geoFarAxV = planeFS.farAxV; window._geoFarAxS = planeFS.farAxS; window._geoFarDisp2 = planeFS.farDisp2; window._geoFarRimJ2 = planeFS.farRimJ2; window._geoFarSide2 = planeFS.farSide2;   // S7b audit
-            window._geoGround = planeFS.ground ? { a: planeFS.ground.a, b: planeFS.ground.b, c: planeFS.ground.c } : null; window._geoGroundTex = planeFS.groundTex; window._geoGroundCol = planeFS.groundCol;   // S12 audit: the ground plane (disparity = a + b x + c y) and its texels/columns
+            window._geoGround = planeFS.ground ? { a: planeFS.ground.a, b: planeFS.ground.b, c: planeFS.ground.c } : null; window._geoGroundTex = planeFS.groundTex; window._geoGroundCol = planeFS.groundCol;   // S12
+            window._geoCeil = planeFS.ceil ? { a: planeFS.ceil.a, b: planeFS.ceil.b, c: planeFS.ceil.c, nRuns: planeFS.ceil.nRuns, nPicks: planeFS.ceil.nPicks } : null; window._geoCeilTex = planeFS.ceilTex || null; window._geoCeilCol = planeFS.ceilCol || null;   // S16 audit: the ground plane (disparity = a + b x + c y) and its texels/columns
             { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
