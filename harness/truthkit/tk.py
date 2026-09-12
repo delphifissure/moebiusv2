@@ -256,20 +256,21 @@ class Canopy(Prim):
         if len(idx) == 0:
             return [best[:, k] for k in range(self.kmax)]
         oo = o[idx]; dd = d[idx]
-        # chunk over discs to bound memory
-        allt = []
-        for s in range(0, len(self.centres), 256):
-            C = self.centres[s:s + 256]; Nn = self.normals[s:s + 256]
+        # chunk over discs and keep only the kmax nearest hits per ray as we go: concatenating every disc's t
+        # (rays x discs) was 11 GB on a 3 600-disc canopy and the kernel killed the render; the running
+        # partial sort gives the same kmax smallest values exactly.
+        keep = np.full((len(idx), self.kmax), INF); m = 64
+        for s in range(0, len(self.centres), m):
+            C = self.centres[s:s + m]; Nn = self.normals[s:s + m]
             denom = dd @ Nn.T                                       # (n, m)
             with np.errstate(divide='ignore', invalid='ignore'):
                 t = ((C[None, :, :] - oo[:, None, :]) * Nn[None, :, :]).sum(-1) / denom
             p = oo[:, None, :] + t[..., None] * dd[:, None, :]
             ok = (np.abs(denom) > 1e-12) & (t > 1e-9) & (np.linalg.norm(p - C[None], axis=-1) <= self.r)
-            allt.append(np.where(ok, t, INF))
-        T = np.concatenate(allt, axis=1)
-        T.sort(axis=1)
-        k = min(self.kmax, T.shape[1])
-        best[idx, :k] = T[:, :k]
+            T = np.concatenate([keep, np.where(ok, t, INF)], axis=1)
+            keep = np.partition(T, self.kmax - 1, axis=1)[:, :self.kmax] if T.shape[1] > self.kmax else T
+        keep.sort(axis=1)
+        best[idx, :keep.shape[1]] = keep
         return [best[:, k] for k in range(self.kmax)]
 
     def normal(self, p):
