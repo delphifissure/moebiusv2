@@ -2948,6 +2948,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // evaluated at the CURRENT pose in the fragment shader instead of baked at
         // the cone rim. u_texelsPerPxRest = the foreground's texel density at rest.
         u_fragTear: { value: 0.0 },
+        u_plateFold: { value: 0.0 },          // Sprint 17a (window._plateFoldAlpha): the PLATE obeys the A241 stretch law too — 1 discard, 2 magenta check view
         u_backTear: { value: 0.0 },          // A257e: 1 on the A257 object-back layer — its shader discards the mesh ramps between back and back-less texels
         u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
         u_fragTearFactor: { value: 2.0 },    // stretch beyond which a cell has folded: shift span > its own extent (A212/a102)
@@ -3022,7 +3023,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_bandCutMismatch; uniform float u_bandCutMaxGrad;
         uniform float u_bandCutUvRate;
         uniform float u_cutContactRamp;
-        uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac;   // A241
+        uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_plateFold;   // A241; Sprint 17a
         uniform float u_backTear;   // A257e
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
@@ -3103,7 +3104,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         if (u_backTear > 0.5 && originalColor.a < 0.5) discard;
         if (u_fragTear > 1.5 && !u_isBackgroundLayer && !isGap) {
             if (u_poseFrac > vFoldAt) isGap = true;
-        } else if (u_fragTear > 0.5 && (!u_isBackgroundLayer || u_backTear > 0.5) && !isGap) {   // A257g: the object-back layer obeys the same stretch law as the foreground
+        } else if (u_fragTear > 0.5 && (!u_isBackgroundLayer || u_backTear > 0.5 || u_plateFold > 0.5) && !isGap) {   // A257g: the object-back layer obeys the same stretch law as the foreground; Sprint 17a: so does the plate when armed
             bool gateOk = (u_fragTearGate < 0.5) || (texture2D(u_sdMask, vUv).r > 0.25);
             if (gateOk) {
                 float pxS = (u_pxScale > 0.0) ? u_pxScale : 1.0;
@@ -3356,6 +3357,10 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // The BACKGROUND LAYER never discards: it is the completed layer whose
         // whole purpose is to be visible where the foreground layer opens.
         if (isGap && !u_isBackgroundLayer) discard;
+        // Sprint 17a: a plate cell stretched past the fold is not a surface (it is the spaghetti between a far carrier and
+        // its neighbour); with the fold-alpha armed it is transparent — what lies behind (plate 2, or nothing) shows —
+        // or magenta in the check view so the spaghetti pixels of any arm can be counted.
+        if (isGap && u_isBackgroundLayer && u_plateFold > 0.5) { if (u_plateFold > 1.5) { gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0); return; } discard; }
     `;
 
     const baseVertexShaderPrefix = `
@@ -7148,7 +7153,7 @@ function renderNormalizedDepthPass() {
                     // interior hole at any pose while the composite showed the plug). Same uniforms,
                     // same varying, same rule — the depth pass discards exactly what the colour pass does.
                     varying float vFoldAt;
-                    uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_pxScale;
+                    uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_pxScale; uniform float u_plateFold;
                     uniform float u_backTear;   // A257e
                     uniform sampler2D u_sdMask;
                     varying vec4 vClip; uniform vec2 u_restClip;   // A251b (A245 rest-footprint clip)
@@ -7181,7 +7186,7 @@ function renderNormalizedDepthPass() {
                             if (texture2D(map, vUv).a < 0.01) discard;
                             // A257e: the object-back layer discards the mesh ramp between a back texel and a back-less one (alpha < 0.5), as the colour pass does
                             if (u_backTear > 0.5 && texture2D(map, vUv).a < 0.5) discard;
-                            if (u_backTear > 0.5 && u_fragTear > 0.5) {   // A257g: the same stretch law as the colour pass
+                            if ((u_backTear > 0.5 || u_plateFold > 0.5) && u_fragTear > 0.5) {   // A257g: the same stretch law as the colour pass; Sprint 17a: the plate too
                                 float pxSB = (u_pxScale > 0.0) ? u_pxScale : 1.0;
                                 vec2 jxB = dFdx(vUv) * u_textureSize, jyB = dFdy(vUv) * u_textureSize;
                                 float jmaxB = max(length(jxB), length(jyB));
@@ -15835,6 +15840,15 @@ function bgBuildBackgroundLayerCore() {
             // not a continuation. The frame-edge fill wants the band's treatment at the band's scale, not a texture wrap.
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
+            // Sprint 17a (window._plateFoldAlpha = 1 | 2): the plate obeys the A241 stretch law — the same rest texel density and
+            // fold factor as the foreground (A212's criterion: shift span > cell extent <=> stretched past 2x at the fold), ungated.
+            if (window._plateFoldAlpha && matQ.uniforms.u_plateFold) {
+                const layerAspectP = pw / ph, frameAspectP = terrariumWidth / terrariumHeight; const layerWfP = (layerAspectP > frameAspectP) ? 1.0 : (layerAspectP / frameAspectP);
+                const plateScrPxP = Math.max(1, renderer.domElement.width * layerWfP);
+                matQ.uniforms.u_plateFold.value = (window._plateFoldAlpha === 2) ? 2.0 : 1.0; matQ.uniforms.u_fragTear.value = 1.0; matQ.uniforms.u_fragTearGate.value = 0.0;
+                matQ.uniforms.u_texelsPerPxRest.value = pw / plateScrPxP; matQ.uniforms.u_fragTearFactor.value = 2.0;
+                console.log('[S17a] plate fold-alpha armed (' + (window._plateFoldAlpha === 2 ? 'magenta check view' : 'transparent') + '): rest density ' + (pw / plateScrPxP).toFixed(3) + ' texels/px, fold at stretch 2');
+            } else if (matQ.uniforms.u_plateFold) { matQ.uniforms.u_plateFold.value = 0.0; }
             // A59f: the plug is hole-only (renders only where the FG is torn away),
             // so there is no FG to z-fight — the old -0.004 push-back is unneeded and
             // was a flat view-Z offset the FG never had (it misregistered the plug vs
@@ -20163,9 +20177,9 @@ function _wireDebugSheetControls() {
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
     // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
     {
-        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel' };
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
-        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off', seams: 'torn', join: 'off' };
+        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off', seams: 'torn', join: 'off', rules: 'cur' };
         let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions') || 'null'); } catch (e) {}
         const opt = Object.assign({}, defaults, saved || {});
         for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
@@ -20182,6 +20196,9 @@ function _wireDebugSheetControls() {
             window._plateStretchInner = plane && (opt.seams === 'stretched' || opt.seams === 'all');   // note §9: the plate's internal seams drawn stretched; the rim stays torn
             window._plateKeepAll = plane && opt.seams === 'all';   // S20: no plate tear at all (the rim stretched too) — the far-pose holes were plate rim tears (silverwarrior 1 635 -> 2 px)
             window._farJoin = (plane && opt.join === 'on') ? 1 : 0;   // note §10: the far field joined across lines (closed scenes); off for open, layered ones
+            // live pass (S20 / S23): the two recommended rules as one select — current | + ceiling cut | + ceiling cut + line despeckle
+            window._ceilCut = (opt.rules === 'ceil' || opt.rules === 'new') ? 1 : 0;
+            window._despeckleLines = opt.rules === 'new' ? 1 : 0;
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
         applyPlateOptions();
