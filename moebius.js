@@ -8658,6 +8658,7 @@ window._plugGeoBand = function (opts) {
     const t0 = Date.now();
     window._plugCarve = false; window._plugRegion = null; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoRef = null; window._geoFarField = null; window._geoGateField = null; window._geoObsDepth = null; window._geoObsCount = null; window._extraDemand = null; window._plugSweepCapture = true;
     window._qbPlatePaint = null; window._qbPlate2Has = null; window._qbSkyColor = null; window._qbMargin = null;   // C: the bundle's captures are this bake's or nothing
+    window._qbObjIds = null; window._qbObjInfo = null;   // S27: the objects are this bake's
     window._geoLipDeep = null; window._geoLipNear = null; window._geoLipSpread = null; window._geoKind = null; window._geoProv = null; window._geoClass = null; window._geoPost = null; window._geoRampDrop = null;   // A252
     if (opts.flush) window._plateFlushExempt = true;
     const NXg = opts.nx || 17, NYg = opts.ny || 5;
@@ -9888,6 +9889,186 @@ function bgBuildMPILayerFiles(files, meta, canvasToPng) {
         note: 'per-layer completion: inpaint each layer independently at its own depth; overlap slots resolved back-to-front by the viewer' };
     return emitted;
 }
+// =============================================================================
+// S27 OBJECT LAYERS IN THE BUNDLE (Sprint 19; research/S27_object_layers.md)
+// =============================================================================
+// S26 §3b measured what a hidden layer's depth should be: BEHIND an object the plane law is exact (19 of 19 kit
+// scenes; a depth model on the completed picture loses everywhere and cannot be normalised where the hidden range
+// lies outside the visible one); an object's OWN far side lies within its own thickness of its front, and the
+// rule "the far side is at the object's front depth" ties or beats a depth model + clamp on 15 of 17 scenes.
+// So the object-layer path carries objects, not a depth model:
+//   export  plane_object_ids.png + meta.plane_objects: each object is one continuous occluder surface standing
+//           in front of the background its band reveals (bgRimLawFor's own join law, no new constant) — the
+//           footprint / box a layer model (RevealLayer: boxes; RLD: masks) completes;
+//   import  obj_<id>_color.png (RGBA, the completed object incl. its hidden part) [+ obj_<id>_depth16.png]:
+//           visible texels keep the source depth; hidden texels continue the object's own front (nearest visible
+//           texel of the object) or, when a depth is supplied, that depth aligned on the object's visible front
+//           (robust affine, linear or inverse, chosen on the visible residual); every hidden texel is then clamped
+//           behind whatever is visible at it (a135 ordering, one quantum). Rendered as its own mesh on the source
+//           grid (plate 2's recipe: matQ clone, own depth + RGBA, torn under the rim law on its own depth,
+//           alpha-0 discarded in both passes by A257c/e), synced and disposed with plate 2.
+function _planeObjects(force) {
+    // A253's object rule, reused: a texel is an object where it stands in front of the a-priori far field (the background
+    // continuation the bake computed) by more than the cliff step already in use (fgTearStep); 4-connected components are
+    // the objects. Background that continues under itself (floor, walls, the receding ground) is the far field and is not
+    // an object; a box's base rows within the step of the floor are the floor's. The first draft flooded continuous
+    // surfaces from the band and merged the boxes standing on S2's floor into the floor (the floor's own border band made
+    // it an object too): measured, replaced. Objects are ranked by BAND DEMAND (how many band texels they own — the hidden
+    // content they cause), not by area, so a hill in front of the sky ranks below the tree; components with no band texel
+    // hide nothing inside the envelope and are not exported.
+    const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF, ff = window._geoFarField;
+    if (!sz || !dQ || !dis || !pF || !ff) return null;
+    const pw = sz.pw, ph = sz.ph, N = pw * ph;
+    if (ff.length !== N) return null;
+    if (!force && window._qbObjIds && window._qbObjInfo && window._qbObjIds.length === N) return { ids: window._qbObjIds, objects: window._qbObjInfo };
+    const pS = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+    const TOLB = (typeof fgTearStep === 'number' && fgTearStep > 0) ? fgTearStep : 0.06;
+    const isObj = (i) => dQ[i] - ff[i] > TOLB;
+    const lab = new Int32Array(N), stack = new Int32Array(N); const comps = [];
+    for (let s0 = 0; s0 < N; s0++) {
+        if (lab[s0] || !isObj(s0)) continue;
+        const id = comps.length + 1; let top = 0; stack[top++] = s0; lab[s0] = id;
+        const c = { id, px: 0, band: 0, x0: pw, y0: ph, x1: -1, y1: -1, dSum: 0, bgSum: 0 };
+        while (top > 0) {
+            const t = stack[--top]; const x = t % pw, y = (t - x) / pw;
+            c.px++; c.dSum += dQ[t]; if (dis[t]) { c.band++; c.bgSum += pS[t]; }
+            if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y < c.y0) c.y0 = y; if (y > c.y1) c.y1 = y;
+            const nb = [x > 0 ? t - 1 : -1, x < pw - 1 ? t + 1 : -1, y > 0 ? t - pw : -1, y < ph - 1 ? t + pw : -1];
+            for (const j of nb) if (j >= 0 && !lab[j] && isObj(j)) { lab[j] = id; stack[top++] = j; }
+        }
+        comps.push(c);
+    }
+    const kept = comps.filter((c) => c.band > 0).sort((a, b) => (b.band - a.band) || (b.px - a.px));   // band demand first; ids 1..254, 255 = beyond the cap
+    const remap = new Int32Array(comps.length + 1); const objects = [];
+    kept.forEach((c, k) => { remap[c.id] = k < 254 ? k + 1 : 255; if (k < 254) objects.push({ id: k + 1, footprintPx: c.px, bandPx: c.band, bbox: [c.x0, c.y0, c.x1 + 1, c.y1 + 1], frontDepthMean: c.dSum / c.px, backgroundDepthMean: c.bgSum / c.band }); });
+    const ids = new Uint8Array(N); for (let i = 0; i < N; i++) if (lab[i]) ids[i] = remap[lab[i]];
+    window._qbObjIds = ids; window._qbObjInfo = objects; window._qbObjOverflow = Math.max(0, kept.length - 254); window._qbObjNoDemand = comps.length - kept.length;
+    console.log('[S27] objects (A253 rule, step ' + TOLB.toFixed(4) + '): ' + comps.length + ' components in front of the far field, ' + kept.length + ' with band demand' + (kept.length > 254 ? ' (' + (kept.length - 254) + ' beyond the cap as id 255)' : '') + '; first ' + (objects[0] ? objects[0].footprintPx + ' px, band ' + objects[0].bandPx : '-'));
+    return { ids, objects };
+}
+function _objFitDepth(xs, ys, ok, N) {
+    // y ~ a f(x) + b on the texels ok(i), f linear or inverse, two-three rounds of 3xMAD trimming; the space with the
+    // smaller visible median residual wins (S26 §1: chosen on visible data only)
+    const idx = []; for (let i = 0; i < N; i++) if (ok(i)) idx.push(i);
+    if (idx.length < 50) return null;
+    const fit = (fx) => { let keep = idx.slice(); let a = 1, b = 0, res = Infinity;
+        for (let r = 0; r < 3; r++) { let sx = 0, sy = 0, sxx = 0, sxy = 0; const n = keep.length; for (const i of keep) { const x = fx(xs[i]), y = ys[i]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
+            const den = n * sxx - sx * sx; if (!(Math.abs(den) > 1e-18)) return null; a = (n * sxy - sx * sy) / den; b = (sy - a * sx) / n;
+            const rs = keep.map((i) => Math.abs(a * fx(xs[i]) + b - ys[i])); const srt = rs.slice().sort((p, q2) => p - q2); const mad = srt[srt.length >> 1] + 1e-12; res = mad;
+            const nk = []; for (let k = 0; k < keep.length; k++) if (rs[k] <= 3 * 1.4826 * mad) nk.push(keep[k]); if (nk.length < 50 || nk.length === keep.length) break; keep = nk; }
+        return { a, b, res, n: keep.length }; };
+    const lin = fit((x) => x), inv = fit((x) => 1 / x);
+    if (!lin && !inv) return null;
+    if (!inv || (lin && lin.res <= inv.res)) return Object.assign({ space: 'lin' }, lin);
+    return Object.assign({ space: 'inv' }, inv);
+}
+window._clearObjectLayers = function () {
+    const ud = (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) ? bgLayerMesh.userData : null; if (!ud || !ud.objLayers) return 0;
+    const n = ud.objLayers.length;
+    for (const m of ud.objLayers) { scene.remove(m); m.geometry.dispose(); try { const u = m.material.uniforms; if (u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u.map && u.map.value) u.map.value.dispose(); } catch (e) {} m.material.dispose(); }
+    ud.objLayers = []; return n;
+};
+window._importObjectLayersFromData = function (entries, opts) {
+    // entries: [{ id, rgba: Uint8ClampedArray(4N, source rows), depth: Float32Array(N)|null (any depth or disparity), depthValid: Uint8Array|null, vis: Uint8Array|null }]
+    opts = opts || {};
+    if (!(bgFarRuleOn() && window._bgQuickBaked && window._qbPlateF && window._qbDQ && window._qbSize && typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.material && bgLayerMesh.material.uniforms)) { console.warn('[S27] import needs a plane bake on screen'); return null; }
+    const L = mediaLayers[0]; if (!L || !L.mesh || !L.mesh.geometry || !L.mesh.geometry.index) { console.warn('[S27] no source grid'); return null; }
+    const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph, dQ = window._qbDQ, pF = window._qbPlateF, dis = window._qbDisocc;
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const rl = bgRimLawFor(pw, ph); const ob = _planeObjects(false); const ids = ob ? ob.ids : null;
+    const matQ = bgLayerMesh.material; const gp = L.mesh.geometry.parameters || {}; const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1; const srcIdx = L.mesh.geometry.index.array;
+    if (!(vw > 1 && vh > 1)) { console.warn('[S27] source grid has no segment counts'); return null; }
+    const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1); const ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
+    if (!bgLayerMesh.userData.objLayers) bgLayerMesh.userData.objLayers = [];
+    const out = [];
+    for (const e of entries) {
+        const rgba = e.rgba; if (!rgba || rgba.length !== 4 * N) { console.warn('[S27] layer ' + e.id + ': rgba must be ' + pw + 'x' + ph + ' RGBA'); continue; }
+        const alpha = new Uint8Array(N); let nA = 0; for (let i = 0; i < N; i++) if (rgba[i * 4 + 3] > 127) { alpha[i] = 1; nA++; }
+        if (!nA) { console.warn('[S27] layer ' + e.id + ': empty alpha'); continue; }
+        const vis = new Uint8Array(N); let nV = 0; let visRule = 'object footprint (plane_object_ids)';
+        if (e.vis && e.vis.length === N) { visRule = 'caller mask'; for (let i = 0; i < N; i++) if (alpha[i] && e.vis[i]) { vis[i] = 1; nV++; } }
+        else if (ids && e.id > 0) for (let i = 0; i < N; i++) if (alpha[i] && ids[i] === e.id) { vis[i] = 1; nV++; }
+        if (!nV) { visRule = 'no footprint match: layer texels that are not band texels with a far side'; for (let i = 0; i < N; i++) if (alpha[i] && !(dis && dis[i] && pF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)] < dQ[i] - q)) { vis[i] = 1; nV++; } }
+        const dL = new Float32Array(dQ); let fit = null, nAm = 0;
+        if (e.depth && e.depth.length === N) {
+            fit = _objFitDepth(e.depth, dQ, (i) => vis[i] && (!e.depthValid || e.depthValid[i]) && e.depth[i] > 0 && dQ[i] > 0, N);
+            if (fit) for (let i = 0; i < N; i++) if (alpha[i] && !vis[i]) { const x = e.depth[i]; if (!(x > 0)) continue; dL[i] = fit.space === 'inv' ? fit.a / x + fit.b : fit.a * x + fit.b; nAm++; }
+            else console.warn('[S27] layer ' + e.id + ': depth fit failed (too few visible texels); continuing the front instead');
+        }
+        if (!fit) {   // the nearest visible texel of the object, by breadth-first steps over the layer's own alpha
+            const queue = new Int32Array(N); let qh = 0, qt = 0; const seen = new Uint8Array(N);
+            for (let i = 0; i < N; i++) if (vis[i]) { seen[i] = 1; queue[qt++] = i; }
+            while (qh < qt) { const t = queue[qh++]; const x = t % pw, y = (t - x) / pw;
+                const nb = [x > 0 ? t - 1 : -1, x < pw - 1 ? t + 1 : -1, y > 0 ? t - pw : -1, y < ph - 1 ? t + pw : -1];
+                for (const j of nb) { if (j < 0 || seen[j] || !alpha[j]) continue; seen[j] = 1; dL[j] = dL[t]; queue[qt++] = j; nAm++; } }
+        }
+        let nClamp = 0; for (let i = 0; i < N; i++) if (alpha[i] && !vis[i]) { const lim = dQ[i] - q; if (dL[i] > lim) { dL[i] = lim; nClamp++; } if (!(dL[i] >= 0)) dL[i] = 0; }
+        const F = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) F[(ph - 1 - y) * pw + x] = dL[y * pw + x];
+        const dt = new THREE.DataTexture(F, pw, ph, THREE.RedFormat, THREE.FloatType); dt.needsUpdate = true; dt.flipY = false; dt.minFilter = THREE.NearestFilter; dt.magFilter = THREE.NearestFilter; dt.generateMipmaps = false;
+        const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d'); const idm = cx.createImageData(pw, ph); idm.data.set(rgba); cx.putImageData(idm, 0, 0);
+        const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter; tex.premultiplyAlpha = false; if ('colorSpace' in tex && L.textures.color && 'colorSpace' in L.textures.color) tex.colorSpace = L.textures.color.colorSpace;
+        const mat = matQ.clone(); mat.uniforms.displacementMap.value = dt; mat.uniforms.map.value = tex;
+        if (mat.uniforms.u_backTear) mat.uniforms.u_backTear.value = 1.0;          // A257e: the mesh ramp between a layer texel and an alpha-0 one is discarded in both passes
+        if (mat.uniforms.u_useBgIslands) mat.uniforms.u_useBgIslands.value = false;
+        if (mat.uniforms.u_restClip) mat.uniforms.u_restClip.value.set(0, 0);
+        if (mat.uniforms.u_sdPaint) mat.uniforms.u_sdPaint.value = null;          // layer content is not a placeholder (class 0)
+        if (mat.uniforms.u_sdPaintAll) mat.uniforms.u_sdPaintAll.value = false;
+        if (mat.uniforms.u_plateFold) mat.uniforms.u_plateFold.value = 0.0;
+        const g = L.mesh.geometry.clone(); const outI = new srcIdx.constructor(srcIdx.length); let nK = 0;
+        for (let t = 0; t < srcIdx.length; t += 3) { const a = ti(srcIdx[t]), b = ti(srcIdx[t + 1]), c = ti(srcIdx[t + 2]); if (!(alpha[a] && alpha[b] && alpha[c])) continue;
+            if (rl.joinedIdx(a, b, dL, pw) && rl.joinedIdx(b, c, dL, pw) && rl.joinedIdx(a, c, dL, pw)) { outI[nK++] = srcIdx[t]; outI[nK++] = srcIdx[t + 1]; outI[nK++] = srcIdx[t + 2]; } }
+        g.setIndex(new THREE.BufferAttribute(outI.slice(0, nK), 1));
+        const m = new THREE.Mesh(g, mat); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; m.visible = bgLayerMesh.visible; m.frustumCulled = false; m.userData.objLayer = e.id;
+        scene.add(m); bgLayerMesh.userData.objLayers.push(m);
+        const st = { id: e.id, layerPx: nA, visiblePx: nV, visRule, hiddenPx: nA - nV, filled: nAm, clamped: nClamp, trianglesKept: nK / 3,
+                     depth: fit ? { rule: 'supplied depth aligned on the visible front', space: fit.space, a: fit.a, b: fit.b, visMedianRes: fit.res, n: fit.n } : { rule: 'nearest visible front continued (zero thickness)' } };
+        out.push(st); console.log('[S27] object layer ' + JSON.stringify(st));
+    }
+    return out;
+};
+async function _pngToRgba(file, pw, ph) {
+    const bmp = await createImageBitmap(file); const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d');
+    if (bmp.width !== pw || bmp.height !== ph) console.warn('[S27] ' + file.name + ' is ' + bmp.width + 'x' + bmp.height + ', resampled to the plate grid ' + pw + 'x' + ph);
+    cx.drawImage(bmp, 0, 0, pw, ph); return cx.getImageData(0, 0, pw, ph).data;
+}
+async function _png16Decode(u8) {
+    // 8/16-bit greyscale PNG (colour type 0) -> { w, h, data (Uint16Array or Uint8Array), max }; anything else throws (caller falls back to canvas)
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength); let p = 8; let w = 0, h = 0, bd = 0, ct = 0, il = 0; const idat = [];
+    while (p + 8 <= u8.length) { const len = dv.getUint32(p); const type = String.fromCharCode(u8[p + 4], u8[p + 5], u8[p + 6], u8[p + 7]); const body = u8.subarray(p + 8, p + 8 + len);
+        if (type === 'IHDR') { w = dv.getUint32(p + 8); h = dv.getUint32(p + 12); bd = u8[p + 16]; ct = u8[p + 17]; il = u8[p + 20]; } else if (type === 'IDAT') idat.push(body); else if (type === 'IEND') break; p += 12 + len; }
+    if (ct !== 0 || (bd !== 8 && bd !== 16) || il !== 0) throw new Error('not an 8/16-bit greyscale non-interlaced PNG');
+    let tot = 0; for (const b of idat) tot += b.length; const z = new Uint8Array(tot); let o = 0; for (const b of idat) { z.set(b, o); o += b.length; }
+    const raw = new Uint8Array(await new Response(new Blob([z]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+    const bpp = bd >> 3, stride = w * bpp; const out = new Uint8Array(h * stride); let prev = new Uint8Array(stride);
+    for (let y = 0; y < h; y++) { const f = raw[y * (stride + 1)]; const src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)); const cur = out.subarray(y * stride, (y + 1) * stride);
+        for (let i = 0; i < stride; i++) { const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0; let v = src[i];
+            if (f === 1) v += a; else if (f === 2) v += b; else if (f === 3) v += (a + b) >> 1; else if (f === 4) { const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c); v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); }
+            cur[i] = v & 255; }
+        prev = cur; }
+    if (bd === 8) return { w, h, data: out, max: 255 };
+    const d16 = new Uint16Array(w * h); for (let i = 0; i < w * h; i++) d16[i] = (out[2 * i] << 8) | out[2 * i + 1]; return { w, h, data: d16, max: 65535 };
+}
+async function importObjectLayers() {
+    if (!(window._bgQuickBaked && window._qbSize)) { alert('Object layers: build the plate first (S6 panel), then import.'); return; }
+    const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
+    const files = await new Promise((res) => { input.onchange = (ev) => res(Array.from(ev.target.files || [])); input.click(); });
+    if (!files.length) return;
+    const pw = window._qbSize.pw, ph = window._qbSize.ph; const byId = new Map();
+    for (const f of files) { const m = /^obj_(\d+)_(color|colour|depth16|depth)\.png$/i.exec(f.name); if (!m) { console.warn('[S27] skipped ' + f.name + ' (expected obj_<k>_color.png / obj_<k>_depth16.png)'); continue; } const id = +m[1]; if (!byId.has(id)) byId.set(id, {}); byId.get(id)[/col/i.test(m[2]) ? 'color' : 'depth'] = f; }
+    const entries = [];
+    for (const [id, ff] of byId) {
+        if (!ff.color) { console.warn('[S27] object ' + id + ': no colour file'); continue; }
+        const rgba = await _pngToRgba(ff.color, pw, ph); let depth = null;
+        if (ff.depth) { let g16 = null; try { g16 = await _png16Decode(new Uint8Array(await ff.depth.arrayBuffer())); } catch (e) { g16 = null; }
+            depth = new Float32Array(pw * ph);
+            if (g16 && g16.w === pw && g16.h === ph) { for (let i = 0; i < depth.length; i++) depth[i] = g16.data[i] / g16.max; }
+            else { const r8 = await _pngToRgba(ff.depth, pw, ph); for (let i = 0; i < depth.length; i++) depth[i] = r8[i * 4] / 255; console.warn('[S27] object ' + id + ': depth read through the canvas (8-bit)'); } }
+        entries.push({ id, rgba, depth });
+    }
+    const st = window._importObjectLayersFromData(entries);
+    alert(st ? ('Imported ' + st.length + ' object layer(s); the per-layer report is in the console. A new Build drops them.') : 'Import failed: build the plate first.');
+}
+
 function exportSDBundle() {
     try {
         if (!renderer || !postProcessScene || !postProcessCamera) { alert('Renderer not ready'); return; }
@@ -10036,6 +10217,15 @@ function exportSDBundle() {
                     meta.files['plane_out_color.png'] = 'plate 1 colour edge-extended into the margin (outpaint seed)' + tagM;
                     meta.files['plane_out_depth16.png'] = 'plate 1 depth edge-extended into the margin (16-bit)' + tagM;
                     meta.plane_margin = { Mx, My, clip: mg.clip, note: 'clip = picture: the strips are drawn only inside the frame\'s rest footprint; window: the whole portal' }; }
+                // S27: the occluders as objects — the layer model's input (boxes / masks) and the key the reimport matches on
+                try { const ob = _planeObjects(true); if (ob) {
+                    mask8('plane_object_ids.png', (i) => ob.ids[i], 'object id per texel (0 = none; 1..254 = objects, largest first; 255 = beyond the cap): one continuous occluder surface standing in front of the background its band reveals — the footprint a layer model completes; boxes in meta.plane_objects');
+                    const L0o = mediaLayers[0]; const im0 = L0o && ((L0o.elements && L0o.elements.color) || (L0o.textures && L0o.textures.color && L0o.textures.color.image));
+                    meta.plane_objects = { rule: 'A253: texels in front of the a-priori far field by more than the cliff step (fgTearStep = ' + ((typeof fgTearStep === 'number') ? fgTearStep.toFixed(4) : '?') + '), 4-connected; ranked by band demand; components without band demand not exported', count: ob.objects.length, overflow: window._qbObjOverflow || 0, withoutDemand: window._qbObjNoDemand || 0, nativeRes: [pw, ph], sourceImageSize: im0 ? [im0.naturalWidth || im0.videoWidth || im0.width, im0.naturalHeight || im0.videoHeight || im0.height] : null,
+                        bboxConvention: '[x0, y0, x1, y1) in plate texels, rows top-first; scale by sourceImageSize / nativeRes for the source picture',
+                        depthConvention: 'frontDepthMean / backgroundDepthMean are normalised disparity (1 near, 0 far) as in the 16-bit files',
+                        reimport: 'obj_<id>_color.png (RGBA at the plate grid; alpha = the completed object, hidden part included) [+ obj_<id>_depth16.png: any depth or disparity, aligned on the object\'s visible front] -> Import object layers (S27). Visible texels keep the source depth; hidden texels continue the object\'s own front (zero-thickness rule, S26 §3b) or the aligned depth, then sit behind whatever is visible at them (ordering clamp, one quantum).',
+                        objects: ob.objects }; } } catch (eO) { console.warn('[S27] objects failed:', eO); }
                 const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
                 meta.plane = {
                     nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null,
@@ -10048,7 +10238,7 @@ function exportSDBundle() {
                     liveView: 'SD regions: cyan = class 1, blue = 2, teal = 3, magenta = plate 2, orange = beyond the frame, backdrop = uncovered',
                     notes: ['16-bit files clamp d to [0,1]: sky texels (plate depth a hair below 0 under the plane at infinity) read 0 — use plane_sky_mask, not a threshold, to find them',
                             'plate 2 depth equals plate 1 where plane_plate2_mask is black (the vertex rides plate 1)',
-                            'no reimport of this set exists yet; the legacy Import SD Inpaint Result builds a patch mesh from one colour+depth pair'] };
+                            'reimport: completed object layers via Import object layers (S27, obj_<id>_*.png, see meta.plane_objects.reimport); the plate colour itself has no reimport yet — the legacy Import SD Inpaint Result builds a patch mesh from one colour+depth pair'] };
                 planeSet = true;
                 console.log('[SD-BUNDLE] plane set: ' + files.filter(f => f.name.startsWith('plane_')).length + ' files at ' + pw + 'x' + ph + '; counts ' + JSON.stringify(meta.plane.counts));
             } catch (eP) { console.error('[SD-BUNDLE] plane set FAILED:', eP); }
@@ -15028,6 +15218,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) { const p2 = bgLayerMesh.userData.plate2; scene.remove(p2); p2.geometry.dispose(); try { const u = p2.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} p2.material.dispose(); bgLayerMesh.userData.plate2 = null; }   // S4 plate 2
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) { const pS = bgLayerMesh.userData.steps; scene.remove(pS); pS.geometry.dispose(); try { const u = pS.material.uniforms; if (u && u.displacementMap && u.displacementMap.value) u.displacementMap.value.dispose(); if (u && u.map && u.map.value) u.map.value.dispose(); } catch (e) {} pS.material.dispose(); bgLayerMesh.userData.steps = null; }   // S5 step faces
             if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.back) { const bm = bgLayerMesh.userData.back; scene.remove(bm); if (bm.material) { if (bm.material.uniforms && bm.material.uniforms.displacementMap && bm.material.uniforms.displacementMap.value) bm.material.uniforms.displacementMap.value.dispose(); bm.material.dispose(); } bgLayerMesh.userData.back = null; }   // A257 object backs
+            if (bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.objLayers && bgLayerMesh.userData.objLayers.length) { try { const nO = window._clearObjectLayers(); console.log('[S27] rebuild dropped ' + nO + ' imported object layer(s); import again after the build'); } catch (e) {} }   // S27
             if (bgLayerMesh) { scene.remove(bgLayerMesh); bgLayerMesh.material.dispose();
                 if (bgLayerMesh.geometry && L.mesh && bgLayerMesh.geometry !== L.mesh.geometry) bgLayerMesh.geometry.dispose();
                 bgLayerMesh = null; }
@@ -20227,7 +20418,7 @@ function _wireDebugSheetControls() {
         const on = !!e.target.checked;
         window._sdHighlightOn = on;   // A210: the demand backdrop follows this
         const setH = (mm) => { if (mm && mm.uniforms && mm.uniforms.u_sdHighlight) mm.uniforms.u_sdHighlight.value = on; };
-        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setH(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setH(ud.plate2.material); if (ud.steps) setH(ud.steps.material); if (ud.sky) setH(ud.sky.material); if (ud.back) setH(ud.back.material); }   // C: plate 2, step faces, sky, backs follow the toggle (the ring shares plate 1's material)
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setH(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setH(ud.plate2.material); if (ud.steps) setH(ud.steps.material); if (ud.sky) setH(ud.sky.material); if (ud.back) setH(ud.back.material); if (ud.objLayers) for (const mO of ud.objLayers) setH(mO.material); }   // C: plate 2, step faces, sky, backs, S27 object layers follow the toggle (the ring shares plate 1's material)
         for (const Lx of mediaLayers) if (Lx.mesh) setH(Lx.mesh.material);
         if (typeof mpiLayers !== 'undefined' && mpiLayers) for (const Lr of mpiLayers) if (Lr.mesh) setH(Lr.mesh.material);
         if (typeof mpiFullMeshes !== 'undefined' && mpiFullMeshes) for (const m of mpiFullMeshes) setH(m.material);
@@ -20241,7 +20432,7 @@ function _wireDebugSheetControls() {
         window._sdPaintOnlyOn = !!on;
         const setP = (mm) => { if (mm && mm.uniforms && mm.uniforms.u_sdPaintOnly) mm.uniforms.u_sdPaintOnly.value = !!on; };
         for (const Lx of mediaLayers) if (Lx.mesh) setP(Lx.mesh.material);
-        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setP(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setP(ud.plate2.material); if (ud.steps) setP(ud.steps.material); if (ud.sky) setP(ud.sky.material); if (ud.back) setP(ud.back.material); }
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setP(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setP(ud.plate2.material); if (ud.steps) setP(ud.steps.material); if (ud.sky) setP(ud.sky.material); if (ud.back) setP(ud.back.material); if (ud.objLayers) for (const mO of ud.objLayers) setP(mO.material); }
         if (typeof bgSDDemandMesh !== 'undefined' && bgSDDemandMesh && bgSDDemandMesh.material.uniforms.u_paintOnly) bgSDDemandMesh.material.uniforms.u_paintOnly.value = !!on;
     };
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._applyPlateOptions) window._applyPlateOptions(); /* read the selects now, not the cached copy (a value set from the console fires no change event) */ if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
@@ -21219,7 +21410,8 @@ function updateCameraAndProjection() {
         try { bgEnsureFishtank(); } catch (e) {}
         _syncBG(typeof bgLayerMesh !== 'undefined' ? bgLayerMesh : null);
         if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.plate2) _syncBG(bgLayerMesh.userData.plate2);
-        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) _syncBG(bgLayerMesh.userData.steps);   // S5 step faces   // S4 plate 2 (its depth-law uniforms were the app defaults: 56 px per head fraction where the hill moves 700)
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.steps) _syncBG(bgLayerMesh.userData.steps);   // S5 step faces
+        if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.objLayers) for (const mO of bgLayerMesh.userData.objLayers) _syncBG(mO);   // S27 object layers   // S4 plate 2 (its depth-law uniforms were the app defaults: 56 px per head fraction where the hill moves 700)
         // A170: this comment used to say the quick skirt carries its own cloned
         // material and therefore needs its own sync. a169 deleted that material
         _syncBG(typeof mpiMidMesh !== 'undefined' ? mpiMidMesh : null);
@@ -26805,6 +26997,7 @@ function setupStaticControlListeners() {
     }
     
     document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
+    const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);
