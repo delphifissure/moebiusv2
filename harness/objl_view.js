@@ -30,6 +30,11 @@ const meta = S ? JSON.parse(fs.readFileSync(path.join(H, 'truthkit', 'out', S, '
     }, { depth: meta ? { outer: meta.outer, inner: meta.inner, pn: meta.pn } : null, sky });
     const view = async (name) => { const r = await page.evaluate(() => { const v = window._objectView({ noDownload: true, quiet: true }); return v ? { png: v.canvas.toDataURL('image/png'), counts: v.counts } : null; });
         if (!r) { console.log('no view'); return; } fs.writeFileSync(path.join(OUT, name), Buffer.from(r.png.split(',')[1], 'base64')); console.log(name + ' ' + JSON.stringify(r.counts)); };
+    // the object export for external segmenters: ids, boxes, and the source picture at the plate grid
+    { const ex = await page.evaluate(() => { const ob = _planeObjects(false); const sz = window._qbSize; const u8 = ob.ids; let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+        const L0 = mediaLayers[0]; const img = L0 && ((L0.elements && L0.elements.color) || (L0.textures && L0.textures.color && L0.textures.color.image)); const cv = document.createElement('canvas'); cv.width = sz.pw; cv.height = sz.ph; cv.getContext('2d').drawImage(img, 0, 0, sz.pw, sz.ph);
+        return { pw: sz.pw, ph: sz.ph, objects: ob.objects, idsB64: btoa(s), src: cv.toDataURL('image/png'), depth: { outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane } }; });
+      fs.writeFileSync(path.join(OUT, 'objIds.u8'), Buffer.from(ex.idsB64, 'base64')); fs.writeFileSync(path.join(OUT, 'objects.json'), JSON.stringify({ pw: ex.pw, ph: ex.ph, depth: ex.depth, objects: ex.objects }, null, 1)); fs.writeFileSync(path.join(OUT, 'source_plate.png'), Buffer.from(ex.src.split(',')[1], 'base64')); }
     await view('view_before.png');
     if (DEMO && fs.existsSync(DEMO)) {
         const names = fs.readdirSync(DEMO).filter(f => /^obj_\d+_(color|visible|depth16)\.png$/.test(f));

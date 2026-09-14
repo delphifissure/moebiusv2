@@ -3563,12 +3563,20 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                     vec3 tint = (cls < 1.5) ? vec3(0.15, 0.75, 1.0)      // 1 paint: cyan
                               : (cls < 2.5) ? vec3(0.35, 0.40, 0.85)     // 2 band outside the tier: blue
                               : (cls < 3.5) ? vec3(0.10, 0.70, 0.50)     // 3 carrier-only: teal
-                                            : vec3(1.00, 0.20, 0.90);    // 4 plate 2: magenta
-                    originalColor.rgb = mix(originalColor.rgb, tint, 0.55);
-                    if (edge > 0.5) originalColor.rgb = mix(originalColor.rgb, vec3(1.0), 0.75);
+                              : (cls < 4.5) ? vec3(1.00, 0.20, 0.90)     // 4 plate 2: magenta
+                              : (cls < 5.5) ? vec3(0.95, 0.12, 0.12)     // 5 S28 highlight: occluded by an object (red)
+                              : (cls < 6.5) ? vec3(1.00, 0.60, 0.05)     // 6 S28 highlight: the background hiding itself (orange)
+                                            : vec3(0.15, 0.50, 1.00);    // 7 S28 highlight: the object / the visible background (blue)
+                    originalColor.rgb = mix(originalColor.rgb, tint, cls > 4.5 ? 0.6 : 0.55);
+                    if (edge > 0.5 && cls < 4.5) originalColor.rgb = mix(originalColor.rgb, vec3(1.0), 0.75);
                 }
             } else {
-                originalColor.rgb = u_sdPaintOnly ? vec3(0.0) : originalColor.rgb * 0.35;   // dim FG so the regions read through
+                float clsF = texture2D(u_sdPaint, vUv).r;   // S28: the foreground's own paint (object highlight); 0 = dim as before
+                if (u_sdPaintOnly) originalColor.rgb = vec3(0.0);
+                else if (clsF > 7.5 && clsF < 8.5) originalColor.rgb = mix(originalColor.rgb, vec3(0.95, 0.12, 0.12), 0.3);   // 8 S28: this pixel hides part of the selected surface (faint red; the band behind it is red)
+                else if (clsF > 8.5) originalColor.rgb = mix(mix(originalColor.rgb, vec3(0.15, 0.50, 1.00), 0.5), vec3(1.00, 0.60, 0.05), 0.35);   // 9 S28: the selected surface hiding itself here (blue, faint orange; revealed orange behind)
+                else if (clsF > 4.5) originalColor.rgb = mix(originalColor.rgb, (clsF < 5.5) ? vec3(0.95, 0.12, 0.12) : (clsF < 6.5) ? vec3(1.00, 0.60, 0.05) : vec3(0.15, 0.50, 1.00), 0.5);
+                else originalColor.rgb = originalColor.rgb * 0.35;   // dim FG so the regions read through
             }
         }
     `;
@@ -9920,6 +9928,9 @@ function _planeObjects(force) {
     if (!sz || !dQ || !dis || !pF || !ff) return null;
     const pw = sz.pw, ph = sz.ph, N = pw * ph;
     if (ff.length !== N) return null;
+    // S28: an external object map (SAM 2.1 masks imported through _setObjectIds / Import object masks) replaces the depth-only
+    // objects for everything downstream (export, object view, layer import, highlight) as long as it fits this plate grid
+    if (window._extObj && window._extObj.ids && window._extObj.ids.length === N && force !== 'depth') { window._qbObjIds = window._extObj.ids; window._qbObjInfo = window._extObj.objects; window._qbObjOverflow = 0; window._qbObjNoDemand = 0; return { ids: window._extObj.ids, objects: window._extObj.objects, source: window._extObj.source }; }
     if (!force && window._qbObjIds && window._qbObjInfo && window._qbObjIds.length === N) return { ids: window._qbObjIds, objects: window._qbObjInfo };
     const pS = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
     const TOLB = (typeof fgTearStep === 'number' && fgTearStep > 0) ? fgTearStep : 0.06;
@@ -9947,6 +9958,137 @@ function _planeObjects(force) {
     console.log('[S27] objects (A253 rule, step ' + TOLB.toFixed(4) + '): ' + comps.length + ' components in front of the far field, ' + kept.length + ' with band demand' + (kept.length > 254 ? ' (' + (kept.length - 254) + ' beyond the cap as id 255)' : '') + '; first ' + (objects[0] ? objects[0].footprintPx + ' px, band ' + objects[0].bandPx : '-'));
     return { ids, objects };
 }
+// S28: an object map from outside (SAM 2.1 visible masks, harness/segment/sam2_objects.py; or any id map at the plate grid).
+// ids: Uint8Array(N) source rows, 0 = none; objects: optional [{id, bbox, …}] — recomputed here from the map and the current
+// band when absent or incomplete (footprint, band demand, front depth, background depth), ranked as the export ranks.
+window._setObjectIds = function (ids, objects, source) {
+    const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF;
+    if (!(sz && dQ && dis && pF)) { console.warn('[S28] set object ids: build the plate first'); return null; }
+    const pw = sz.pw, ph = sz.ph, N = pw * ph; if (!ids || ids.length !== N) { console.warn('[S28] set object ids: map must be ' + pw + 'x' + ph); return null; }
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
+    const acc = new Map();
+    for (let i = 0; i < N; i++) { const k = ids[i]; if (!k) continue; let c = acc.get(k); if (!c) { c = { id: k, px: 0, band: 0, x0: pw, y0: ph, x1: -1, y1: -1, dSum: 0, bgSum: 0 }; acc.set(k, c); }
+        const x = i % pw, y = (i - x) / pw; c.px++; c.dSum += dQ[i]; if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y < c.y0) c.y0 = y; if (y > c.y1) c.y1 = y;
+        const pSi = pF[(ph - 1 - y) * pw + x]; if (dis[i] && pSi < dQ[i] - q && !(skyOn && pSi < sq)) { c.band++; c.bgSum += pSi; } }
+    const given = new Map((objects || []).map((o) => [o.id, o]));
+    const out = [...acc.values()].sort((a, b) => (b.band - a.band) || (b.px - a.px)).map((c) => Object.assign({}, given.get(c.id) || {}, { id: c.id, footprintPx: c.px, bandPx: c.band, bbox: [c.x0, c.y0, c.x1 + 1, c.y1 + 1], frontDepthMean: c.dSum / c.px, backgroundDepthMean: c.band ? c.bgSum / c.band : null }));
+    window._extObj = { ids: ids instanceof Uint8Array ? ids : new Uint8Array(ids), objects: out, source: source || 'external' };
+    window._qbObjIds = window._extObj.ids; window._qbObjInfo = out; window._qbObjOverflow = 0; window._qbObjNoDemand = 0;
+    console.log('[S28] object map set from ' + window._extObj.source + ': ' + out.length + ' objects; first ' + (out[0] ? out[0].footprintPx + ' px, band ' + out[0].bandPx : '-')); return window._extObj;
+};
+window._clearObjectIds = function () { window._extObj = null; window._qbObjIds = null; window._qbObjInfo = null; return _planeObjects(true); };
+async function importObjectMasks() {
+    if (!(window._bgQuickBaked && window._qbSize)) { alert('Object masks: build the plate first, then import.'); return; }
+    const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = '.png,.json';
+    const files = await new Promise((res) => { input.onchange = (ev) => res(Array.from(ev.target.files || [])); input.click(); });
+    if (!files.length) return;
+    const pw = window._qbSize.pw, ph = window._qbSize.ph; let png = null, meta = null;
+    for (const f of files) { if (/\.png$/i.test(f.name)) png = f; else if (/\.json$/i.test(f.name)) meta = f; }
+    if (!png) { alert('Object masks: pick the id map PNG (plane_object_ids*.png; 0 = none, one grey level per object).'); return; }
+    let ids = null; try { const g = await _png16Decode(new Uint8Array(await png.arrayBuffer())); if (g.w === pw && g.h === ph) { ids = new Uint8Array(pw * ph); for (let i = 0; i < ids.length; i++) ids[i] = g.max === 255 ? g.data[i] : Math.round(g.data[i] * 255 / g.max); } } catch (e) { ids = null; }
+    if (!ids) { const r = await _pngToRgba(png, pw, ph); ids = new Uint8Array(pw * ph); for (let i = 0; i < ids.length; i++) ids[i] = r[i * 4]; }
+    let objects = null; if (meta) { try { const j = JSON.parse(await meta.text()); objects = j.objects || j; } catch (e) { objects = null; } }
+    const r = window._setObjectIds(ids, objects, png.name + (meta ? ' + ' + meta.name : ''));
+    alert(r ? ('Object map set: ' + r.objects.length + ' objects (' + r.source + '). The export, the Object view, the layer import and the highlight now use it.') : 'Object masks: import failed (see console).');
+}
+// S28 BAND CONTINUATION: which visible surface each band texel continues. A band texel p (plate texel with a far side under
+// the foreground pixel p) has an OCCLUDER, ids[p] (the foreground pixel in front of it; 0 = background), and a CONTINUATION:
+// the visible surface its far-side depth joins on the plate. The plate's far field is the surface continued from the band's
+// outer rim, so labels are flooded from the visible texels into the band along the plate depth with the rim law's join
+// predicate (the same "one surface = one continuous depth" test as _planeObjects): cont[p] = the id of the surface p
+// continues (0 = background, > 0 an object, -1 = joined nothing — a band texel whose far depth continues no visible
+// neighbour, left unclassified rather than guessed). occluder != continuation is an OCCLUSION BY ANOTHER SURFACE (red in
+// the highlight / object view); occluder == continuation is a surface hiding ITSELF at an internal depth step (the arm over
+// the torso, the wall's own step: orange). What this reads is only what the depth map contains — the far side of a step
+// inside the picture. An object's own sides and back faces beyond its silhouette are not in the picture and are not here.
+window._bandContinuation = function (ob) {
+    const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF; if (!(sz && dQ && dis && pF && ob && ob.ids)) return null;
+    const pw = sz.pw, ph = sz.ph, N = pw * ph; const ids = ob.ids;
+    const c = window._qbBandCont; if (c && c.ids === ids && c.pF === pF && c.cont.length === N) return c.cont;
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const pS = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
+    const band = new Uint8Array(N); for (let i = 0; i < N; i++) if (dis[i] && pS[i] < dQ[i] - q) band[i] = 1;
+    const rl = bgRimLawFor(pw, ph); const cont = new Int16Array(N).fill(-1); const queue = new Int32Array(N); let qh = 0, qt = 0;
+    // Two surfaces per texel: the VISIBLE one at dQ[t] (label ids[t]) and, on band texels, the FAR SIDE at pS[j]. The far
+    // side at j continues the visible surface at a neighbour t when the two depths join under the rim law — the same
+    // predicate as joinedIdx, evaluated across the two arrays (visible slope on t's side, far-side slope on j's side). A band
+    // texel is a seed too: S9's cards are band over their whole footprint (the envelope reveals everything behind them), so
+    // a rule that seeds only from non-band texels never reaches the far side at the green card's depth behind the red one
+    // (31 010 of 64 360 band texels unjoined; measured on the S9 probe dump — the band touched only wall pixels).
+    const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
+    const joinedAB = (i, A, j, B) => { const dA = A[i], dB = B[j];
+        if (skyOn && (dA < sq || dB < sq)) return (dA < sq) && (dB < sq);
+        if (rl.joined(dA, dB)) return true;
+        const xi = i % pw, yi = (i - xi) / pw, xj = j % pw, yj = (j - xj) / pw, dx = xj - xi, dy = yj - yi;
+        const a = rl.dispAt(dA), b = rl.dispAt(dB), tol = Math.max(rl.tolAt(dA), rl.tolAt(dB));
+        const xp = xi - dx, yp = yi - dy; if (xp >= 0 && xp < pw && yp >= 0 && yp < ph) { const pr = 2 * a - rl.dispAt(A[yp * pw + xp]); if (Math.abs(b - pr) <= tol) return true; }
+        const xn = xj + dx, yn = yj + dy; if (xn >= 0 && xn < pw && yn >= 0 && yn < ph) { const pr = 2 * b - rl.dispAt(B[yn * pw + xn]); if (Math.abs(a - pr) <= tol) return true; }
+        return false; };
+    let nJoined = 0, nBand = 0, nGated = 0; for (let i = 0; i < N; i++) nBand += band[i];
+    // Seeds are gated: the visible surface at t continues into the far side at j only if it is NOT the occluding surface at
+    // j — i.e. dQ[t] is not joined to j's own source depth dQ[j]. Without the gate the occluder's interior seeds the band
+    // from its deep edge wherever the plate is stretched to meet the foreground (seams = stretched ramps the plate depth up
+    // to the occluder there), and a breadth-first race is won by distance, not by depth: on the troll the whole silhouette
+    // band came out as "the troll hiding itself" (61 749 of 77 074 band texels). Inside the band the flood follows the
+    // plate depth alone, so a section seeded at part of its rim is still labelled throughout.
+    for (let t = 0; t < N; t++) { const x = t % pw, y = (t - x) / pw;   // pass 1: every visible surface seeds the far sides next to it
+        const nb = [x > 0 ? t - 1 : -1, x < pw - 1 ? t + 1 : -1, y > 0 ? t - pw : -1, y < ph - 1 ? t + pw : -1];
+        for (const j of nb) { if (!(j >= 0 && band[j] && cont[j] === -1 && joinedAB(t, dQ, j, pS))) continue;
+            if (rl.joinedIdx(t, j, dQ, pw)) { nGated++; continue; }
+            cont[j] = ids[t]; queue[qt++] = j; nJoined++; } }
+    while (qh < qt) { const t = queue[qh++]; const x = t % pw, y = (t - x) / pw; const lab = cont[t];   // pass 2: along the plate depth inside the band
+        const nb = [x > 0 ? t - 1 : -1, x < pw - 1 ? t + 1 : -1, y > 0 ? t - pw : -1, y < ph - 1 ? t + pw : -1];
+        for (const j of nb) if (j >= 0 && band[j] && cont[j] === -1 && rl.joinedIdx(t, j, pS, pw)) { cont[j] = lab; queue[qt++] = j; nJoined++; } }
+    for (let i = 0; i < N; i++) if (!band[i]) cont[i] = ids[i];
+    let nSelf = 0, nOther = 0; for (let i = 0; i < N; i++) if (band[i] && cont[i] >= 0) { if (cont[i] === ids[i]) nSelf++; else nOther++; }
+    window._qbBandCont = { ids, pF, cont, stats: { band: nBand, joined: nJoined, unjoined: nBand - nJoined, self: nSelf, other: nOther, seedsGated: nGated } };
+    console.log('[S28] band continuation: ' + nBand + ' band texels, ' + nJoined + ' joined to a visible surface along the plate depth (' + nOther + ' occluded by another surface, ' + nSelf + ' a surface hiding itself), ' + (nBand - nJoined) + ' joined nothing; ' + nGated + ' seed edges gated (the occluder itself)');
+    return cont;
+};
+// S28 LIVE HIGHLIGHT, the standpoint of one surface. sel >= 1 (an object): its visible footprint blue on the foreground;
+// on the plate, the band texels that continue it RED where another surface hides them (the woman in front of the troll) and
+// ORANGE where the object hides them itself (its arm over its torso) — revealed as the head moves; at rest the same texels
+// are marked faintly on the foreground pixel that hides them (faint red on the other object, faint orange on the object's
+// own occluding part). sel = 0 (the background): the objects red (they occlude it), the background's own steps faint orange
+// on the foreground and orange in the band, the rest of the visible background blue. sel = -1: off. Continuation per
+// _bandContinuation: only steps inside the picture are read; an object's sides and back beyond its silhouette are not drawn.
+window._objectHighlight = function (sel) {
+    const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF;
+    if (!(window._bgQuickBaked && sz && dQ && dis && pF && typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.material && bgLayerMesh.material.uniforms.u_sdPaint)) { console.warn('[S28] highlight: build the plate first'); return null; }
+    const pw = sz.pw, ph = sz.ph, N = pw * ph; const matQ = bgLayerMesh.material; const L = mediaLayers[0]; const fgU = L && L.mesh && L.mesh.material && L.mesh.material.uniforms;
+    if (window._objHL === undefined) window._objHL = { platePaint: matQ.uniforms.u_sdPaint.value, fgPaint: fgU && fgU.u_sdPaint ? fgU.u_sdPaint.value : null, fgTex: null, plateTex: null };
+    const chk = document.getElementById('sdRegionsChk');
+    if (sel === null || sel === undefined || sel < 0) {   // off: the C classes back, the toggle as the checkbox says
+        matQ.uniforms.u_sdPaint.value = window._objHL.platePaint; if (fgU && fgU.u_sdPaint) fgU.u_sdPaint.value = window._objHL.fgPaint;
+        if (window._objHL.plateTex) { window._objHL.plateTex.dispose(); window._objHL.plateTex = null; } if (window._objHL.fgTex) { window._objHL.fgTex.dispose(); window._objHL.fgTex = null; }
+        for (const m of (bgLayerMesh.userData && bgLayerMesh.userData.objLayers) || []) if (m.material && m.material.uniforms && m.material.uniforms.u_sdPaint) m.material.uniforms.u_sdPaint.value = null;
+        if (window._objHL.layTex) { window._objHL.layTex.dispose(); window._objHL.layTex = null; }
+        if (chk) { chk.checked = !!window._objHLPrevChk; chk.dispatchEvent(new Event('change')); } window._objHLSel = -1; console.log('[S28] highlight off'); return { sel: -1 };
+    }
+    const ob = _planeObjects(false); if (!ob) return null; const ids = ob.ids; const cont = window._bandContinuation(ob); if (!cont) return null;
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    // imported object layers (S27): the selected object's own layer carries its hidden part (alpha minus visible) — that part
+    // is what another object hides of it: red on the layer, faint red on the foreground pixels covering it
+    const layers = (bgLayerMesh.userData && bgLayerMesh.userData.objLayers) || []; const layerHidden = new Uint8Array(N); let nLayerHidden = 0;
+    for (const m of layers) if (sel >= 1 && m.userData.objLayer === sel && m.userData.alpha && m.userData.vis) { const a = m.userData.alpha, v = m.userData.vis; for (let i = 0; i < N; i++) if (a[i] && !v[i]) { layerHidden[i] = 1; nLayerHidden++; } }
+    const plate = new Float32Array(N), fg = new Float32Array(N), lay = nLayerHidden ? new Float32Array(N) : null; const n = { red: 0, orange: 0, blue: 0, faintRed: 0, faintOrange: 0, bandUnjoined: 0, layerHidden: nLayerHidden };
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x, j = (ph - 1 - y) * pw + x; const far = dis[i] && pF[j] < dQ[i] - q; const k = ids[i], c = far ? cont[i] : -2;
+        if (far && c < 0) n.bandUnjoined++;
+        if (c === sel) { if (k === sel) { plate[j] = 6; n.orange++; } else { plate[j] = 5; n.red++; } }   // the band that continues the selected surface: hidden by itself (orange) or by another (red)
+        if (lay && layerHidden[i]) lay[j] = 5;
+        if (sel >= 1) { if (k === sel) { fg[j] = c === sel ? 9 : 7; if (c === sel) n.faintOrange++; else n.blue++; } else if (c === sel || layerHidden[i]) { fg[j] = 8; n.faintRed++; } }
+        else { if (k > 0) { fg[j] = 5; n.red++; } else { fg[j] = c === 0 ? 9 : 7; if (c === 0) n.faintOrange++; else n.blue++; } } }
+    const mk = (F) => { const t = new THREE.DataTexture(F, pw, ph, THREE.RedFormat, THREE.FloatType); t.needsUpdate = true; t.flipY = false; t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; };
+    if (window._objHL.plateTex) window._objHL.plateTex.dispose(); if (window._objHL.fgTex) window._objHL.fgTex.dispose(); if (window._objHL.layTex) { window._objHL.layTex.dispose(); window._objHL.layTex = null; }
+    window._objHL.plateTex = mk(plate); window._objHL.fgTex = mk(fg); if (lay) window._objHL.layTex = mk(lay);
+    matQ.uniforms.u_sdPaint.value = window._objHL.plateTex; if (fgU && fgU.u_sdPaint) fgU.u_sdPaint.value = window._objHL.fgTex;
+    for (const m of layers) if (m.material && m.material.uniforms && m.material.uniforms.u_sdPaint) m.material.uniforms.u_sdPaint.value = (lay && m.userData.objLayer === sel) ? window._objHL.layTex : null;
+    if (window._objHLSel === undefined || window._objHLSel < 0) window._objHLPrevChk = chk ? chk.checked : false;
+    if (chk && !chk.checked) { chk.checked = true; chk.dispatchEvent(new Event('change')); } else if (!chk) { window._sdHighlightOn = true; }
+    window._objHLSel = sel; const o = ob.objects.find((oo) => oo.id === sel);
+    const st = { sel, source: ob.source || 'depth-only', object: o || null, texels: n }; console.log('[S28] highlight ' + JSON.stringify(st)); return st;
+};
 function _objFitDepth(xs, ys, ok, N, qRange) {
     // y ~ a f(x) + b on the texels ok(i), f linear or inverse, two-three rounds of 3xMAD trimming; the space with the
     // smaller visible median residual wins (S26 §1: chosen on visible data only)
@@ -10087,11 +10229,13 @@ window._importObjectLayerFiles = async function (files) {   // the file path wit
 // S27 OBJECT VIEW: what the app knows about objects, drawn on the rest picture at the plate grid.
 //   blue outline  = an object's outline: its visible footprint (plane_object_ids) — or, when a completed layer was imported,
 //                   the layer's full (amodal) outline
-//   red           = the occluded section: with imported layers, the layer's hidden part (alpha minus visible); without, the
-//                   band texels that stand behind an occluder (what the envelope will reveal — an envelope fact, not the
-//                   hidden object's true extent, which the picture alone does not contain)
-//   orange        = self-occlusion: not drawn — nothing in the picture says where an object's own sides and back faces are
-//                   (the S5 mirror set was tried and rejected as a classifier, see below)
+//   red           = occluded by ANOTHER surface: with imported layers, the layer's hidden part (alpha minus visible); and the
+//                   band texels whose continuation (_bandContinuation) is not their occluder (what the envelope will reveal —
+//                   an envelope fact, not the hidden object's true extent, which the picture alone does not contain)
+//   orange        = a surface hiding ITSELF at a step inside the picture: band texels whose continuation is their own
+//                   occluder (the arm over the torso, the wall's own step). An object's sides and back faces beyond its
+//                   silhouette are not in the picture and are not drawn (the S5 mirror set was tried and rejected, see below)
+//   grey          = band texels whose far depth joins no visible surface (unclassified, not guessed)
 window._objectView = function (opts) {
     opts = opts || {};
     const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF;
@@ -10105,24 +10249,29 @@ window._objectView = function (opts) {
     const paint = (i, r, g, b, a) => { const k = i * 4; d[k] = d[k] * (1 - a) + r * a; d[k + 1] = d[k + 1] * (1 - a) + g * a; d[k + 2] = d[k + 2] * (1 - a) + b * a; };
     const outline = (mask, r, g, b) => { let n = 0; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!mask(i)) continue;
         if ((x > 0 && !mask(i - 1)) || (x < pw - 1 && !mask(i + 1)) || (y > 0 && !mask(i - pw)) || (y < ph - 1 && !mask(i + pw))) { paint(i, r, g, b, 1); n++; } } return n; };
-    const counts = { objects: ob.objects.length, band: 0, selfOcc: 0, layers: 0, layerHidden: 0, outlinePx: 0 };
+    const counts = { objects: ob.objects.length, band: 0, bandOther: 0, bandSelf: 0, bandUnjoined: 0, layers: 0, layerHidden: 0, outlinePx: 0 };
     const layers = (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.objLayers) || [];
     const covered = new Uint8Array(N); for (const m of layers) { const a = m.userData && m.userData.alpha; if (a) for (let i = 0; i < N; i++) if (a[i]) covered[i] = 1; }
-    // red: the occluded section
+    // red: hidden by another surface (imported layers' hidden part; band texels continuing a surface other than their occluder)
     if (layers.length) { for (const m of layers) { const a = m.userData.alpha, v = m.userData.vis; if (!a || !v) continue; counts.layers++; for (let i = 0; i < N; i++) if (a[i] && !v[i]) { paint(i, 230, 30, 30, 0.6); counts.layerHidden++; } } }
-    for (let i = 0; i < N; i++) { if (dis[i] && pF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)] < dQ[i] - q) { counts.band++; if (!layers.length || !covered[i]) paint(i, 230, 30, 30, layers.length ? 0.25 : 0.55); } }
-    // orange: self-occlusion — NOT drawn. The S5 mirror set was tried here and is not an occlusion classifier: on S9 it marked
-    // card-behind-card (another object) as "self", on the troll 30 % of the picture. An object's own sides and back faces are
-    // not in the picture; they need a 3D prior per object (S27 §4). counts.selfOcc stays 0 until such a source exists.
+    // orange: a surface hiding itself at a step inside the picture (band texels continuing their own occluder). The S5 mirror
+    // set was the same question asked with the depth-only objects (A253 components) and failed on identity: on S9 it marked
+    // card-behind-card as "self", on the troll 30 % of the picture. With the object identities from the masks and the
+    // continuation flooded along the plate depth the answer is per surface; sides and back faces beyond the silhouette
+    // remain outside the picture and need a 3D prior per object (S27 §4).
+    const cont = window._bandContinuation(ob) || new Int16Array(N).fill(-1);
+    for (let i = 0; i < N; i++) { if (dis[i] && pF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)] < dQ[i] - q) { counts.band++; const c = cont[i]; const a = layers.length ? 0.25 : 0.55;
+        if (c < 0) { counts.bandUnjoined++; paint(i, 150, 150, 150, a); } else if (c === ob.ids[i]) { counts.bandSelf++; paint(i, 255, 150, 0, a); } else { counts.bandOther++; if (!layers.length || !covered[i]) paint(i, 230, 30, 30, a); } } }
     // blue: outlines — imported layers' full outline, else the visible footprints
     if (layers.length) { for (const m of layers) { const a = m.userData.alpha; if (a) counts.outlinePx += outline((i) => a[i] > 0, 40, 130, 255); } }
     else counts.outlinePx = outline((i) => ob.ids[i] > 0, 40, 130, 255);
     cx.putImageData(id, 0, 0);
     cx.font = '12px sans-serif'; const legend = ['blue = object outline (' + (layers.length ? layers.length + ' imported layer(s): full extent' : counts.objects + ' visible footprints') + ')',
-        'red = occluded section (' + (layers.length ? counts.layerHidden + ' px hidden in the layers; faint: band behind other occluders' : counts.band + ' band px behind an occluder: the envelope\'s reveal, not the hidden object\'s extent') + ')',
-        'orange = self-occlusion: none — not readable from the picture (needs a 3D prior per object)'];
+        'red = hidden by another surface (' + (layers.length ? counts.layerHidden + ' px hidden in the layers; faint: ' : '') + counts.bandOther + ' band px continuing a surface other than their occluder: the envelope\'s reveal, not the hidden object\'s extent)',
+        'orange = a surface hiding itself at a step inside the picture (' + counts.bandSelf + ' band px continuing their own occluder); sides and back faces beyond a silhouette are not in the picture',
+        'grey = band px whose far depth joins no visible surface (' + counts.bandUnjoined + ', unclassified)'];
     cx.fillStyle = 'rgba(0,0,0,0.6)'; cx.fillRect(0, 0, 8 + 6.2 * Math.max(...legend.map((t) => t.length)), 14 * legend.length + 8);
-    legend.forEach((t, k) => { cx.fillStyle = k === 0 ? '#2882ff' : k === 1 ? '#e61e1e' : '#ff9600'; cx.fillText(t, 4, 14 + 14 * k); });
+    legend.forEach((t, k) => { cx.fillStyle = k === 0 ? '#2882ff' : k === 1 ? '#e61e1e' : k === 2 ? '#ff9600' : '#a0a0a0'; cx.fillText(t, 4, 14 + 14 * k); });
     if (!opts.noDownload) { const a = document.createElement('a'); a.href = cv.toDataURL('image/png'); a.download = 'moebius_object_view.png'; a.click(); }
     console.log('[S27] object view ' + JSON.stringify(counts)); return { canvas: cv, counts };
 };
@@ -10279,7 +10428,7 @@ function exportSDBundle() {
                 try { const ob = _planeObjects(true); if (ob) {
                     mask8('plane_object_ids.png', (i) => ob.ids[i], 'object id per texel (0 = none; 1..254 = objects, largest first; 255 = beyond the cap): one continuous occluder surface standing in front of the background its band reveals — the footprint a layer model completes; boxes in meta.plane_objects');
                     const L0o = mediaLayers[0]; const im0 = L0o && ((L0o.elements && L0o.elements.color) || (L0o.textures && L0o.textures.color && L0o.textures.color.image));
-                    meta.plane_objects = { rule: 'A253: texels in front of the a-priori far field by more than the cliff step (fgTearStep = ' + ((typeof fgTearStep === 'number') ? fgTearStep.toFixed(4) : '?') + '), 4-connected; ranked by band demand; components without band demand not exported', count: ob.objects.length, overflow: window._qbObjOverflow || 0, withoutDemand: window._qbObjNoDemand || 0, nativeRes: [pw, ph], sourceImageSize: im0 ? [im0.naturalWidth || im0.videoWidth || im0.width, im0.naturalHeight || im0.videoHeight || im0.height] : null,
+                    meta.plane_objects = { source: ob.source || 'depth-only (A253 + continuity)', rule: ob.source ? ('external object map: ' + ob.source + '; footprint / band demand / depths recomputed on this bake') : 'A253: texels in front of the a-priori far field by more than the cliff step (fgTearStep = ' + ((typeof fgTearStep === 'number') ? fgTearStep.toFixed(4) : '?') + '), joined under the rim law; ranked by band demand; components without band demand not exported', count: ob.objects.length, overflow: window._qbObjOverflow || 0, withoutDemand: window._qbObjNoDemand || 0, nativeRes: [pw, ph], sourceImageSize: im0 ? [im0.naturalWidth || im0.videoWidth || im0.width, im0.naturalHeight || im0.videoHeight || im0.height] : null,
                         bboxConvention: '[x0, y0, x1, y1) in plate texels, rows top-first; scale by sourceImageSize / nativeRes for the source picture',
                         depthConvention: 'frontDepthMean / backgroundDepthMean are normalised disparity (1 near, 0 far) as in the 16-bit files',
                         reimport: 'obj_<id>_color.png (RGBA at the plate grid; alpha = the completed object, hidden part included) [+ obj_<id>_visible.png: the object\'s visible footprint, white; strongly recommended — without it the app\'s own footprint (this id map) is used] [+ obj_<id>_depth16.png: any depth or disparity, aligned on the object\'s visible front] -> Import object layers (S27). Visible texels keep the source depth; hidden texels continue the object\'s own front (zero-thickness rule, S26 §3b) or the aligned depth, then sit behind whatever is visible at them (ordering clamp, one quantum).',
@@ -27057,6 +27206,8 @@ function setupStaticControlListeners() {
     document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
     const objViewBtn = document.getElementById('objectViewButton'); if (objViewBtn) objViewBtn.addEventListener('click', () => window._objectView());   // S27
+    const objMaskBtn = document.getElementById('importObjMasksButton'); if (objMaskBtn) objMaskBtn.addEventListener('click', importObjectMasks);   // S28
+    const objHLBtn = document.getElementById('objHighlightButton'); if (objHLBtn) objHLBtn.addEventListener('click', () => { const v = document.getElementById('objHighlightId'); const n = v ? parseInt(v.value, 10) : -1; window._objectHighlight(isNaN(n) ? -1 : n); });   // S28
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);

@@ -4,3 +4,4 @@ harness/synth/*.u8
 harness/truthkit/out/
 harness/truthkit/__pycache__/
 harness/shots/
+harness/objlayers_demo/_ids/

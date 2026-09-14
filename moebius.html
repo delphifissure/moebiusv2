@@ -436,6 +436,13 @@
           <button id="objectViewButton" class="control-button" title="S27: download a picture of what the app knows about objects at the plate grid — blue = object outlines (visible footprints, or the imported layers&#39; full extent), red = the occluded section (imported layers&#39; hidden part, else the band behind occluders), orange = the self-occlusion estimate." style="background-color: #6c757d; margin-bottom: 6px;">
             🧭 Object view (S27)
           </button>
+          <button id="importObjMasksButton" class="control-button" title="S28: import an object map made outside (e.g. SAM 2.1 visible masks from harness/segment/sam2_objects.py): plane_object_ids*.png (0 = none, one grey level per object, at the plate grid) + optional objects*.json. Replaces the depth-only objects in the export, the Object view, the layer import and the highlight." style="background-color: #17a2b8; margin-bottom: 6px;">
+            📤 Import object masks (S28)
+          </button>
+          <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px;">
+            <input type="number" id="objHighlightId" value="0" min="-1" step="1" style="width:64px;" title="object id (from the Object view / meta.plane_objects); 0 = the background&#39;s standpoint; -1 = off">
+            <button id="objHighlightButton" class="control-button" style="flex:1; background-color: #6c757d;" title="S28: live highlight. id >= 1: that object blue, what it hides red (revealed as the head moves). 0: the background&#39;s standpoint — objects red, the background hiding itself orange, the visible background blue. -1 = off. Self-occlusion of an object is not in the picture and is not drawn.">🎯 Highlight object</button>
+          </div>
           <button id="importMPILayersButton" class="control-button" title="Import SD-inpainted layer{k}_color.png files (any subset, filenames as exported): each replaces its layer's coarse strip colours in place." style="background-color: #17a2b8; margin-bottom: 6px;">
             📤 Import SD Layer Results
           </button>
