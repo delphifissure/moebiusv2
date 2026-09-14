@@ -77,7 +77,7 @@ const meta = JSON.parse(fs.readFileSync(path.join(TK, 'out', S, 'meta.json'), 'u
         }
     }
     // the truth's own views at the same eyes
-    for (const [fx, fy] of poses) { const f = path.join(OUT, 'truth_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm') + '.png'); if (!fs.existsSync(f)) { try { execFileSync('python3', [path.join(TK, 'truth_view.py'), S, String(fx), String(fy), f], { stdio: 'ignore' }); } catch (e) { console.log('  truth view failed ' + fx + ',' + fy); } } }
+    for (const [fx, fy] of poses) { const f = path.join(OUT, 'tv_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm') + '.png'); /* tv_ = the truth's view (truth_ is the truth-depth arm's shot) */ if (!fs.existsSync(f)) { try { execFileSync('python3', [path.join(TK, 'truth_view.py'), S, String(fx), String(fy), f], { stdio: 'ignore' }); } catch (e) { console.log('  truth view failed ' + fx + ',' + fy); } } }
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify({ scene: S, meta, bake: { pw: bake.pw, ph: bake.ph, objects: bake.objects, overflow: bake.overflow }, truthLayers: rep, poses, results }, null, 1));
     await browser.close(); srv.kill(); console.log('done ' + OUT);
 })();

@@ -9923,6 +9923,7 @@ function _planeObjects(force) {
     if (!force && window._qbObjIds && window._qbObjInfo && window._qbObjIds.length === N) return { ids: window._qbObjIds, objects: window._qbObjInfo };
     const pS = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
     const TOLB = (typeof fgTearStep === 'number' && fgTearStep > 0) ? fgTearStep : 0.06;
+    const rl = bgRimLawFor(pw, ph); const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
     const isObj = (i) => dQ[i] - ff[i] > TOLB;
     const lab = new Int32Array(N), stack = new Int32Array(N); const comps = [];
     for (let s0 = 0; s0 < N; s0++) {
@@ -9931,14 +9932,14 @@ function _planeObjects(force) {
         const c = { id, px: 0, band: 0, x0: pw, y0: ph, x1: -1, y1: -1, dSum: 0, bgSum: 0 };
         while (top > 0) {
             const t = stack[--top]; const x = t % pw, y = (t - x) / pw;
-            c.px++; c.dSum += dQ[t]; if (dis[t]) { c.band++; c.bgSum += pS[t]; }
+            c.px++; c.dSum += dQ[t]; if (dis[t] && !(skyOn && pS[t] < sq)) { c.band++; c.bgSum += pS[t]; }   // a band texel whose far side is sky is the sky layer's demand, not an object's
             if (x < c.x0) c.x0 = x; if (x > c.x1) c.x1 = x; if (y < c.y0) c.y0 = y; if (y > c.y1) c.y1 = y;
             const nb = [x > 0 ? t - 1 : -1, x < pw - 1 ? t + 1 : -1, y > 0 ? t - pw : -1, y < ph - 1 ? t + pw : -1];
-            for (const j of nb) if (j >= 0 && !lab[j] && isObj(j)) { lab[j] = id; stack[top++] = j; }
+            for (const j of nb) if (j >= 0 && !lab[j] && isObj(j) && rl.joinedIdx(t, j, dQ, pw)) { lab[j] = id; stack[top++] = j; }   // one object = one continuous surface: a trunk in front of a hill is not the hill
         }
         comps.push(c);
     }
-    const kept = comps.filter((c) => c.band > 0).sort((a, b) => (b.band - a.band) || (b.px - a.px));   // band demand first; ids 1..254, 255 = beyond the cap
+    const kept = comps.filter((c) => c.band > 0).sort((a, b) => (b.band - a.band) || (b.px - a.px));   // band demand (sky reveals excluded) first; ids 1..254, 255 = beyond the cap
     const remap = new Int32Array(comps.length + 1); const objects = [];
     kept.forEach((c, k) => { remap[c.id] = k < 254 ? k + 1 : 255; if (k < 254) objects.push({ id: k + 1, footprintPx: c.px, bandPx: c.band, bbox: [c.x0, c.y0, c.x1 + 1, c.y1 + 1], frontDepthMean: c.dSum / c.px, backgroundDepthMean: c.bgSum / c.band }); });
     const ids = new Uint8Array(N); for (let i = 0; i < N; i++) if (lab[i]) ids[i] = remap[lab[i]];
@@ -9946,7 +9947,7 @@ function _planeObjects(force) {
     console.log('[S27] objects (A253 rule, step ' + TOLB.toFixed(4) + '): ' + comps.length + ' components in front of the far field, ' + kept.length + ' with band demand' + (kept.length > 254 ? ' (' + (kept.length - 254) + ' beyond the cap as id 255)' : '') + '; first ' + (objects[0] ? objects[0].footprintPx + ' px, band ' + objects[0].bandPx : '-'));
     return { ids, objects };
 }
-function _objFitDepth(xs, ys, ok, N) {
+function _objFitDepth(xs, ys, ok, N, qRange) {
     // y ~ a f(x) + b on the texels ok(i), f linear or inverse, two-three rounds of 3xMAD trimming; the space with the
     // smaller visible median residual wins (S26 §1: chosen on visible data only)
     const idx = []; for (let i = 0; i < N; i++) if (ok(i)) idx.push(i);
@@ -9954,9 +9955,16 @@ function _objFitDepth(xs, ys, ok, N) {
     const fit = (fx) => { let keep = idx.slice(); let a = 1, b = 0, res = Infinity;
         for (let r = 0; r < 3; r++) { let sx = 0, sy = 0, sxx = 0, sxy = 0; const n = keep.length; for (const i of keep) { const x = fx(xs[i]), y = ys[i]; sx += x; sy += y; sxx += x * x; sxy += x * y; }
             const den = n * sxx - sx * sx; if (!(Math.abs(den) > 1e-18)) return null; a = (n * sxy - sx * sy) / den; b = (sy - a * sx) / n;
-            const rs = keep.map((i) => Math.abs(a * fx(xs[i]) + b - ys[i])); const srt = rs.slice().sort((p, q2) => p - q2); const mad = srt[srt.length >> 1] + 1e-12; res = mad;
+            const rs = keep.map((i) => Math.abs(a * fx(xs[i]) + b - ys[i])); const srt = rs.slice().sort((p, q2) => p - q2); res = srt[srt.length >> 1];
+            const mad = Math.max(res, qRange);   // quantised data: a residual median below one quantum must not trim the set down to two depth levels (any line fits two levels exactly)
             const nk = []; for (let k = 0; k < keep.length; k++) if (rs[k] <= 3 * 1.4826 * mad) nk.push(keep[k]); if (nk.length < 50 || nk.length === keep.length) break; keep = nk; }
+        let lo = Infinity, hi = -Infinity; for (const i of keep) { if (ys[i] < lo) lo = ys[i]; if (ys[i] > hi) hi = ys[i]; }
+        if (!(hi - lo > 3 * qRange)) return null;   // the kept set must still span depth
         return { a, b, res, n: keep.length }; };
+    // a visible front without depth range (a fronto-parallel face) determines no affine: any supplied depth then 'fits'
+    // with a nonsense slope (S2's boxes: slope -0.57, residual 1e-12). Fewer than three quanta of range -> no fit, the
+    // caller continues the front instead.
+    { let lo = Infinity, hi = -Infinity; for (const i of idx) { if (ys[i] < lo) lo = ys[i]; if (ys[i] > hi) hi = ys[i]; } if (!(hi - lo > 3 * qRange)) return null; }
     const lin = fit((x) => x), inv = fit((x) => 1 / x);
     if (!lin && !inv) return null;
     if (!inv || (lin && lin.res <= inv.res)) return Object.assign({ space: 'lin' }, lin);
@@ -9991,9 +9999,9 @@ window._importObjectLayersFromData = function (entries, opts) {
         if (!nV) { visRule = 'no footprint match: layer texels that are not band texels with a far side'; for (let i = 0; i < N; i++) if (alpha[i] && !(dis && dis[i] && pF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)] < dQ[i] - q)) { vis[i] = 1; nV++; } }
         const dL = new Float32Array(dQ); let fit = null, nAm = 0;
         if (e.depth && e.depth.length === N) {
-            fit = _objFitDepth(e.depth, dQ, (i) => vis[i] && (!e.depthValid || e.depthValid[i]) && e.depth[i] > 0 && dQ[i] > 0, N);
-            if (fit) for (let i = 0; i < N; i++) if (alpha[i] && !vis[i]) { const x = e.depth[i]; if (!(x > 0)) continue; dL[i] = fit.space === 'inv' ? fit.a / x + fit.b : fit.a * x + fit.b; nAm++; }
-            else console.warn('[S27] layer ' + e.id + ': depth fit failed (too few visible texels); continuing the front instead');
+            fit = _objFitDepth(e.depth, dQ, (i) => vis[i] && (!e.depthValid || e.depthValid[i]) && e.depth[i] > 0 && dQ[i] > 0, N, q);
+            if (fit) { for (let i = 0; i < N; i++) if (alpha[i] && !vis[i]) { const x = e.depth[i]; if (!(x > 0)) continue; dL[i] = fit.space === 'inv' ? fit.a / x + fit.b : fit.a * x + fit.b; nAm++; } }
+            else console.warn('[S27] layer ' + e.id + ': no depth fit (too few visible texels, or a visible front without depth range); continuing the front instead');   // (the first build had a dangling else here: one warning per texel)
         }
         if (!fit) {   // the nearest visible texel of the object, by breadth-first steps over the layer's own alpha
             const queue = new Int32Array(N); let qh = 0, qt = 0; const seen = new Uint8Array(N);
@@ -10054,7 +10062,7 @@ async function importObjectLayers() {
     const files = await new Promise((res) => { input.onchange = (ev) => res(Array.from(ev.target.files || [])); input.click(); });
     if (!files.length) return;
     const pw = window._qbSize.pw, ph = window._qbSize.ph; const byId = new Map();
-    for (const f of files) { const m = /^obj_(\d+)_(color|colour|depth16|depth)\.png$/i.exec(f.name); if (!m) { console.warn('[S27] skipped ' + f.name + ' (expected obj_<k>_color.png / obj_<k>_depth16.png)'); continue; } const id = +m[1]; if (!byId.has(id)) byId.set(id, {}); byId.get(id)[/col/i.test(m[2]) ? 'color' : 'depth'] = f; }
+    for (const f of files) { const m = /^obj_(\d+)_(color|colour|depth16|depth|visible)\.png$/i.exec(f.name); if (!m) { console.warn('[S27] skipped ' + f.name + ' (expected obj_<k>_color.png / obj_<k>_depth16.png / obj_<k>_visible.png)'); continue; } const id = +m[1]; if (!byId.has(id)) byId.set(id, {}); byId.get(id)[/col/i.test(m[2]) ? 'color' : (/vis/i.test(m[2]) ? 'visible' : 'depth')] = f; }
     const entries = [];
     for (const [id, ff] of byId) {
         if (!ff.color) { console.warn('[S27] object ' + id + ': no colour file'); continue; }
@@ -10063,7 +10071,9 @@ async function importObjectLayers() {
             depth = new Float32Array(pw * ph);
             if (g16 && g16.w === pw && g16.h === ph) { for (let i = 0; i < depth.length; i++) depth[i] = g16.data[i] / g16.max; }
             else { const r8 = await _pngToRgba(ff.depth, pw, ph); for (let i = 0; i < depth.length; i++) depth[i] = r8[i * 4] / 255; console.warn('[S27] object ' + id + ': depth read through the canvas (8-bit)'); } }
-        entries.push({ id, rgba, depth });
+        let vis = null;   // obj_<k>_visible.png: the object's VISIBLE footprint (a layer model's visible/amodal split); without it the app's exported footprint is used, which misses the object's parts without band demand
+        if (ff.visible) { const v8 = await _pngToRgba(ff.visible, pw, ph); vis = new Uint8Array(pw * ph); for (let i = 0; i < vis.length; i++) vis[i] = v8[i * 4] > 127 ? 1 : 0; }
+        entries.push({ id, rgba, depth, vis });
     }
     const st = window._importObjectLayersFromData(entries);
     alert(st ? ('Imported ' + st.length + ' object layer(s); the per-layer report is in the console. A new Build drops them.') : 'Import failed: build the plate first.');
@@ -10224,7 +10234,7 @@ function exportSDBundle() {
                     meta.plane_objects = { rule: 'A253: texels in front of the a-priori far field by more than the cliff step (fgTearStep = ' + ((typeof fgTearStep === 'number') ? fgTearStep.toFixed(4) : '?') + '), 4-connected; ranked by band demand; components without band demand not exported', count: ob.objects.length, overflow: window._qbObjOverflow || 0, withoutDemand: window._qbObjNoDemand || 0, nativeRes: [pw, ph], sourceImageSize: im0 ? [im0.naturalWidth || im0.videoWidth || im0.width, im0.naturalHeight || im0.videoHeight || im0.height] : null,
                         bboxConvention: '[x0, y0, x1, y1) in plate texels, rows top-first; scale by sourceImageSize / nativeRes for the source picture',
                         depthConvention: 'frontDepthMean / backgroundDepthMean are normalised disparity (1 near, 0 far) as in the 16-bit files',
-                        reimport: 'obj_<id>_color.png (RGBA at the plate grid; alpha = the completed object, hidden part included) [+ obj_<id>_depth16.png: any depth or disparity, aligned on the object\'s visible front] -> Import object layers (S27). Visible texels keep the source depth; hidden texels continue the object\'s own front (zero-thickness rule, S26 §3b) or the aligned depth, then sit behind whatever is visible at them (ordering clamp, one quantum).',
+                        reimport: 'obj_<id>_color.png (RGBA at the plate grid; alpha = the completed object, hidden part included) [+ obj_<id>_visible.png: the object\'s visible footprint, white; strongly recommended — without it the app\'s own footprint (this id map) is used] [+ obj_<id>_depth16.png: any depth or disparity, aligned on the object\'s visible front] -> Import object layers (S27). Visible texels keep the source depth; hidden texels continue the object\'s own front (zero-thickness rule, S26 §3b) or the aligned depth, then sit behind whatever is visible at them (ordering clamp, one quantum).',
                         objects: ob.objects }; } } catch (eO) { console.warn('[S27] objects failed:', eO); }
                 const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
                 meta.plane = {
