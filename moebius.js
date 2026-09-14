@@ -10123,10 +10123,17 @@ window._samLive = (function () {
         if (S.enc && S.dec) return; const ort = await loadOrt(); const v = window._sam2Variant ? '_' + window._sam2Variant : '';
         const f = { encM: 'vision_encoder' + v + '.onnx', encD: 'vision_encoder' + v + '.onnx_data', decM: 'prompt_encoder_mask_decoder' + v + '.onnx', decD: 'prompt_encoder_mask_decoder' + v + '.onnx_data' }; const b = base();
         const encM = await fetchCached(b + f.encM, 'encoder graph'), encD = await fetchCached(b + f.encD, 'encoder weights'), decM = await fetchCached(b + f.decM, 'decoder graph'), decD = await fetchCached(b + f.decD, 'decoder weights');
-        const eps = window._sam2EP ? [window._sam2EP] : (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']); say('creating sessions (' + eps[0] + ')');
-        const mk = async (m, d, dp) => { try { const s = await ort.InferenceSession.create(m, { executionProviders: eps, externalData: [{ path: dp, data: d }] }); S.ep = eps[0]; return s; }
-            catch (e) { if (eps[0] !== 'wasm') { console.warn('[S29] ' + eps[0] + ' session failed, wasm instead: ' + e.message); const s = await ort.InferenceSession.create(m, { executionProviders: ['wasm'], externalData: [{ path: dp, data: d }] }); S.ep = 'wasm'; return s; } throw e; } };
-        S.enc = await mk(encM, encD, f.encD); S.dec = await mk(decM, decD, f.decD);
+        // provider per model: _sam2EP for both, _sam2EPEnc / _sam2EPDec for one (the harness isolates encoder and decoder).
+        // The DECODER runs on WASM unless asked otherwise: on the WebGPU provider (measured on SwiftShader's WebGPU in the
+        // full Chromium build, S29 §3c) its outputs drift with the number of points — one click 2 849 px / iou 0.91 against
+        // 2 900 / 0.90 on WASM, four clicks 99 118 px / iou 0.09 against 134 593 / 0.51 — with the SAME encoder features from
+        // WASM, so the fault is in the decoder graph's WebGPU kernels (or that adapter), not in the picture encoding. A
+        // decoder pass costs ~300 ms on WASM; nothing is gained on the GPU. The encoder (the 25 s part) keeps WebGPU.
+        const pick = (own, dflt) => (own || window._sam2EP) ? [own || window._sam2EP] : dflt;
+        const epsE = pick(window._sam2EPEnc, navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']), epsD = pick(window._sam2EPDec, ['wasm']); say('creating sessions (encoder ' + epsE[0] + ', decoder ' + epsD[0] + ')');
+        const mk = async (m, d, dp, eps) => { try { const s = await ort.InferenceSession.create(m, { executionProviders: eps, externalData: [{ path: dp, data: d }] }); return [s, eps[0]]; }
+            catch (e) { if (eps[0] !== 'wasm') { console.warn('[S29] ' + eps[0] + ' session failed, wasm instead: ' + e.message); const s = await ort.InferenceSession.create(m, { executionProviders: ['wasm'], externalData: [{ path: dp, data: d }] }); return [s, 'wasm']; } throw e; } };
+        let epE, epD; [S.enc, epE] = await mk(encM, encD, f.encD, epsE); [S.dec, epD] = await mk(decM, decD, f.decD, epsD); S.epEnc = epE; S.epDec = epD; S.ep = epE === epD ? epE : ('enc ' + epE + ' / dec ' + epD);
     }
     function sourceImage() { const L0 = mediaLayers[0]; return L0 && ((L0.elements && L0.elements.color) || (L0.textures && L0.textures.color && L0.textures.color.image)) || null; }
     async function encode() {

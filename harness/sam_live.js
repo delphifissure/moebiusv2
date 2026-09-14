@@ -14,9 +14,14 @@ const CLICKS = process.env.CLICKS === '' ? [] : (process.env.CLICKS || '300,190+
     if (process.env.IMG) { const [c, d] = process.env.IMG.split(','); fs.copyFileSync(path.resolve(WT, c), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.resolve(WT, d), path.join(H, 'defaultImgDepth.png')); }
     process.on('exit', () => { try { fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); } catch (e) {} });
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' }); await new Promise(r => setTimeout(r, 1500));
-    const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
+    // EP=webgpu: the full Chromium build in new headless mode exposes a WebGPU adapter on SwiftShader (the headless shell has no
+    // navigator.gpu at all) — slow, but it exercises the provider the user's browser will take
+    const EP = process.env.EP || 'wasm'; const wantGpu = [EP, process.env.EP_ENC, process.env.EP_DEC].includes('webgpu');
+    const browser = wantGpu
+        ? await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', headless: false, ignoreDefaultArgs: ['--headless', '--disable-gpu'], args: ['--headless=new', '--no-sandbox', '--enable-unsafe-webgpu', '--enable-features=WebGPU,Vulkan,WebGPUService', '--use-angle=vulkan', '--use-vulkan=swiftshader', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', '--use-gl=angle', '--disable-dev-shm-usage'] })
+        : await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
-    await page.addInitScript(() => { window._ortBase = '/vendor/ort/'; window._sam2Base = '/vendor/sam2/'; window._sam2EP = 'wasm'; });
+    await page.addInitScript(([ep, epE, epD]) => { window._ortBase = '/vendor/ort/'; window._sam2Base = '/vendor/sam2/'; window._sam2EP = ep; if (epE) window._sam2EPEnc = epE; if (epD) window._sam2EPDec = epD; }, [EP, process.env.EP_ENC || null, process.env.EP_DEC || null]);
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
     page.on('console', m => { const t = m.text(); if (/\[S29\]|\[S28\]|FAILED|rror/.test(t) && !/NotFoundError/.test(t)) console.log('  [page] ' + t.slice(0, 300)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
@@ -49,13 +54,13 @@ const CLICKS = process.env.CLICKS === '' ? [] : (process.env.CLICKS || '300,190+
     const BOXES = process.env.BOX ? process.env.BOX.split(';').map(b => b.split(',').map(Number)) : [];
     for (let b = 0; b < BOXES.length; b++) { const [x0, y0, x1, y1] = BOXES[b]; const a = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x0, y0]), c = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x1, y1]);
         await page.mouse.move(a.clientX, a.clientY); await page.mouse.down(); for (let k = 1; k <= 8; k++) await page.mouse.move(a.clientX + (c.clientX - a.clientX) * k / 8, a.clientY + (c.clientY - a.clientY) * k / 8); await page.mouse.up();
-        await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 120000 });
+        await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 900000 });
         const st = await page.evaluate(() => ({ box: window._samLive.state.box.map(v => +v.toFixed(1)), cands: window._samLive.state.cands.map(q => ({ area: q.area, iou: +q.iou.toFixed(3) })), ms: +window._samLive.state.cands.ms.toFixed(0) }));
         console.log('box ' + (b + 1) + ' ' + JSON.stringify(BOXES[b]) + ' -> ' + JSON.stringify(st)); if (b === 0) await shot('after_box_drag.png');
         const kept = await page.evaluate(() => window._samLive.accept()); console.log('kept ' + JSON.stringify(kept)); results.push(kept); }
     for (let o = 0; o < CLICKS.length; o++) {
         for (let c = 0; c < CLICKS[o].length; c++) { const [x, y] = CLICKS[o][c]; const s = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x, y]);
-            const t1 = Date.now(); await page.mouse.click(s.clientX, s.clientY); await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 120000 });
+            const t1 = Date.now(); await page.mouse.click(s.clientX, s.clientY); await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 900000 });
             const st = await page.evaluate(() => ({ clicks: window._samLive.state.clicks.length, cands: window._samLive.state.cands.map(q => ({ area: q.area, iou: +q.iou.toFixed(3) })), ms: +window._samLive.state.cands.ms.toFixed(0) }));
             console.log('object ' + (o + 1) + ' click ' + (c + 1) + ' at (' + x + ',' + y + ') -> screen (' + s.clientX.toFixed(1) + ',' + s.clientY.toFixed(1) + '): ' + JSON.stringify(st) + ' wall ' + (Date.now() - t1) + ' ms');
             if (o === 0 && c === 0) await shot('after_first_click.png'); }
