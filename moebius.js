@@ -10027,6 +10027,7 @@ window._importObjectLayersFromData = function (entries, opts) {
             if (rl.joinedIdx(a, b, dL, pw) && rl.joinedIdx(b, c, dL, pw) && rl.joinedIdx(a, c, dL, pw)) { outI[nK++] = srcIdx[t]; outI[nK++] = srcIdx[t + 1]; outI[nK++] = srcIdx[t + 2]; } }
         g.setIndex(new THREE.BufferAttribute(outI.slice(0, nK), 1));
         const m = new THREE.Mesh(g, mat); m.position.copy(L.mesh.position); m.rotation.copy(L.mesh.rotation); m.scale.copy(L.mesh.scale); m.renderOrder = bgLayerMesh.renderOrder; m.visible = bgLayerMesh.visible; m.frustumCulled = false; m.userData.objLayer = e.id;
+        m.userData.alpha = alpha; m.userData.vis = vis;   // for the object view (S27)
         scene.add(m); bgLayerMesh.userData.objLayers.push(m);
         const st = { id: e.id, layerPx: nA, visiblePx: nV, visRule, hiddenPx: nA - nV, filled: nAm, clamped: nClamp, trianglesKept: nK / 3,
                      depth: fit ? { rule: 'supplied depth aligned on the visible front', space: fit.space, a: fit.a, b: fit.b, visMedianRes: fit.res, n: fit.n } : { rule: 'nearest visible front continued (zero thickness)' } };
@@ -10081,6 +10082,49 @@ window._importObjectLayerFiles = async function (files) {   // the file path wit
         entries.push({ id, rgba, depth, vis });
     }
     return window._importObjectLayersFromData(entries);
+};
+
+// S27 OBJECT VIEW: what the app knows about objects, drawn on the rest picture at the plate grid.
+//   blue outline  = an object's outline: its visible footprint (plane_object_ids) — or, when a completed layer was imported,
+//                   the layer's full (amodal) outline
+//   red           = the occluded section: with imported layers, the layer's hidden part (alpha minus visible); without, the
+//                   band texels that stand behind an occluder (what the envelope will reveal — an envelope fact, not the
+//                   hidden object's true extent, which the picture alone does not contain)
+//   orange        = self-occlusion: not drawn — nothing in the picture says where an object's own sides and back faces are
+//                   (the S5 mirror set was tried and rejected as a classifier, see below)
+window._objectView = function (opts) {
+    opts = opts || {};
+    const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF;
+    if (!(window._bgQuickBaked && sz && dQ && dis && pF)) { if (!opts.quiet) alert('Object view: build the plate first.'); return null; }
+    const pw = sz.pw, ph = sz.ph, N = pw * ph; const ob = _planeObjects(false); if (!ob) { if (!opts.quiet) alert('Object view: no far field (plane far side needed).'); return null; }
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const L0 = mediaLayers[0]; const img = L0 && ((L0.elements && L0.elements.color) || (L0.textures && L0.textures.color && L0.textures.color.image));
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d');
+    if (img) cx.drawImage(img, 0, 0, pw, ph); const id = cx.getImageData(0, 0, pw, ph); const d = id.data;
+    for (let i = 0; i < N; i++) { d[i * 4] *= 0.45; d[i * 4 + 1] *= 0.45; d[i * 4 + 2] *= 0.45; d[i * 4 + 3] = 255; }
+    const paint = (i, r, g, b, a) => { const k = i * 4; d[k] = d[k] * (1 - a) + r * a; d[k + 1] = d[k + 1] * (1 - a) + g * a; d[k + 2] = d[k + 2] * (1 - a) + b * a; };
+    const outline = (mask, r, g, b) => { let n = 0; for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!mask(i)) continue;
+        if ((x > 0 && !mask(i - 1)) || (x < pw - 1 && !mask(i + 1)) || (y > 0 && !mask(i - pw)) || (y < ph - 1 && !mask(i + pw))) { paint(i, r, g, b, 1); n++; } } return n; };
+    const counts = { objects: ob.objects.length, band: 0, selfOcc: 0, layers: 0, layerHidden: 0, outlinePx: 0 };
+    const layers = (typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.userData && bgLayerMesh.userData.objLayers) || [];
+    const covered = new Uint8Array(N); for (const m of layers) { const a = m.userData && m.userData.alpha; if (a) for (let i = 0; i < N; i++) if (a[i]) covered[i] = 1; }
+    // red: the occluded section
+    if (layers.length) { for (const m of layers) { const a = m.userData.alpha, v = m.userData.vis; if (!a || !v) continue; counts.layers++; for (let i = 0; i < N; i++) if (a[i] && !v[i]) { paint(i, 230, 30, 30, 0.6); counts.layerHidden++; } } }
+    for (let i = 0; i < N; i++) { if (dis[i] && pF[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)] < dQ[i] - q) { counts.band++; if (!layers.length || !covered[i]) paint(i, 230, 30, 30, layers.length ? 0.25 : 0.55); } }
+    // orange: self-occlusion — NOT drawn. The S5 mirror set was tried here and is not an occlusion classifier: on S9 it marked
+    // card-behind-card (another object) as "self", on the troll 30 % of the picture. An object's own sides and back faces are
+    // not in the picture; they need a 3D prior per object (S27 §4). counts.selfOcc stays 0 until such a source exists.
+    // blue: outlines — imported layers' full outline, else the visible footprints
+    if (layers.length) { for (const m of layers) { const a = m.userData.alpha; if (a) counts.outlinePx += outline((i) => a[i] > 0, 40, 130, 255); } }
+    else counts.outlinePx = outline((i) => ob.ids[i] > 0, 40, 130, 255);
+    cx.putImageData(id, 0, 0);
+    cx.font = '12px sans-serif'; const legend = ['blue = object outline (' + (layers.length ? layers.length + ' imported layer(s): full extent' : counts.objects + ' visible footprints') + ')',
+        'red = occluded section (' + (layers.length ? counts.layerHidden + ' px hidden in the layers; faint: band behind other occluders' : counts.band + ' band px behind an occluder: the envelope\'s reveal, not the hidden object\'s extent') + ')',
+        'orange = self-occlusion: none — not readable from the picture (needs a 3D prior per object)'];
+    cx.fillStyle = 'rgba(0,0,0,0.6)'; cx.fillRect(0, 0, 8 + 6.2 * Math.max(...legend.map((t) => t.length)), 14 * legend.length + 8);
+    legend.forEach((t, k) => { cx.fillStyle = k === 0 ? '#2882ff' : k === 1 ? '#e61e1e' : '#ff9600'; cx.fillText(t, 4, 14 + 14 * k); });
+    if (!opts.noDownload) { const a = document.createElement('a'); a.href = cv.toDataURL('image/png'); a.download = 'moebius_object_view.png'; a.click(); }
+    console.log('[S27] object view ' + JSON.stringify(counts)); return { canvas: cv, counts };
 };
 
 function exportSDBundle() {
@@ -27012,6 +27056,7 @@ function setupStaticControlListeners() {
     
     document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
+    const objViewBtn = document.getElementById('objectViewButton'); if (objViewBtn) objViewBtn.addEventListener('click', () => window._objectView());   // S27
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);

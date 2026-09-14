@@ -433,6 +433,9 @@
           <button id="importObjLayersButton" class="control-button" title="S27: import completed object layers — obj_<k>_color.png (RGBA at the plate grid; k = the id in plane_object_ids.png / meta.plane_objects of the SD Bundle) and optionally obj_<k>_depth16.png (any depth or disparity; aligned on the object&#39;s visible front). Visible texels keep the source depth; hidden texels continue the object&#39;s own front (or the aligned depth) behind whatever is visible at them. A new Build drops the layers." style="background-color: #17a2b8; margin-bottom: 6px;">
             📤 Import object layers (S27)
           </button>
+          <button id="objectViewButton" class="control-button" title="S27: download a picture of what the app knows about objects at the plate grid — blue = object outlines (visible footprints, or the imported layers&#39; full extent), red = the occluded section (imported layers&#39; hidden part, else the band behind occluders), orange = the self-occlusion estimate." style="background-color: #6c757d; margin-bottom: 6px;">
+            🧭 Object view (S27)
+          </button>
           <button id="importMPILayersButton" class="control-button" title="Import SD-inpainted layer{k}_color.png files (any subset, filenames as exported): each replaces its layer's coarse strip colours in place." style="background-color: #17a2b8; margin-bottom: 6px;">
             📤 Import SD Layer Results
           </button>
