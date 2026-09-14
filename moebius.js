@@ -10101,7 +10101,7 @@ window._objectHighlight = function (sel) {
 // geometry maps screen to source exactly). Kept objects become the object map through _setObjectIds (nearer object wins an
 // overlap, as the offline script) and are highlighted at once. Verified against the offline script's masks in harness/sam_live.js.
 window._samLive = (function () {
-    const S = { active: false, busy: false, ep: null, enc: null, dec: null, feats: null, imgKey: null, encMs: 0, clicks: [], cands: null, candIdx: 0, objects: [], masks: [], ids: null, nextId: 1, prevSweep: null, prevPos: null, prevChk: null, marks: [], status: '' };
+    const S = { active: false, busy: false, ep: null, enc: null, dec: null, feats: null, imgKey: null, encMs: 0, clicks: [], box: null, drag: null, cands: null, candIdx: 0, objects: [], masks: [], ids: null, nextId: 1, prevSweep: null, prevPos: null, prevChk: null, marks: [], boxMark: null, status: '' };
     const base = () => window._sam2Base || 'https://huggingface.co/onnx-community/sam2.1-hiera-small-ONNX/resolve/main/onnx/';
     const ortBase = () => window._ortBase || 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
     const say = (t) => { S.status = t; const el = document.getElementById('samLiveStatus'); if (el) el.textContent = t; console.log('[S29] ' + t); };
@@ -10147,22 +10147,24 @@ window._samLive = (function () {
                 if (v > 0) { out[y * pw + x] = 1; area++; } } }
         return { mask: out, area };
     }
-    async function decode(clicks) {
+    async function decode(clicks, box) {   // a box (SAMEO's prompt form) and/or points; both go into the decoder together
         const sz = window._qbSize, pw = sz.pw, ph = sz.ph, P = clicks.length; const ort = window.ort;
         const pts = new Float32Array(P * 2), lab = new BigInt64Array(P); clicks.forEach((c, k) => { pts[2 * k] = c.x * 1024 / pw; pts[2 * k + 1] = c.y * 1024 / ph; lab[k] = BigInt(c.label); });
-        const feeds = Object.assign({}, S.feats, { input_points: new ort.Tensor('float32', pts, [1, 1, P, 2]), input_labels: new ort.Tensor('int64', lab, [1, 1, P]), input_boxes: new ort.Tensor('float32', new Float32Array(0), [1, 0, 4]) });
+        const bx = box ? new Float32Array([box[0] * 1024 / pw, box[1] * 1024 / ph, box[2] * 1024 / pw, box[3] * 1024 / ph]) : new Float32Array(0);
+        const feeds = Object.assign({}, S.feats, { input_points: new ort.Tensor('float32', pts, [1, 1, P, 2]), input_labels: new ort.Tensor('int64', lab, [1, 1, P]), input_boxes: new ort.Tensor('float32', bx, [1, box ? 1 : 0, 4]) });
         const t0 = performance.now(); const out = await S.dec.run(feeds); const ms = performance.now() - t0;
         const iou = Array.from(out.iou_scores.data); const pm = out.pred_masks; const K = pm.dims[2], mh = pm.dims[3], mw = pm.dims[4]; const cands = [];
         for (let k = 0; k < K; k++) { const u = upsampleMask(pm.data.subarray(k * mh * mw, (k + 1) * mh * mw), mw, mh, pw, ph); cands.push({ k, iou: iou[k], mask: u.mask, area: u.area }); }
         cands.sort((a, b) => b.iou - a.iou); cands.ms = ms; return cands;
     }
     // screen <-> source at the rest pose: the layer's flat plane in its local frame (PlaneGeometry: x right, y up, uv origin bottom-left)
-    function screenToSrc(clientX, clientY) {
+    function screenToSrc(clientX, clientY, clamp) {
         const L = mediaLayers[0]; const mesh = L && L.mesh; const sz = window._qbSize; if (!mesh || !sz) return null; const r = renderer.domElement.getBoundingClientRect();
         const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
         const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, camera); const ray = rc.ray.clone(); mesh.updateMatrixWorld(true); ray.applyMatrix4(new THREE.Matrix4().copy(mesh.matrixWorld).invert());
         const g = mesh.geometry; if (!g.boundingBox) g.computeBoundingBox(); const bb = g.boundingBox; if (!(Math.abs(ray.direction.z) > 1e-9)) return null; const t = -ray.origin.z / ray.direction.z; if (!(t > 0)) return null;
         const u = (ray.origin.x + t * ray.direction.x - bb.min.x) / (bb.max.x - bb.min.x), v = (ray.origin.y + t * ray.direction.y - bb.min.y) / (bb.max.y - bb.min.y);
+        if (clamp) { const uc = Math.min(1, Math.max(0, u)), vc = Math.min(1, Math.max(0, v)); return { x: uc * sz.pw, y: (1 - vc) * sz.ph, u: uc, v: vc }; }
         if (u < 0 || u > 1 || v < 0 || v > 1) return null; return { x: u * sz.pw, y: (1 - v) * sz.ph, u, v };
     }
     function srcToScreen(x, y) {
@@ -10181,17 +10183,26 @@ window._samLive = (function () {
     }
     function current() { return S.cands ? S.cands[S.candIdx] : null; }
     function mark(clientX, clientY, label) { const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:' + (clientX - 5) + 'px;top:' + (clientY - 5) + 'px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:' + (label ? '#2a8cff' : '#ff3030') + ';pointer-events:none;z-index:9999;'; document.body.appendChild(d); S.marks.push(d); }
-    function clearMarks() { for (const d of S.marks) d.remove(); S.marks = []; }
+    function clearMarks() { for (const d of S.marks) d.remove(); S.marks = []; boxMark(null); }
+    function boxMark(r) { if (S.boxMark) { S.boxMark.remove(); S.boxMark = null; } if (!r) return; const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:' + Math.min(r.x0, r.x1) + 'px;top:' + Math.min(r.y0, r.y1) + 'px;width:' + Math.abs(r.x1 - r.x0) + 'px;height:' + Math.abs(r.y1 - r.y0) + 'px;border:2px solid #2a8cff;box-shadow:0 0 0 1px #fff;pointer-events:none;z-index:9999;'; document.body.appendChild(d); S.boxMark = d; }
     function candText() { const c = current(); return c ? ('candidate ' + (S.candIdx + 1) + '/' + S.cands.length + ': ' + c.area + ' px, SAM iou ' + c.iou.toFixed(2)) : 'no mask'; }
     async function click(x, y, label, clientXY) {   // source coordinates (plate grid); label 1 = part of the object, 0 = not
         if (!S.active || S.busy) return null; S.busy = true;
-        try { S.clicks.push({ x, y, label: label === 0 ? 0 : 1 }); if (clientXY) mark(clientXY.clientX, clientXY.clientY, label); S.cands = await decode(S.clicks); S.candIdx = 0; paintPending();
-            say(S.clicks.length + ' click(s): ' + candText() + ' (' + S.cands.ms.toFixed(0) + ' ms). Tab = other candidate, Alt-click = exclude, Backspace = undo, Enter = keep, Esc = done'); return current(); }
+        try { S.clicks.push({ x, y, label: label === 0 ? 0 : 1 }); if (clientXY) mark(clientXY.clientX, clientXY.clientY, label); S.cands = await decode(S.clicks, S.box); S.candIdx = 0; paintPending();
+            say(promptText() + ': ' + candText() + ' (' + S.cands.ms.toFixed(0) + ' ms). Tab = other candidate, Alt-click = exclude, drag = box, Backspace = undo, Enter = keep, Esc = done'); return current(); }
         catch (e) { say('decode failed: ' + e.message); console.error(e); return null; } finally { S.busy = false; }
     }
+    async function box(x0, y0, x1, y1, clientRect) {   // source coordinates; a new box replaces the previous one, the points stay
+        if (!S.active || S.busy) return null; S.busy = true;
+        try { S.box = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)]; if (clientRect) boxMark(clientRect); S.cands = await decode(S.clicks, S.box); S.candIdx = 0; paintPending();
+            say(promptText() + ': ' + candText() + ' (' + S.cands.ms.toFixed(0) + ' ms). Click to refine, Alt-click = exclude, Tab = other candidate, Backspace = undo, Enter = keep'); return current(); }
+        catch (e) { say('decode failed: ' + e.message); console.error(e); return null; } finally { S.busy = false; }
+    }
+    function promptText() { return (S.box ? 'box' + (S.clicks.length ? ' + ' : '') : '') + (S.clicks.length ? S.clicks.length + ' click(s)' : ''); }
     function cycle() { if (!S.cands) return null; S.candIdx = (S.candIdx + 1) % S.cands.length; paintPending(); say(candText()); return current(); }
-    async function undo() { if (S.busy) return; if (!S.clicks.length) { undoObject(); return; } S.clicks.pop(); const m = S.marks.pop(); if (m) m.remove();
-        if (!S.clicks.length) { S.cands = null; paintPending(); say('click an object'); return; } S.busy = true; try { S.cands = await decode(S.clicks); S.candIdx = 0; paintPending(); say(S.clicks.length + ' click(s): ' + candText()); } finally { S.busy = false; } }
+    async function undo() { if (S.busy) return; if (!S.clicks.length && !S.box) { undoObject(); return; }
+        if (S.clicks.length) { S.clicks.pop(); const m = S.marks.pop(); if (m) m.remove(); } else { S.box = null; boxMark(null); }
+        if (!S.clicks.length && !S.box) { S.cands = null; paintPending(); say('click an object, or drag a box around it'); return; } S.busy = true; try { S.cands = await decode(S.clicks, S.box); S.candIdx = 0; paintPending(); say(promptText() + ': ' + candText()); } finally { S.busy = false; } }
     function rebuildIds() {   // overlap: the nearer object wins (front = mean normalised disparity, larger = nearer), as the offline script
         const sz = window._qbSize, N = sz.pw * sz.ph; const ids = new Uint8Array(N); const front = new Float32Array(N).fill(-1);
         for (let k = 0; k < S.objects.length; k++) { const o = S.objects[k], m = S.masks[k]; for (let i = 0; i < N; i++) if (m[i] && o.frontDepthMean > front[i]) { ids[i] = o.id; front[i] = o.frontDepthMean; } }
@@ -10200,9 +10211,9 @@ window._samLive = (function () {
     function accept() {
         const c = current(); if (!c || S.busy) return null; if (S.nextId > 254) { say('254 objects is the id cap'); return null; }
         const sz = window._qbSize, N = sz.pw * sz.ph, dQ = window._qbDQ; let dSum = 0; for (let i = 0; i < N; i++) if (c.mask[i]) dSum += dQ[i];
-        const id = S.nextId++; const o = { id, maskPx: c.area, frontDepthMean: dSum / Math.max(1, c.area), iouEstimate: c.iou, candidate: S.candIdx + 1, source: 'live click ' + S.clicks.map((k) => (k.label ? '' : '-') + '(' + k.x.toFixed(0) + ',' + k.y.toFixed(0) + ')').join('+') };
+        const id = S.nextId++; const o = { id, maskPx: c.area, frontDepthMean: dSum / Math.max(1, c.area), iouEstimate: c.iou, candidate: S.candIdx + 1, source: 'live ' + (S.box ? 'box [' + S.box.map((v) => v.toFixed(0)).join(',') + ']' + (S.clicks.length ? ' + ' : '') : '') + (S.clicks.length ? 'click ' + S.clicks.map((k) => (k.label ? '' : '-') + '(' + k.x.toFixed(0) + ',' + k.y.toFixed(0) + ')').join('+') : '') };
         S.objects.push(o); S.masks.push(c.mask); rebuildIds(); window._setObjectIds(S.ids.slice(), S.objects.map((q) => Object.assign({}, q)), 'SAM 2.1 live (' + S.ep + ')');
-        S.clicks = []; S.cands = null; clearMarks(); if (window._objectHighlight) window._objectHighlight(id);
+        S.clicks = []; S.box = null; S.cands = null; clearMarks(); if (window._objectHighlight) window._objectHighlight(id);
         say('object ' + id + ' kept: ' + c.area + ' px (SAM iou ' + c.iou.toFixed(2) + ', ' + S.objects.length + ' object(s)). Click the next object; Esc when done.'); return o;
     }
     function undoObject() { if (!S.objects.length) { say('nothing to undo'); return; } const o = S.objects.pop(); S.masks.pop(); S.nextId = o.id; rebuildIds();
@@ -10212,7 +10223,14 @@ window._samLive = (function () {
     // the pointerdown before anything else sees it), and Shift-click its split-plane drag. While the mode is on, the
     // canvas's own click / mousedown / mouseup / dblclick handlers (the depth peek that shows the portal-plane guide, the
     // scale click) are stopped at the window's capture phase.
-    function onDown(e) { if (!S.active || e.button !== 0 || e.target !== renderer.domElement) return; const p = screenToSrc(e.clientX, e.clientY); if (!p) { say('click inside the picture'); return; } e.preventDefault(); e.stopImmediatePropagation(); click(p.x, p.y, e.altKey ? 0 : 1, { clientX: e.clientX, clientY: e.clientY }); }
+    // press = a point, press-and-drag = a box (the rectangle is drawn while dragging; corners outside the picture are clamped
+    // to it). A movement of more than 3 CSS px between press and release counts as a drag — the usual pointer-slop convention,
+    // not a measured quantity; a click that wanders less is still a click.
+    function onDown(e) { if (!S.active || e.button !== 0 || e.target !== renderer.domElement) return; e.preventDefault(); e.stopImmediatePropagation(); S.drag = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY, alt: e.altKey, isBox: false }; }
+    function onMove(e) { const d = S.drag; if (!S.active || !d) return; d.x1 = e.clientX; d.y1 = e.clientY; if (!d.isBox && Math.hypot(d.x1 - d.x0, d.y1 - d.y0) > 3) d.isBox = true; if (d.isBox) { e.preventDefault(); e.stopImmediatePropagation(); boxMark(d); } }
+    function onUp(e) { const d = S.drag; if (!S.active || !d) return; S.drag = null; e.preventDefault(); e.stopImmediatePropagation();
+        if (d.isBox) { const a = screenToSrc(d.x0, d.y0, true), b = screenToSrc(d.x1, d.y1, true); if (!a || !b) { boxMark(null); return; } box(a.x, a.y, b.x, b.y, d); return; }
+        const p = screenToSrc(d.x0, d.y0); if (!p) { say('click inside the picture'); return; } click(p.x, p.y, d.alt ? 0 : 1, { clientX: d.x0, clientY: d.y0 }); }
     function swallow(e) { if (!S.active || e.target !== renderer.domElement) return; e.stopImmediatePropagation(); e.preventDefault(); }
     const SWALLOWED = ['click', 'mousedown', 'mouseup', 'dblclick', 'contextmenu'];
     function onKey(e) { if (!S.active) return; if (e.key === 'Enter') { e.preventDefault(); accept(); } else if (e.key === 'Tab') { e.preventDefault(); cycle(); } else if (e.key === 'Backspace') { e.preventDefault(); undo(); } else if (e.key === 'Escape') { e.preventDefault(); stop(); } }
@@ -10229,11 +10247,11 @@ window._samLive = (function () {
         // click mode binds its own textures and must not be mistaken for the bake's classes when the highlight later saves them
         const matQ = bgLayerMesh && bgLayerMesh.material; const L = mediaLayers[0]; const fgU = L && L.mesh && L.mesh.material && L.mesh.material.uniforms;
         if (window._objHL === undefined && matQ && matQ.uniforms.u_sdPaint) window._objHL = { platePaint: matQ.uniforms.u_sdPaint.value, fgPaint: fgU && fgU.u_sdPaint ? fgU.u_sdPaint.value : null, fgTex: null, plateTex: null };
-        window.addEventListener('pointerdown', onDown, true); for (const t of SWALLOWED) window.addEventListener(t, swallow, true); window.addEventListener('keydown', onKey, true); paintPending();
-        say('click an object (the view is held at rest). Tab = other candidate, Alt-click = exclude, Backspace = undo, Enter = keep, Esc = done');
+        window.addEventListener('pointerdown', onDown, true); window.addEventListener('pointermove', onMove, true); window.addEventListener('pointerup', onUp, true); for (const t of SWALLOWED) window.addEventListener(t, swallow, true); window.addEventListener('keydown', onKey, true); paintPending();
+        say('click an object, or drag a box around it (the view is held at rest). Tab = other candidate, Alt-click = exclude, Backspace = undo, Enter = keep, Esc = done');
     }
     function stop() {
-        if (!S.active) return; S.active = false; window.removeEventListener('pointerdown', onDown, true); for (const t of SWALLOWED) window.removeEventListener(t, swallow, true); window.removeEventListener('keydown', onKey, true); clearMarks(); S.clicks = []; S.cands = null;
+        if (!S.active) return; S.active = false; window.removeEventListener('pointerdown', onDown, true); window.removeEventListener('pointermove', onMove, true); window.removeEventListener('pointerup', onUp, true); for (const t of SWALLOWED) window.removeEventListener(t, swallow, true); window.removeEventListener('keydown', onKey, true); clearMarks(); S.clicks = []; S.box = null; S.drag = null; S.cands = null;
         const btn = document.getElementById('samLiveButton'); if (btn) btn.textContent = '🖱️ Click objects (SAM 2.1 live)';
         if (S.pendTex) { S.pendTex.dispose(); S.pendTex = null; } if (S.zeroTex) { S.zeroTex.dispose(); S.zeroTex = null; }
         if (window._objHLSel >= 0 && window._objectHighlight) window._objectHighlight(window._objHLSel);   // the highlight repaints plate and FG; else the C classes come back
@@ -10242,7 +10260,7 @@ window._samLive = (function () {
         if (S.prevSweep !== null) { isSweeping = S.prevSweep; S.prevSweep = null; } if (S.prevPos) { camera.position.copy(S.prevPos); S.prevPos = null; updateCameraAndProjection(); }
         say(S.objects.length ? S.objects.length + ' object(s) kept as the object map (export, Object view, layer import, highlight use it)' : 'off');
     }
-    return { start, stop, click, cycle, undo, accept, undoObject, screenToSrc, srcToScreen, encode, loadModels, state: S };
+    return { start, stop, click, box, cycle, undo, accept, undoObject, screenToSrc, srcToScreen, encode, loadModels, state: S };
 })();
 function _objFitDepth(xs, ys, ok, N, qRange) {
     // y ~ a f(x) + b on the texels ok(i), f linear or inverse, two-three rounds of 3xMAD trimming; the space with the

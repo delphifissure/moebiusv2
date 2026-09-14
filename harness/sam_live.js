@@ -8,7 +8,7 @@
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell'; const H = __dirname, WT = path.resolve(__dirname, '..');
 const TAG = process.env.TAG || 'troll'; const OUT = path.join(H, 'shots', 'samlive', TAG); const REF = process.env.REF ? path.resolve(WT, process.env.REF) : null;
-const CLICKS = (process.env.CLICKS || '300,190+300,350+250,650+330,800;470,700+455,500').split(';').map(o => o.split('+').map(p => p.split(',').map(Number)));
+const CLICKS = process.env.CLICKS === '' ? [] : (process.env.CLICKS || '300,190+300,350+250,650+330,800;470,700+455,500').split(';').map(o => o.split('+').map(p => p.split(',').map(Number)));
 (async () => {
     fs.mkdirSync(OUT, { recursive: true });
     if (process.env.IMG) { const [c, d] = process.env.IMG.split(','); fs.copyFileSync(path.resolve(WT, c), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.resolve(WT, d), path.join(H, 'defaultImgDepth.png')); }
@@ -45,6 +45,14 @@ const CLICKS = (process.env.CLICKS || '300,190+300,350+250,650+330,800;470,700+4
         return { n: pts.length, medianErrMapped: e1[e1.length >> 1], medianErrShuffled: e2[e2.length >> 1], roundTrip: back }; });
     console.log('mapping check ' + JSON.stringify(mapchk));
     const results = [];
+    // BOX="x0,y0,x1,y1[;...]" — one dragged box per object, replayed as press / move / release through the same handlers
+    const BOXES = process.env.BOX ? process.env.BOX.split(';').map(b => b.split(',').map(Number)) : [];
+    for (let b = 0; b < BOXES.length; b++) { const [x0, y0, x1, y1] = BOXES[b]; const a = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x0, y0]), c = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x1, y1]);
+        await page.mouse.move(a.clientX, a.clientY); await page.mouse.down(); for (let k = 1; k <= 8; k++) await page.mouse.move(a.clientX + (c.clientX - a.clientX) * k / 8, a.clientY + (c.clientY - a.clientY) * k / 8); await page.mouse.up();
+        await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 120000 });
+        const st = await page.evaluate(() => ({ box: window._samLive.state.box.map(v => +v.toFixed(1)), cands: window._samLive.state.cands.map(q => ({ area: q.area, iou: +q.iou.toFixed(3) })), ms: +window._samLive.state.cands.ms.toFixed(0) }));
+        console.log('box ' + (b + 1) + ' ' + JSON.stringify(BOXES[b]) + ' -> ' + JSON.stringify(st)); if (b === 0) await shot('after_box_drag.png');
+        const kept = await page.evaluate(() => window._samLive.accept()); console.log('kept ' + JSON.stringify(kept)); results.push(kept); }
     for (let o = 0; o < CLICKS.length; o++) {
         for (let c = 0; c < CLICKS[o].length; c++) { const [x, y] = CLICKS[o][c]; const s = await page.evaluate(([x, y]) => window._samLive.srcToScreen(x, y), [x, y]);
             const t1 = Date.now(); await page.mouse.click(s.clientX, s.clientY); await page.waitForFunction(() => !window._samLive.state.busy && window._samLive.state.cands, null, { timeout: 120000 });
