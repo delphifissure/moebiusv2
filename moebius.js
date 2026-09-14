@@ -3573,6 +3573,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             } else {
                 float clsF = texture2D(u_sdPaint, vUv).r;   // S28: the foreground's own paint (object highlight); 0 = dim as before
                 if (u_sdPaintOnly) originalColor.rgb = vec3(0.0);
+                else if (clsF > 9.5) { }   // 10 S29: untouched (the click mode's base: the picture as it is, the pending mask blue on top)
                 else if (clsF > 7.5 && clsF < 8.5) originalColor.rgb = mix(originalColor.rgb, vec3(0.95, 0.12, 0.12), 0.3);   // 8 S28: this pixel hides part of the selected surface (faint red; the band behind it is red)
                 else if (clsF > 8.5) originalColor.rgb = mix(mix(originalColor.rgb, vec3(0.15, 0.50, 1.00), 0.5), vec3(1.00, 0.60, 0.05), 0.35);   // 9 S28: the selected surface hiding itself here (blue, faint orange; revealed orange behind)
                 else if (clsF > 4.5) originalColor.rgb = mix(originalColor.rgb, (clsF < 5.5) ? vec3(0.95, 0.12, 0.12) : (clsF < 6.5) ? vec3(1.00, 0.60, 0.05) : vec3(0.15, 0.50, 1.00), 0.5);
@@ -10089,6 +10090,160 @@ window._objectHighlight = function (sel) {
     window._objHLSel = sel; const o = ob.objects.find((oo) => oo.id === sel);
     const st = { sel, source: ob.source || 'depth-only', object: o || null, texels: n }; console.log('[S28] highlight ' + JSON.stringify(st)); return st;
 };
+// S29 SAM 2.1 IN THE BROWSER — live clicks. onnxruntime-web (WebGPU when the browser has it, else WASM) runs the
+// onnx-community export of facebook/sam2.1-hiera-small (image encoder 162 MB fp32 + prompt encoder / mask decoder 21 MB;
+// fetched once from Hugging Face and kept in the Cache API; window._sam2Base / _ortBase / _sam2Variant / _sam2EP override
+// the sources and the provider). The picture is encoded once (1024 x 1024, ImageNet mean/std, the processor's recipe);
+// every click is one decoder pass (milliseconds). The decoder returns SAM's three nested candidates with its own IoU
+// estimate; the one shown is the best by that estimate (the official predictor's `argmax(scores)` recipe — no threshold of
+// ours), Tab cycles through the others. Click coordinates are read at the REST pose (the view is held there while the mode
+// is on: at the reference eye a texel's screen position does not depend on its depth, so the flat plane of the layer's
+// geometry maps screen to source exactly). Kept objects become the object map through _setObjectIds (nearer object wins an
+// overlap, as the offline script) and are highlighted at once. Verified against the offline script's masks in harness/sam_live.js.
+window._samLive = (function () {
+    const S = { active: false, busy: false, ep: null, enc: null, dec: null, feats: null, imgKey: null, encMs: 0, clicks: [], cands: null, candIdx: 0, objects: [], masks: [], ids: null, nextId: 1, prevSweep: null, prevPos: null, prevChk: null, marks: [], status: '' };
+    const base = () => window._sam2Base || 'https://huggingface.co/onnx-community/sam2.1-hiera-small-ONNX/resolve/main/onnx/';
+    const ortBase = () => window._ortBase || 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
+    const say = (t) => { S.status = t; const el = document.getElementById('samLiveStatus'); if (el) el.textContent = t; console.log('[S29] ' + t); };
+    async function loadOrt() {
+        if (window.ort) return window.ort;
+        await new Promise((res, rej) => { const s = document.createElement('script'); s.src = ortBase() + 'ort.min.js'; s.onload = res; s.onerror = () => rej(new Error('onnxruntime-web did not load from ' + ortBase())); document.head.appendChild(s); });
+        window.ort.env.wasm.wasmPaths = ortBase(); return window.ort;
+    }
+    async function fetchCached(url, label) {
+        let cache = null; try { cache = await caches.open('moebius-sam2'); const hit = await cache.match(url); if (hit) { say(label + ': cached'); return await hit.arrayBuffer(); } } catch (e) { cache = null; }
+        const r = await fetch(url); if (!r.ok) throw new Error(url + ' -> HTTP ' + r.status);
+        const total = +r.headers.get('content-length') || 0; const reader = r.body.getReader(); const chunks = []; let got = 0, lastSaid = 0;
+        while (true) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; if (got - lastSaid > 4e6) { lastSaid = got; say(label + ' ' + (got / 1048576).toFixed(0) + (total ? ' / ' + (total / 1048576).toFixed(0) : '') + ' MB'); } }
+        const buf = new Uint8Array(got); let o = 0; for (const c of chunks) { buf.set(c, o); o += c.length; }
+        if (cache) { try { await cache.put(url, new Response(buf.slice(), { headers: { 'Content-Type': 'application/octet-stream' } })); } catch (e) { console.warn('[S29] cache put failed (quota?): ' + e.message); } }
+        return buf.buffer;
+    }
+    async function loadModels() {
+        if (S.enc && S.dec) return; const ort = await loadOrt(); const v = window._sam2Variant ? '_' + window._sam2Variant : '';
+        const f = { encM: 'vision_encoder' + v + '.onnx', encD: 'vision_encoder' + v + '.onnx_data', decM: 'prompt_encoder_mask_decoder' + v + '.onnx', decD: 'prompt_encoder_mask_decoder' + v + '.onnx_data' }; const b = base();
+        const encM = await fetchCached(b + f.encM, 'encoder graph'), encD = await fetchCached(b + f.encD, 'encoder weights'), decM = await fetchCached(b + f.decM, 'decoder graph'), decD = await fetchCached(b + f.decD, 'decoder weights');
+        const eps = window._sam2EP ? [window._sam2EP] : (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']); say('creating sessions (' + eps[0] + ')');
+        const mk = async (m, d, dp) => { try { const s = await ort.InferenceSession.create(m, { executionProviders: eps, externalData: [{ path: dp, data: d }] }); S.ep = eps[0]; return s; }
+            catch (e) { if (eps[0] !== 'wasm') { console.warn('[S29] ' + eps[0] + ' session failed, wasm instead: ' + e.message); const s = await ort.InferenceSession.create(m, { executionProviders: ['wasm'], externalData: [{ path: dp, data: d }] }); S.ep = 'wasm'; return s; } throw e; } };
+        S.enc = await mk(encM, encD, f.encD); S.dec = await mk(decM, decD, f.decD);
+    }
+    function sourceImage() { const L0 = mediaLayers[0]; return L0 && ((L0.elements && L0.elements.color) || (L0.textures && L0.textures.color && L0.textures.color.image)) || null; }
+    async function encode() {
+        const img = sourceImage(); if (!img) throw new Error('no picture loaded'); const key = (img.src || img.currentSrc || '') + '|' + (img.naturalWidth || img.videoWidth || img.width) + 'x' + (img.naturalHeight || img.videoHeight || img.height);
+        if (S.feats && S.imgKey === key) return;
+        const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 1024; const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, 1024, 1024); const d = cx.getImageData(0, 0, 1024, 1024).data;
+        const n = 1024 * 1024, x = new Float32Array(3 * n); const M = [0.485, 0.456, 0.406], SD = [0.229, 0.224, 0.225];
+        for (let i = 0; i < n; i++) { x[i] = (d[i * 4] / 255 - M[0]) / SD[0]; x[n + i] = (d[i * 4 + 1] / 255 - M[1]) / SD[1]; x[2 * n + i] = (d[i * 4 + 2] / 255 - M[2]) / SD[2]; }
+        say('encoding the picture (' + S.ep + ') ...'); const t0 = performance.now(); const out = await S.enc.run({ pixel_values: new window.ort.Tensor('float32', x, [1, 3, 1024, 1024]) });
+        S.feats = { 'image_embeddings.0': out['image_embeddings.0'], 'image_embeddings.1': out['image_embeddings.1'], 'image_embeddings.2': out['image_embeddings.2'] }; S.imgKey = key; S.encMs = performance.now() - t0;
+        say('picture encoded in ' + (S.encMs / 1000).toFixed(1) + ' s (' + S.ep + ')');
+    }
+    function upsampleMask(lg, mw, mh, pw, ph) {   // bilinear on the logits (F.interpolate, align_corners = false), then SAM 2's mask threshold 0
+        const out = new Uint8Array(pw * ph); const sx = mw / pw, sy = mh / ph; let area = 0;
+        for (let y = 0; y < ph; y++) { let fy = (y + 0.5) * sy - 0.5; if (fy < 0) fy = 0; if (fy > mh - 1) fy = mh - 1; const y0 = fy | 0, y1 = Math.min(mh - 1, y0 + 1), wy = fy - y0;
+            for (let x = 0; x < pw; x++) { let fx = (x + 0.5) * sx - 0.5; if (fx < 0) fx = 0; if (fx > mw - 1) fx = mw - 1; const x0 = fx | 0, x1 = Math.min(mw - 1, x0 + 1), wx = fx - x0;
+                const v = (lg[y0 * mw + x0] * (1 - wx) + lg[y0 * mw + x1] * wx) * (1 - wy) + (lg[y1 * mw + x0] * (1 - wx) + lg[y1 * mw + x1] * wx) * wy;
+                if (v > 0) { out[y * pw + x] = 1; area++; } } }
+        return { mask: out, area };
+    }
+    async function decode(clicks) {
+        const sz = window._qbSize, pw = sz.pw, ph = sz.ph, P = clicks.length; const ort = window.ort;
+        const pts = new Float32Array(P * 2), lab = new BigInt64Array(P); clicks.forEach((c, k) => { pts[2 * k] = c.x * 1024 / pw; pts[2 * k + 1] = c.y * 1024 / ph; lab[k] = BigInt(c.label); });
+        const feeds = Object.assign({}, S.feats, { input_points: new ort.Tensor('float32', pts, [1, 1, P, 2]), input_labels: new ort.Tensor('int64', lab, [1, 1, P]), input_boxes: new ort.Tensor('float32', new Float32Array(0), [1, 0, 4]) });
+        const t0 = performance.now(); const out = await S.dec.run(feeds); const ms = performance.now() - t0;
+        const iou = Array.from(out.iou_scores.data); const pm = out.pred_masks; const K = pm.dims[2], mh = pm.dims[3], mw = pm.dims[4]; const cands = [];
+        for (let k = 0; k < K; k++) { const u = upsampleMask(pm.data.subarray(k * mh * mw, (k + 1) * mh * mw), mw, mh, pw, ph); cands.push({ k, iou: iou[k], mask: u.mask, area: u.area }); }
+        cands.sort((a, b) => b.iou - a.iou); cands.ms = ms; return cands;
+    }
+    // screen <-> source at the rest pose: the layer's flat plane in its local frame (PlaneGeometry: x right, y up, uv origin bottom-left)
+    function screenToSrc(clientX, clientY) {
+        const L = mediaLayers[0]; const mesh = L && L.mesh; const sz = window._qbSize; if (!mesh || !sz) return null; const r = renderer.domElement.getBoundingClientRect();
+        const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+        const rc = new THREE.Raycaster(); rc.setFromCamera(ndc, camera); const ray = rc.ray.clone(); mesh.updateMatrixWorld(true); ray.applyMatrix4(new THREE.Matrix4().copy(mesh.matrixWorld).invert());
+        const g = mesh.geometry; if (!g.boundingBox) g.computeBoundingBox(); const bb = g.boundingBox; if (!(Math.abs(ray.direction.z) > 1e-9)) return null; const t = -ray.origin.z / ray.direction.z; if (!(t > 0)) return null;
+        const u = (ray.origin.x + t * ray.direction.x - bb.min.x) / (bb.max.x - bb.min.x), v = (ray.origin.y + t * ray.direction.y - bb.min.y) / (bb.max.y - bb.min.y);
+        if (u < 0 || u > 1 || v < 0 || v > 1) return null; return { x: u * sz.pw, y: (1 - v) * sz.ph, u, v };
+    }
+    function srcToScreen(x, y) {
+        const L = mediaLayers[0]; const mesh = L && L.mesh; const sz = window._qbSize; if (!mesh || !sz) return null; const g = mesh.geometry; if (!g.boundingBox) g.computeBoundingBox(); const bb = g.boundingBox;
+        const p = new THREE.Vector3(bb.min.x + (x / sz.pw) * (bb.max.x - bb.min.x), bb.min.y + (1 - y / sz.ph) * (bb.max.y - bb.min.y), 0); mesh.updateMatrixWorld(true); p.applyMatrix4(mesh.matrixWorld); p.project(camera);
+        const r = renderer.domElement.getBoundingClientRect(); return { clientX: r.left + (p.x + 1) / 2 * r.width, clientY: r.top + (1 - p.y) / 2 * r.height };
+    }
+    const mkTex = (F, pw, ph) => { const t = new THREE.DataTexture(F, pw, ph, THREE.RedFormat, THREE.FloatType); t.needsUpdate = true; t.flipY = false; t.minFilter = THREE.NearestFilter; t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; };
+    function paintPending() {   // the FG untouched (class 10) with the current candidate blue (7); negative clicks' masks are not drawn
+        const L = mediaLayers[0]; const u = L && L.mesh && L.mesh.material && L.mesh.material.uniforms; if (!u || !u.u_sdPaint) return; const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph;
+        const F = new Float32Array(N).fill(10); const c = current(); if (c) for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) if (c.mask[y * pw + x]) F[(ph - 1 - y) * pw + x] = 7;
+        if (S.pendTex) S.pendTex.dispose(); S.pendTex = mkTex(F, pw, ph); u.u_sdPaint.value = S.pendTex;
+        // the plate untinted while clicking (class 0 everywhere): the C classes would show magenta / cyan through the silhouette fringes
+        if (!S.zeroTex) S.zeroTex = mkTex(new Float32Array(N), pw, ph); if (bgLayerMesh && bgLayerMesh.material && bgLayerMesh.material.uniforms.u_sdPaint) bgLayerMesh.material.uniforms.u_sdPaint.value = S.zeroTex;
+        const chk = document.getElementById('sdRegionsChk'); if (chk && !chk.checked) { chk.checked = true; chk.dispatchEvent(new Event('change')); } else if (!chk) window._sdHighlightOn = true;
+    }
+    function current() { return S.cands ? S.cands[S.candIdx] : null; }
+    function mark(clientX, clientY, label) { const d = document.createElement('div'); d.style.cssText = 'position:fixed;left:' + (clientX - 5) + 'px;top:' + (clientY - 5) + 'px;width:10px;height:10px;border-radius:50%;border:2px solid #fff;background:' + (label ? '#2a8cff' : '#ff3030') + ';pointer-events:none;z-index:9999;'; document.body.appendChild(d); S.marks.push(d); }
+    function clearMarks() { for (const d of S.marks) d.remove(); S.marks = []; }
+    function candText() { const c = current(); return c ? ('candidate ' + (S.candIdx + 1) + '/' + S.cands.length + ': ' + c.area + ' px, SAM iou ' + c.iou.toFixed(2)) : 'no mask'; }
+    async function click(x, y, label, clientXY) {   // source coordinates (plate grid); label 1 = part of the object, 0 = not
+        if (!S.active || S.busy) return null; S.busy = true;
+        try { S.clicks.push({ x, y, label: label === 0 ? 0 : 1 }); if (clientXY) mark(clientXY.clientX, clientXY.clientY, label); S.cands = await decode(S.clicks); S.candIdx = 0; paintPending();
+            say(S.clicks.length + ' click(s): ' + candText() + ' (' + S.cands.ms.toFixed(0) + ' ms). Tab = other candidate, Alt-click = exclude, Backspace = undo, Enter = keep, Esc = done'); return current(); }
+        catch (e) { say('decode failed: ' + e.message); console.error(e); return null; } finally { S.busy = false; }
+    }
+    function cycle() { if (!S.cands) return null; S.candIdx = (S.candIdx + 1) % S.cands.length; paintPending(); say(candText()); return current(); }
+    async function undo() { if (S.busy) return; if (!S.clicks.length) { undoObject(); return; } S.clicks.pop(); const m = S.marks.pop(); if (m) m.remove();
+        if (!S.clicks.length) { S.cands = null; paintPending(); say('click an object'); return; } S.busy = true; try { S.cands = await decode(S.clicks); S.candIdx = 0; paintPending(); say(S.clicks.length + ' click(s): ' + candText()); } finally { S.busy = false; } }
+    function rebuildIds() {   // overlap: the nearer object wins (front = mean normalised disparity, larger = nearer), as the offline script
+        const sz = window._qbSize, N = sz.pw * sz.ph; const ids = new Uint8Array(N); const front = new Float32Array(N).fill(-1);
+        for (let k = 0; k < S.objects.length; k++) { const o = S.objects[k], m = S.masks[k]; for (let i = 0; i < N; i++) if (m[i] && o.frontDepthMean > front[i]) { ids[i] = o.id; front[i] = o.frontDepthMean; } }
+        S.ids = ids; return ids;
+    }
+    function accept() {
+        const c = current(); if (!c || S.busy) return null; if (S.nextId > 254) { say('254 objects is the id cap'); return null; }
+        const sz = window._qbSize, N = sz.pw * sz.ph, dQ = window._qbDQ; let dSum = 0; for (let i = 0; i < N; i++) if (c.mask[i]) dSum += dQ[i];
+        const id = S.nextId++; const o = { id, maskPx: c.area, frontDepthMean: dSum / Math.max(1, c.area), iouEstimate: c.iou, candidate: S.candIdx + 1, source: 'live click ' + S.clicks.map((k) => (k.label ? '' : '-') + '(' + k.x.toFixed(0) + ',' + k.y.toFixed(0) + ')').join('+') };
+        S.objects.push(o); S.masks.push(c.mask); rebuildIds(); window._setObjectIds(S.ids.slice(), S.objects.map((q) => Object.assign({}, q)), 'SAM 2.1 live (' + S.ep + ')');
+        S.clicks = []; S.cands = null; clearMarks(); if (window._objectHighlight) window._objectHighlight(id);
+        say('object ' + id + ' kept: ' + c.area + ' px (SAM iou ' + c.iou.toFixed(2) + ', ' + S.objects.length + ' object(s)). Click the next object; Esc when done.'); return o;
+    }
+    function undoObject() { if (!S.objects.length) { say('nothing to undo'); return; } const o = S.objects.pop(); S.masks.pop(); S.nextId = o.id; rebuildIds();
+        if (S.objects.length) window._setObjectIds(S.ids.slice(), S.objects.map((q) => Object.assign({}, q)), 'SAM 2.1 live (' + S.ep + ')'); else window._clearObjectIds();
+        if (window._objectHighlight) window._objectHighlight(S.objects.length ? S.objects[S.objects.length - 1].id : -1); paintPending(); say('object ' + o.id + ' removed'); }
+    // Exclude = Alt-click: Shift/Ctrl/Meta-drag is the app's manual view drag (a capture-phase window listener that swallows
+    // the pointerdown before anything else sees it), and Shift-click its split-plane drag. While the mode is on, the
+    // canvas's own click / mousedown / mouseup / dblclick handlers (the depth peek that shows the portal-plane guide, the
+    // scale click) are stopped at the window's capture phase.
+    function onDown(e) { if (!S.active || e.button !== 0 || e.target !== renderer.domElement) return; const p = screenToSrc(e.clientX, e.clientY); if (!p) { say('click inside the picture'); return; } e.preventDefault(); e.stopImmediatePropagation(); click(p.x, p.y, e.altKey ? 0 : 1, { clientX: e.clientX, clientY: e.clientY }); }
+    function swallow(e) { if (!S.active || e.target !== renderer.domElement) return; e.stopImmediatePropagation(); e.preventDefault(); }
+    const SWALLOWED = ['click', 'mousedown', 'mouseup', 'dblclick', 'contextmenu'];
+    function onKey(e) { if (!S.active) return; if (e.key === 'Enter') { e.preventDefault(); accept(); } else if (e.key === 'Tab') { e.preventDefault(); cycle(); } else if (e.key === 'Backspace') { e.preventDefault(); undo(); } else if (e.key === 'Escape') { e.preventDefault(); stop(); } }
+    async function start() {
+        if (S.active) return; if (!(window._bgQuickBaked && window._qbSize && window._qbDQ)) { say('Build first (the object map lives on the plate grid)'); return; }
+        S.active = true; const btn = document.getElementById('samLiveButton'); if (btn) btn.textContent = '⏹ Stop clicking (SAM 2.1 live)';
+        // hold the view at rest: the tracking block is skipped while isSweeping, and the mapping above assumes the reference eye
+        S.prevSweep = isSweeping; isSweeping = true; S.prevPos = camera.position.clone(); camera.position.x = 0; camera.position.y = 0; updateCameraAndProjection();
+        const chk = document.getElementById('sdRegionsChk'); S.prevChk = chk ? chk.checked : !!window._sdHighlightOn;
+        try { say('loading SAM 2.1 (first time: 183 MB from Hugging Face, then cached)'); await loadModels(); await encode(); }
+        catch (e) { say('SAM 2.1 not available: ' + e.message); console.error(e); stop(); return; }
+        if (!S.active) return;
+        // the C paint textures (plate and FG) are remembered once, here or by the highlight, whichever comes first — the
+        // click mode binds its own textures and must not be mistaken for the bake's classes when the highlight later saves them
+        const matQ = bgLayerMesh && bgLayerMesh.material; const L = mediaLayers[0]; const fgU = L && L.mesh && L.mesh.material && L.mesh.material.uniforms;
+        if (window._objHL === undefined && matQ && matQ.uniforms.u_sdPaint) window._objHL = { platePaint: matQ.uniforms.u_sdPaint.value, fgPaint: fgU && fgU.u_sdPaint ? fgU.u_sdPaint.value : null, fgTex: null, plateTex: null };
+        window.addEventListener('pointerdown', onDown, true); for (const t of SWALLOWED) window.addEventListener(t, swallow, true); window.addEventListener('keydown', onKey, true); paintPending();
+        say('click an object (the view is held at rest). Tab = other candidate, Alt-click = exclude, Backspace = undo, Enter = keep, Esc = done');
+    }
+    function stop() {
+        if (!S.active) return; S.active = false; window.removeEventListener('pointerdown', onDown, true); for (const t of SWALLOWED) window.removeEventListener(t, swallow, true); window.removeEventListener('keydown', onKey, true); clearMarks(); S.clicks = []; S.cands = null;
+        const btn = document.getElementById('samLiveButton'); if (btn) btn.textContent = '🖱️ Click objects (SAM 2.1 live)';
+        if (S.pendTex) { S.pendTex.dispose(); S.pendTex = null; } if (S.zeroTex) { S.zeroTex.dispose(); S.zeroTex = null; }
+        if (window._objHLSel >= 0 && window._objectHighlight) window._objectHighlight(window._objHLSel);   // the highlight repaints plate and FG; else the C classes come back
+        else { const L = mediaLayers[0]; const u = L && L.mesh && L.mesh.material && L.mesh.material.uniforms; if (u && u.u_sdPaint && window._objHL) u.u_sdPaint.value = window._objHL.fgPaint; if (bgLayerMesh && bgLayerMesh.material && bgLayerMesh.material.uniforms.u_sdPaint && window._objHL) bgLayerMesh.material.uniforms.u_sdPaint.value = window._objHL.platePaint;
+            const chk = document.getElementById('sdRegionsChk'); if (chk && chk.checked !== S.prevChk) { chk.checked = S.prevChk; chk.dispatchEvent(new Event('change')); } }
+        if (S.prevSweep !== null) { isSweeping = S.prevSweep; S.prevSweep = null; } if (S.prevPos) { camera.position.copy(S.prevPos); S.prevPos = null; updateCameraAndProjection(); }
+        say(S.objects.length ? S.objects.length + ' object(s) kept as the object map (export, Object view, layer import, highlight use it)' : 'off');
+    }
+    return { start, stop, click, cycle, undo, accept, undoObject, screenToSrc, srcToScreen, encode, loadModels, state: S };
+})();
 function _objFitDepth(xs, ys, ok, N, qRange) {
     // y ~ a f(x) + b on the texels ok(i), f linear or inverse, two-three rounds of 3xMAD trimming; the space with the
     // smaller visible median residual wins (S26 §1: chosen on visible data only)
@@ -27208,6 +27363,7 @@ function setupStaticControlListeners() {
     const objViewBtn = document.getElementById('objectViewButton'); if (objViewBtn) objViewBtn.addEventListener('click', () => window._objectView());   // S27
     const objMaskBtn = document.getElementById('importObjMasksButton'); if (objMaskBtn) objMaskBtn.addEventListener('click', importObjectMasks);   // S28
     const objHLBtn = document.getElementById('objHighlightButton'); if (objHLBtn) objHLBtn.addEventListener('click', () => { const v = document.getElementById('objHighlightId'); const n = v ? parseInt(v.value, 10) : -1; window._objectHighlight(isNaN(n) ? -1 : n); });   // S28
+    const samBtn = document.getElementById('samLiveButton'); if (samBtn) samBtn.addEventListener('click', () => { if (window._samLive.state.active) window._samLive.stop(); else window._samLive.start(); });   // S29
     const importSDPatchBtn = document.getElementById('importSDPatchButton');
     if (importSDPatchBtn) {
         importSDPatchBtn.addEventListener('click', importSDInpaintedPatch);

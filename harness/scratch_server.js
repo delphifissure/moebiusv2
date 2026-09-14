@@ -6,11 +6,12 @@ const PORT = 8099;
 const ROOT = __dirname;
 const MIME = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css',
   '.png':'image/png', '.jpg':'image/jpeg', '.mp4':'video/mp4', '.xml':'application/xml',
-  '.json':'application/json', '.npz':'application/octet-stream', '.csv':'text/csv' };
+  '.json':'application/json', '.npz':'application/octet-stream', '.csv':'text/csv',
+  '.mjs':'text/javascript', '.wasm':'application/wasm', '.onnx':'application/octet-stream', '.onnx_data':'application/octet-stream' };
 http.createServer((req, res) => {
   let p = decodeURIComponent(req.url.split('?')[0]);
   if (p === '/') p = '/moebius.html';
-  const fp = path.join(ROOT, p);
+  const fp = path.join(ROOT, p);   // symlinked vendor dirs (harness/vendor/ort, /sam2) resolve outside ROOT: the path check is on the requested path
   if (!fp.startsWith(ROOT) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) {
     res.writeHead(404); res.end('not found'); return;
   }

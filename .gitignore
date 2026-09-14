@@ -5,3 +5,5 @@ harness/truthkit/out/
 harness/truthkit/__pycache__/
 harness/shots/
 harness/objlayers_demo/_ids/
+harness/vendor/ort
+harness/vendor/sam2
