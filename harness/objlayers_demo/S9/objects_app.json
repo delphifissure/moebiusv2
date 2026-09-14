@@ -1,0 +1,54 @@
+[
+ {
+  "id": 1,
+  "footprintPx": 26986,
+  "bandPx": 26986,
+  "bbox": [
+   247,
+   122,
+   378,
+   328
+  ],
+  "frontDepthMean": 0.3683680593967438,
+  "backgroundDepthMean": 0.15786551666084836
+ },
+ {
+  "id": 2,
+  "footprintPx": 20862,
+  "bandPx": 20862,
+  "bbox": [
+   329,
+   116,
+   471,
+   334
+  ],
+  "frontDepthMean": 0.2738841772079468,
+  "backgroundDepthMean": 0.12529574310479005
+ },
+ {
+  "id": 3,
+  "footprintPx": 16619,
+  "bandPx": 16506,
+  "bbox": [
+   394,
+   112,
+   543,
+   337
+  ],
+  "frontDepthMean": 0.1764553338289261,
+  "backgroundDepthMean": 0.000014334917068481445
+ },
+ {
+  "id": 4,
+  "footprintPx": 23384,
+  "bandPx": 5,
+  "bbox": [
+   247,
+   0,
+   543,
+   79
+  ],
+  "frontDepthMean": 0.2838705394275581,
+  "backgroundDepthMean": 0.000014334917068481445
+ }
+]

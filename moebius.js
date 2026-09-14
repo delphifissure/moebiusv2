@@ -10061,6 +10061,11 @@ async function importObjectLayers() {
     const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
     const files = await new Promise((res) => { input.onchange = (ev) => res(Array.from(ev.target.files || [])); input.click(); });
     if (!files.length) return;
+    const st = await window._importObjectLayerFiles(files);
+    alert(st ? ('Imported ' + st.length + ' object layer(s); the per-layer report is in the console. A new Build drops them.') : 'Import failed: build the plate first.');
+}
+window._importObjectLayerFiles = async function (files) {   // the file path without the picker (harness-testable): File objects named obj_<k>_color|visible|depth16.png
+    if (!(window._bgQuickBaked && window._qbSize)) return null;
     const pw = window._qbSize.pw, ph = window._qbSize.ph; const byId = new Map();
     for (const f of files) { const m = /^obj_(\d+)_(color|colour|depth16|depth|visible)\.png$/i.exec(f.name); if (!m) { console.warn('[S27] skipped ' + f.name + ' (expected obj_<k>_color.png / obj_<k>_depth16.png / obj_<k>_visible.png)'); continue; } const id = +m[1]; if (!byId.has(id)) byId.set(id, {}); byId.get(id)[/col/i.test(m[2]) ? 'color' : (/vis/i.test(m[2]) ? 'visible' : 'depth')] = f; }
     const entries = [];
@@ -10075,9 +10080,8 @@ async function importObjectLayers() {
         if (ff.visible) { const v8 = await _pngToRgba(ff.visible, pw, ph); vis = new Uint8Array(pw * ph); for (let i = 0; i < vis.length; i++) vis[i] = v8[i * 4] > 127 ? 1 : 0; }
         entries.push({ id, rgba, depth, vis });
     }
-    const st = window._importObjectLayersFromData(entries);
-    alert(st ? ('Imported ' + st.length + ' object layer(s); the per-layer report is in the console. A new Build drops them.') : 'Import failed: build the plate first.');
-}
+    return window._importObjectLayersFromData(entries);
+};
 
 function exportSDBundle() {
     try {

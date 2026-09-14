@@ -1,0 +1,53 @@
+[
+ {
+  "layerId": 1,
+  "pid": 5,
+  "name": "card0",
+  "appIds": [
+   1
+  ],
+  "purity": [
+   1.0
+  ],
+  "layerPx": 26986,
+  "visPx": 26986,
+  "appFootprintPx": 26986,
+  "hiddenPx": 0,
+  "hiddenDepthMedian_m": null,
+  "visDepthMedian_m": 0.019200000911951065
+ },
+ {
+  "layerId": 2,
+  "pid": 6,
+  "name": "card1",
+  "appIds": [
+   2
+  ],
+  "purity": [
+   1.0
+  ],
+  "layerPx": 30956,
+  "visPx": 20862,
+  "appFootprintPx": 20862,
+  "hiddenPx": 10094,
+  "hiddenDepthMedian_m": 0.04800000041723251,
+  "visDepthMedian_m": 0.04800000041723251
+ },
+ {
+  "layerId": 3,
+  "pid": 7,
+  "name": "card2",
+  "appIds": [
+   3
+  ],
+  "purity": [
+   1.0
+  ],
+  "layerPx": 33406,
+  "visPx": 16620,
+  "appFootprintPx": 16619,
+  "hiddenPx": 16786,
+  "hiddenDepthMedian_m": 0.07999999821186066,
+  "visDepthMedian_m": 0.07999999821186066
+ }
+]
