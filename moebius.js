@@ -20749,7 +20749,7 @@ function _wireDebugSheetControls() {
         if (gapSel) gapSel.addEventListener('change', () => bakeGapRule(gapSel.value));
         window._bakeGapRule = bakeGapRule;
     }
-    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions').
+    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions.v2').
     // far side: membrane (the shipped quick bake) | plane (the rim law + the plane far side, S3–S5 recipe);
     // fill: wash | mirror (the far side reflected across the rim); margin: off | picture | window (A245, clipped or not);
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
@@ -20757,13 +20757,21 @@ function _wireDebugSheetControls() {
     {
         const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
-        const defaults = { far: 'membrane', fill: 'wash', margin: 'off', faces: 'off', band: 'all', sky: 'off', seams: 'torn', join: 'off', rules: 'cur' };
-        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions') || 'null'); } catch (e) {}
+        // Start-up defaults = the measured set (S19 / S20 / S23 / S25 on the seven pictures and the kit; LIVE_PASS §1 step 4),
+        // made the defaults on 2026-09-15 at the user's word: plane far side (rim law), wash, faces off, tier 35°, sky off (on
+        // for pictures with sky — a per-picture choice), seams stretched, far field per line, rules current. MARGIN OFF by the
+        // user's instruction ("the crappy outpainting you can leave out"): both margin modes are clamp-extended edge colour
+        // standing in for an outpaint, so the frame edge stays open where the picture's own content shifts inward; the
+        // 'picture' clip and the 'window' strips remain in the panel. The remaining trades (seams, margin, fold-alpha, tier)
+        // are the panel's to change until they have been seen in motion. The storage key is versioned so a set saved under
+        // the old defaults does not shadow these once.
+        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'cur' };
+        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions.v2') || 'null'); } catch (e) {}
         const opt = Object.assign({}, defaults, saved || {});
         for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
         const applyPlateOptions = () => {
             for (const k in els) if (els[k]) opt[k] = els[k].value;
-            try { localStorage.setItem('bgPlateOptions', JSON.stringify(opt)); } catch (e) {}
+            try { localStorage.setItem('bgPlateOptions.v2', JSON.stringify(opt)); } catch (e) {}
             const plane = opt.far === 'plane';
             window._tearLaw = plane ? 'rim' : undefined; window._farRule = plane ? 'plane' : undefined;
             window._skyInf = (plane && opt.sky === 'on') ? 1 : 0;
