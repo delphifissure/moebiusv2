@@ -25,7 +25,7 @@ const H = __dirname, WT = path.resolve(__dirname, '..'); const TAG = process.env
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 320; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 1000)); }
     const res = await page.evaluate(() => {
-        const { pw, ph } = window._qbSize; const N = pw * ph; const dQ = window._qbDQ, ff = window._geoFarField, rimJ = window._geoFarRimJ, mix = window._geoFarMix, axis = window._geoFarAxis, kind = window._geoFarKind, dis = window._qbDisocc;
+        const { pw, ph } = window._qbSize; const N = pw * ph; const dQ = window._qbDQ, ff = window._geoFarField, rimJ = window._geoFarRimJ, mix = window._geoFarMix, axis = window._geoFarAxis, kind = window._geoFarKind, dis = window._qbDisocc, axV = window._geoFarAxV;
         if (!(dQ && ff && rimJ && axis && dis)) return { error: 'missing arrays: ' + [!!dQ, !!ff, !!rimJ, !!axis, !!dis].join(',') };
         const rl = bgRimLawFor(pw, ph); const step = window._qbSrcQuantum;   // the effective quantum = the visible step (S10)
         const qg = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : step;
@@ -33,7 +33,10 @@ const H = __dirname, WT = path.resolve(__dirname, '..'); const TAG = process.env
         // the rim that gave the texel its value: kind 2 (same plane) -> either (take the first present); otherwise the side with the larger mix
         const rimOf = (i) => { const a = rimJ[2 * i], b = rimJ[2 * i + 1]; if (a < 0) return b; if (b < 0) return a; if (kind && kind[i] === 2) return a; return (mix[i] >= 0.5) ? a : b; };
         const vclass = new Uint8Array(N), hclass = new Uint8Array(N), vjump = new Float32Array(N), hjump = new Float32Array(N);
-        const counts = { v: { all: 0, above: 0, c: [0, 0, 0, 0, 0], joinedAny: [0, 0, 0, 0, 0], jumps: [[], [], [], [], []] }, h: { all: 0, above: 0, c: [0, 0, 0, 0, 0], joinedAny: [0, 0, 0, 0, 0], jumps: [[], [], [], [], []] } };
+        const counts = { v: { all: 0, above: 0, c: [0, 0, 0, 0, 0], joinedAny: [0, 0, 0, 0, 0], jumps: [[], [], [], [], []], flip: 0, domain: 0, flipLen: 0, domainLen: 0 }, h: { all: 0, above: 0, c: [0, 0, 0, 0, 0], joinedAny: [0, 0, 0, 0, 0], jumps: [[], [], [], [], []], flip: 0, domain: 0, flipLen: 0, domainLen: 0 } };
+        // S34: a class-3 edge is a FLIP when both texels had both axes' candidates (the arbitration chose differently), a DOMAIN
+        // boundary when one texel lacked the axis the other used (the candidate field itself ends there)
+        const both = (i) => axV && axV[2 * i] >= 0 && axV[2 * i + 1] >= 0;
         const classify = (t, u) => {
             const at = axis[t], au = axis[u]; const rt = rimOf(t), ru = rimOf(u);
             if (rt < 0 || ru < 0) return [4, false];
@@ -43,7 +46,8 @@ const H = __dirname, WT = path.resolve(__dirname, '..'); const TAG = process.env
             return [j ? 1 : 2, anyJ];
         };
         const doEdge = (t, u, C, J, key) => { const c = counts[key]; c.all++; const d = Math.abs(ff[t] - ff[u]); J[t] = d / step; if (d <= step) return; c.above++;
-            const [k, anyJ] = classify(t, u); C[t] = k; c.c[k]++; if (anyJ) c.joinedAny[k]++; c.jumps[k].push(d / step); };
+            const [k, anyJ] = classify(t, u); C[t] = k; c.c[k]++; if (anyJ) c.joinedAny[k]++; c.jumps[k].push(d / step);
+            if (k === 3) { if (both(t) && both(u)) { c.flip++; c.flipLen += d / step; } else { c.domain++; c.domainLen += d / step; } } };
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const t = y * pw + x; if (!band[t]) continue;
             if (y < ph - 1 && band[t + pw]) doEdge(t, t + pw, vclass, vjump, 'v');
             if (x < pw - 1 && band[t + 1]) doEdge(t, t + 1, hclass, hjump, 'h'); }
@@ -57,7 +61,7 @@ const H = __dirname, WT = path.resolve(__dirname, '..'); const TAG = process.env
         for (const k of ['vclass', 'hclass', 'vjump', 'hjump', 'band', 'dQ', 'ff']) fs.writeFileSync(path.join(OUT, k + (k.endsWith('jump') || k === 'dQ' || k === 'ff' ? '.f32' : '.u8')), Buffer.from(res[k], 'base64'));
         fs.writeFileSync(path.join(OUT, 'size.json'), JSON.stringify({ pw: res.pw, ph: res.ph }));
         const { vclass, hclass, vjump, hjump, band, dQ, ff, ...meta } = res; fs.writeFileSync(path.join(OUT, 'counts.json'), JSON.stringify(meta, null, 1));
-        console.log('band ' + res.nBand + ' texels; step ' + res.step.toExponential(3) + '; vertical edges ' + res.counts.v.all + ', above step ' + res.counts.v.above + ' classes ' + JSON.stringify(res.counts.v.c) + '; horizontal ' + res.counts.h.all + ', above ' + res.counts.h.above + ' classes ' + JSON.stringify(res.counts.h.c));
+        console.log('band ' + res.nBand + ' texels; step ' + res.step.toExponential(3) + '; vertical edges ' + res.counts.v.all + ', above step ' + res.counts.v.above + ' classes ' + JSON.stringify(res.counts.v.c) + '; horizontal ' + res.counts.h.all + ', above ' + res.counts.h.above + ' classes ' + JSON.stringify(res.counts.h.c) + '; class 3 vertical: flips ' + res.counts.v.flip + ' (len ' + res.counts.v.flipLen.toFixed(0) + '), domain boundaries ' + res.counts.v.domain + ' (len ' + res.counts.v.domainLen.toFixed(0) + ')');
     }
     fs.copyFileSync(path.join(H, 'defaultImgColor.png'), path.join(OUT, 'color.png'));
     console.log(logs.slice(0, 8).join('\n'));

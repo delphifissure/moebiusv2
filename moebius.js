@@ -794,7 +794,6 @@ function bgFarSidePlane(dQ, pw, ph) {
     // its second layer's rim texel. Pass 3 rebuilds the candidate from the rim texel: from the per-line fit today
     // (bit-identical to the single loop it replaces), from a plane pooled across the lines that see the same far
     // surface next (the seam audit, note §10a: the plate's seams are cross-line disagreements and axis flips).
-    const sideV = new Float32Array(2 * N).fill(NaN);   // S32: the winning axis's two side values (per-line law) per texel
     const cJ = [new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1)];
     const cN = [new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1), new Int32Array(N).fill(-1)];
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x;
@@ -825,6 +824,14 @@ function bgFarSidePlane(dQ, pw, ph) {
         // the plane at infinity found on the other (S15's sign: the column crossed the sky above with the ground
         // below at the horizon, the row saw hills on both sides — the hills are there, the sky is not).
         let pick = null, axv = 0;
+        // (S34 A tried the LAYERED ORDER here — of the two axes' values the nearer shows, as combine() does for two surfaces on
+        // one axis — to remove the seam where the arbitration flips between neighbours (S33: 12–24 % of the plate's visible
+        // bends, 30–45 % of their wall length). REMOVED (rule 7): kit unchanged to 0.005 in precision / recall (S15's median
+        // 0.184 → 0.234 m), but on the six pictures the total wall length moved −39…+20 % and the class-3 count rose on four
+        // (vermeer 16 683 → 30 848): the two candidate fields themselves jump — run switches along a line, fit noise across
+        // lines, kind-3/4 crossings whose position varies row to row — and a per-texel choice between jumping fields relocates
+        // the seams instead of removing them. What removes them is upstream: one continuation sheet per visible surface
+        // (S34 §5), not a better per-texel arbitration.)
         if (row && colR) { const rSky = skyOn && row[0] < sqDispK, cSky = skyOn && colR[0] < sqDispK; const rs2 = row[1] === 2, cs2 = colR[1] === 2;
             if (rSky !== cSky) { if (cSky) { pick = row; axv = 1; } else { pick = colR; axv = 2; } }
             else if (rs2 !== cs2) { if (rs2) { pick = row; axv = 1; } else { pick = colR; axv = 2; } }
@@ -836,7 +843,6 @@ function bgFarSidePlane(dQ, pw, ph) {
         // far end of the volume) is no far side at all: the texel is its own, with no rims to colour it from
         if (disp[i] - v <= tol[i]) { farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
         if (pick[3]) { farRimJ[2 * i] = pick[3].j; farRimW[2 * i] = pick[3].w; } if (pick[4]) { farRimJ[2 * i + 1] = pick[4].j; farRimW[2 * i + 1] = pick[4].w; } farMix[i] = pick[5];
-        { const pos = axv === 1 ? x : y; sideV[2 * i] = pick[3] ? (isSky[pick[3].j] ? 0 : lineAt(pick[3], pos)) : NaN; sideV[2 * i + 1] = pick[4] ? (isSky[pick[4].j] ? 0 : lineAt(pick[4], pos)) : NaN; }   // S32: each side's own line value, for the 2-D plate's recombination
         // S4: the second layer comes from the side that gave the value (same plane: the nearer rim's side)
         // (kind 4: the two sides are two surfaces — the nearer one is the second layer, not the side's next arrival)
         { const sideL = pick[3] && (!pick[4] || (pick[1] === 2 ? pick[3].g <= pick[4].g : pick[5] >= 0.5)); const cs = sideL ? pick[3] : pick[4];
@@ -849,86 +855,12 @@ function bgFarSidePlane(dQ, pw, ph) {
         // S7b audit: the two axes' values and the uncertainty of each (tol/2 at the rim plus the slope uncertainty times the distance, the nearer side)
         { const sig = (pk) => { if (!pk) return -1; const c = pk[5] >= 0.5 ? (pk[3] || pk[4]) : (pk[4] || pk[3]); return c ? tolG[i] / 2 + c.g * tolG[c.j] / (2 * Math.max(1, c.w - 1)) : -1; };
             farAxV[2 * i] = row ? row[0] : -1; farAxV[2 * i + 1] = colR ? colR[0] : -1; farAxS[2 * i] = sig(row); farAxS[2 * i + 1] = sig(colR); } }
-    // S32 THE 2-D CLAMPED PLATE PER RUN CLUSTER (window._farPlate2D; R4 §3, measured offline in S25 §4 as equal to the per-line
-    // law on truth and streak-free by construction). The per-line law answers each texel on its own row or column, so
-    // neighbouring rows disagree by their fit noise and the far field carries row structure the eye reads as streaks
-    // (the user's sheets of 2026-09-15). The plate takes the same data — for every rim run the per-line law used, its
-    // fit window into the visible side, raw source disparity, held fixed (the Cauchy strip: value and slope) — and
-    // minimises the discrete bending energy (second differences along x, along y, and the mixed term) over the texels
-    // that run serves, per RUN CLUSTER: rims are one cluster only when they lie in the same run along the axis that
-    // connects them, so a wall and the floor it stands on are separate plates although their depth is continuous across
-    // the crease. Every boundary other than the strip is free. The obstacle: a texel that comes out behind the ground
-    // plane is fixed at the ground and the plate re-solved. Thin candidates (a run shorter than its reach), sky and
-    // ground-cut texels keep the per-line value. Recombination as the offline scorer: of the sides that lie behind the
-    // texel by more than tol, the nearer. Solver: the normal equations by conjugate gradients with the Jacobi
-    // preconditioner, started from the per-line field (which is already the plate's low-frequency part), stopped when
-    // the largest update falls below a hundredth of the cluster's smallest tolerance or at the iteration cap (logged).
-    if (window._farPlate2D) { const tP = Date.now(); let nRep = 0, nClus = 0, nSolved = 0, nIt = 0, nObst = 0, nCap = 0, nUnkMax = 0;
-        const used = new Uint8Array(N);
-        for (let i = 0; i < N; i++) if (farAxis[i]) for (let s = 0; s < 2; s++) { const j = farRimJ[2 * i + s]; if (j >= 0 && !isSky[j]) used[j] = 1; }
-        const par = new Int32Array(N); for (let i = 0; i < N; i++) par[i] = i; const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
-        for (let j = 0; j < N; j++) { if (!used[j]) continue; const x = j % pw;
-            if (x + 1 < pw && used[j + 1] && rs[0][j] === rs[0][j + 1] && re[0][j] === re[0][j + 1]) { const a = find(j), b = find(j + 1); if (a !== b) par[a] = b; }
-            if (j + pw < N && used[j + pw] && rs[1][j] === rs[1][j + pw] && re[1][j] === re[1][j + pw]) { const a = find(j), b = find(j + pw); if (a !== b) par[a] = b; } }
-        const clus = new Map(); const sideK = new Int32Array(2 * N).fill(-1);
-        for (let i = 0; i < N; i++) { const axv = farAxis[i]; if (!axv || farCut[i]) continue; const ax = axv - 1; const xi = i % pw, yi = (i - xi) / pw; const xpos = ax === 0 ? xi : yi; const st = ax === 0 ? 1 : pw;
-            for (let s = 0; s < 2; s++) { const j = farRimJ[2 * i + s]; if (j < 0 || isSky[j]) continue; const p = ax === 0 ? j % pw : (j - (j % pw)) / pw; const g = Math.abs(p - xpos); const a = rs[ax][j], b = re[ax][j];
-                if (b - a + 1 < g + 1) continue;   // thin evidence: the per-line rule's flat continuation stands
-                const K = find(j); let c = clus.get(K); if (!c) { c = { reach: [], strip: new Map() }; clus.set(K, c); } c.reach.push(i); sideK[2 * i + s] = K;
-                const w = farRimW[2 * i + s]; for (let k = 0; k < w; k++) { const pos = s === 0 ? p - k : p + k; if (pos < a || pos > b) break; const n = j + (pos - p) * st; if (!c.strip.has(n)) c.strip.set(n, disp[n]); } } }
-        const plateU = new Float32Array(N).fill(NaN);
-        for (const [K, c] of clus) { nClus++; if (c.strip.size < 2) continue;
-            const dom = new Map(); const domIdx = []; const addD = (t) => { if (!dom.has(t)) { dom.set(t, domIdx.length); domIdx.push(t); } };
-            for (const t of c.reach) addD(t); for (const t of c.strip.keys()) addD(t);
-            const nD = domIdx.length; const u = new Float64Array(nD); const fixed = new Uint8Array(nD); const unkOf = new Int32Array(nD).fill(-1);
-            for (let d = 0; d < nD; d++) { const t = domIdx[d]; const sv = c.strip.get(t); if (sv !== undefined) { u[d] = sv; fixed[d] = 1; } else u[d] = farDisp[t]; }   // start: the per-line field
-                        const gB = new Float64Array(nD).fill(-Infinity); if (ground) for (let d = 0; d < nD; d++) { const t = domIdx[d], x = t % pw; if (groundCol[x]) gB[d] = ground.at(x, (t - x) / pw); }
-            const at = (t) => { const d = dom.get(t); return d === undefined ? -1 : d; };
-            // energy rows over the domain: (cell indices, weights)
-            const rowsI = [], rowsW = [];
-            for (let d = 0; d < nD; d++) { const t = domIdx[d], x = t % pw; const L = x > 0 ? at(t - 1) : -1, R = x < pw - 1 ? at(t + 1) : -1, U = t >= pw ? at(t - pw) : -1, D2 = t + pw < N ? at(t + pw) : -1, DR = (x < pw - 1 && t + pw + 1 < N) ? at(t + pw + 1) : -1;
-                if (L >= 0 && R >= 0) { rowsI.push([L, d, R]); rowsW.push([1, -2, 1]); }
-                if (U >= 0 && D2 >= 0) { rowsI.push([U, d, D2]); rowsW.push([1, -2, 1]); }
-                if (R >= 0 && D2 >= 0 && DR >= 0) { rowsI.push([d, R, D2, DR]); rowsW.push([1.4142135, -1.4142135, -1.4142135, 1.4142135]); } }
-            let rounds = 0;
-            for (;;) { rounds++;
-                let nU = 0; for (let d = 0; d < nD; d++) unkOf[d] = fixed[d] ? -1 : nU++; if (nU === 0) break; if (nU > nUnkMax) nUnkMax = nU;
-                // normal equations: M x = rhs, M = A_u^T A_u, rhs = -A_u^T (A_f u_f); x = the unknowns' values
-                const x0 = new Float64Array(nU); for (let d = 0; d < nD; d++) if (unkOf[d] >= 0) x0[unkOf[d]] = u[d];
-                const nRw = rowsI.length; const rhs = new Float64Array(nU), diag = new Float64Array(nU);
-                for (let r = 0; r < nRw; r++) { const I = rowsI[r], W = rowsW[r]; let bf = 0, anyU = false; for (let k = 0; k < I.length; k++) { if (unkOf[I[k]] >= 0) anyU = true; else bf += W[k] * u[I[k]]; } if (!anyU) continue;
-                    for (let k = 0; k < I.length; k++) { const q2 = unkOf[I[k]]; if (q2 >= 0) { rhs[q2] -= W[k] * bf; diag[q2] += W[k] * W[k]; } } }
-                const Mv = (v, out) => { out.fill(0); for (let r = 0; r < nRw; r++) { const I = rowsI[r], W = rowsW[r]; let s2 = 0, anyU = false; for (let k = 0; k < I.length; k++) { const q2 = unkOf[I[k]]; if (q2 >= 0) { s2 += W[k] * v[q2]; anyU = true; } } if (!anyU || s2 === 0) continue; for (let k = 0; k < I.length; k++) { const q2 = unkOf[I[k]]; if (q2 >= 0) out[q2] += W[k] * s2; } } };
-                const xv = x0, rr = new Float64Array(nU), z = new Float64Array(nU), pdir = new Float64Array(nU), Ap = new Float64Array(nU);
-                Mv(xv, Ap); for (let q2 = 0; q2 < nU; q2++) { rr[q2] = rhs[q2] - Ap[q2]; z[q2] = diag[q2] > 0 ? rr[q2] / diag[q2] : 0; pdir[q2] = z[q2]; }
-                let rz = 0; for (let q2 = 0; q2 < nU; q2++) rz += rr[q2] * z[q2];
-                // stop on the RESIDUAL, not on the step: on this ill-conditioned (biharmonic) system conjugate gradients take
-                // small steps long before the field has moved (the first port stopped on a small step and left the per-line
-                // field nearly intact — vermeer changed by a median of one quantum). The residual of the normal equations
-                // is driven to 1e-6 of its start (a relative numerical tolerance, not a modelling constant); the cap grows
-                // with the cluster (the iteration count of CG scales with the domain's extent) and is reported when hit.
-                const rz0 = rz, CAP = Math.min(60000, 400 + 40 * Math.ceil(Math.sqrt(nU))); let it = 0;
-                for (; it < CAP && rz > 1e-12 * rz0; it++) { Mv(pdir, Ap); let pAp = 0; for (let q2 = 0; q2 < nU; q2++) pAp += pdir[q2] * Ap[q2]; if (!(pAp > 0)) break; const al = rz / pAp;
-                    for (let q2 = 0; q2 < nU; q2++) { xv[q2] += al * pdir[q2]; rr[q2] -= al * Ap[q2]; }
-                    let rzn = 0; for (let q2 = 0; q2 < nU; q2++) { z[q2] = diag[q2] > 0 ? rr[q2] / diag[q2] : 0; rzn += rr[q2] * z[q2]; } const be = rzn / rz; rz = rzn; for (let q2 = 0; q2 < nU; q2++) pdir[q2] = z[q2] + be * pdir[q2]; }
-                nIt += it; if (it >= CAP) nCap++;
-                for (let d = 0; d < nD; d++) if (unkOf[d] >= 0) u[d] = xv[unkOf[d]];
-                // obstacle: behind the ground -> fixed at the ground, re-solved
-                let nB = 0; for (let d = 0; d < nD; d++) if (unkOf[d] >= 0 && gB[d] > 0 && u[d] < gB[d] - tol[domIdx[d]]) { u[d] = gB[d]; fixed[d] = 1; nB++; }
-                nObst += nB; if (nB === 0 || rounds >= 4) break; }
-            nSolved++; for (const t of c.reach) plateU[t] = u[dom.get(t)]; }
-        // recombination (as the offline scorer, sheetfield4 lines 306-326): each side's value is the plate's where it has one,
-        // else the line's; of the sides behind the texel by more than tol the nearer wins; none -> the texel is its own
-        for (let i = 0; i < N; i++) { const axv = farAxis[i]; if (!axv) continue; let best = -Infinity, any = false, changed = false; const xi = i % pw, yi = (i - xi) / pw;
-            const gBi = (ground && groundCol[xi]) ? ground.at(xi, yi) : -Infinity;
-            for (let s = 0; s < 2; s++) { let v = sideV[2 * i + s]; if (Number.isNaN(v)) continue; const K = sideK[2 * i + s];
-                if (K >= 0 && !Number.isNaN(plateU[i])) { let pv = plateU[i]; if (gBi > 0 && pv < gBi - tol[i]) pv = gBi; if (Math.abs(pv - v) > 1e-12) changed = true; v = pv; }
-                if (disp[i] - v > tol[i]) { any = true; if (v > best) best = v; } }
-            if (!changed) continue; nRep++;
-            if (!any) { farAxis[i] = 0; farField[i] = dQ[i]; farDisp[i] = disp[i]; continue; }
-            let v = best; if (v < dispFloor) v = dispFloor; if (v > disp[i]) v = disp[i]; farDisp[i] = v; }
-        console.log('[S32] 2-D plate: ' + nClus + ' run clusters, ' + nSolved + ' solved (largest ' + nUnkMax + ' unknowns), ' + nIt + ' CG iterations' + (nCap ? ' (' + nCap + ' hit the cap)' : '') + ', ' + nObst + ' obstacle texels, ' + nRep + ' texels changed; ' + (Date.now() - tP) + ' ms');
-        window._geoPlate2D = { clusters: nClus, solved: nSolved, iterations: nIt, capped: nCap, obstacle: nObst, changed: nRep, ms: Date.now() - tP }; }
+    // (S32 built the 2-D clamped plate per run cluster here — the S25 §4 construction, bending energy per cluster of rims
+    // that share a run, Cauchy strips fixed, PCG. REMOVED (rule 7): equal to the plane law on the kit (S2/S16/S26 to the
+    // third digit) and worse on the pictures' row structure — clusters follow the run segmentation, so adjacent rows were
+    // solved as separate plates and the visible vertical jumps rose (vermeer 30 → 39 %, troll 40 → 44 %; S32 §4). The
+    // cause of the row structure is measured in S33: 57–77 % of the visible bends are rows of one surface given two
+    // depths, 12–24 % the row/column arbitration flipping between neighbours; the fix is upstream of any solve.)
     // disparity -> normalised depth (the app's law inverted by bisection on the rim law's own table); sky is d = 0
     const sqDisp = skyOn ? rl.dispAt(sq) : -1;
     for (let i = 0; i < N; i++) { if (!farAxis[i]) continue; const v = farDisp[i];
@@ -20889,7 +20821,6 @@ function _wireDebugSheetControls() {
             window._plateStretchInner = plane && (opt.seams === 'stretched' || opt.seams === 'all');   // note §9: the plate's internal seams drawn stretched; the rim stays torn
             window._plateKeepAll = plane && opt.seams === 'all';   // S20: no plate tear at all (the rim stretched too) — the far-pose holes were plate rim tears (silverwarrior 1 635 -> 2 px)
             window._farJoin = (plane && opt.join === 'on') ? 1 : 0;   // note §10: the far field joined across lines (closed scenes); off for open, layered ones
-            window._farPlate2D = (plane && opt.join === 'plate') ? 1 : 0;   // S32: the 2-D clamped plate per run cluster replaces the per-line values (streak-free; equal on truth, S25 §4)
             // live pass (S20 / S23): the two recommended rules as one select — current | + ceiling cut | + ceiling cut + line despeckle
             window._ceilCut = (opt.rules === 'ceil' || opt.rules === 'new') ? 1 : 0;
             window._despeckleLines = opt.rules === 'new' ? 1 : 0;
