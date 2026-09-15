@@ -55,11 +55,16 @@ const H = __dirname, WT = path.resolve(__dirname, '..'); const TAG = process.env
         for (const key of ['v', 'h']) { const c = counts[key]; c.median = c.jumps.map(a => q(a, 0.5)); c.p90 = c.jumps.map(a => q(a, 0.9)); c.sum = c.jumps.map(a => a.reduce((s, v) => s + v, 0)); delete c.jumps; }
         // how many band texels have their rims on how many distinct joined surfaces, per band row: rows whose texels all continue one surface
         const b64 = (a) => { const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
-        return { pw, ph, nBand, step, qg, counts, vclass: b64(vclass), hclass: b64(hclass), vjump: b64(vjump), hjump: b64(hjump), band: b64(band), dQ: b64(dQ), ff: b64(ff) };
+        // S35: what the offline sheet prototype needs (the a257 dump's shape): the depth law's constants, the rim law's t, the ground plane
+        const rlZ = bgRimLawFor(pw, ph); const g = window._geoGround; const gc = window._geoGroundCol, gt = window._geoGroundTex;
+        const meta = { pw, ph, rimT: rlZ.t, outer: outerVolumeDepth, inner: innerVolumeDepth, pn: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5, D: Math.abs(camera.position.z - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)), ground: g ? { a: g.a, b: g.b, c: g.c } : null, ceil: null, quantum: step, grid: qg };
+        return { pw, ph, nBand, step, qg, counts, meta, vclass: b64(vclass), hclass: b64(hclass), vjump: b64(vjump), hjump: b64(hjump), band: b64(band), dQ: b64(dQ), ff: b64(ff), groundCol: gc ? b64(gc) : null, groundTex: gt ? b64(gt) : null };
     });
     if (res.error) { console.log('ERROR ' + res.error); } else {
         for (const k of ['vclass', 'hclass', 'vjump', 'hjump', 'band', 'dQ', 'ff']) fs.writeFileSync(path.join(OUT, k + (k.endsWith('jump') || k === 'dQ' || k === 'ff' ? '.f32' : '.u8')), Buffer.from(res[k], 'base64'));
         fs.writeFileSync(path.join(OUT, 'size.json'), JSON.stringify({ pw: res.pw, ph: res.ph }));
+        fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(res.meta)); fs.copyFileSync(path.join(OUT, 'band.u8'), path.join(OUT, 'disocc.u8')); fs.copyFileSync(path.join(OUT, 'ff.f32'), path.join(OUT, 'farField.f32'));
+        if (res.groundCol) fs.writeFileSync(path.join(OUT, 'groundCol.u8'), Buffer.from(res.groundCol, 'base64')); if (res.groundTex) fs.writeFileSync(path.join(OUT, 'groundTex.u8'), Buffer.from(res.groundTex, 'base64'));
         const { vclass, hclass, vjump, hjump, band, dQ, ff, ...meta } = res; fs.writeFileSync(path.join(OUT, 'counts.json'), JSON.stringify(meta, null, 1));
         console.log('band ' + res.nBand + ' texels; step ' + res.step.toExponential(3) + '; vertical edges ' + res.counts.v.all + ', above step ' + res.counts.v.above + ' classes ' + JSON.stringify(res.counts.v.c) + '; horizontal ' + res.counts.h.all + ', above ' + res.counts.h.above + ' classes ' + JSON.stringify(res.counts.h.c) + '; class 3 vertical: flips ' + res.counts.v.flip + ' (len ' + res.counts.v.flipLen.toFixed(0) + '), domain boundaries ' + res.counts.v.domain + ' (len ' + res.counts.v.domainLen.toFixed(0) + ')');
     }
