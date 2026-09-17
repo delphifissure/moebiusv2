@@ -16,6 +16,8 @@ const POSES = process.env.POSES ? POSES_ALL.filter(p => process.env.POSES.split(
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
+    // FLAGS=_visStep=1,... : window flags set before the bake, as streak_class.js does (starwatcher needs _visStep=1: S10c's gate)
+    if (process.env.FLAGS) await page.evaluate((f) => { for (const kv of f.split(',')) { const [k, v] = kv.split('='); window[k] = Number(v); } }, process.env.FLAGS);
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 320; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 1000)); }
     const shot = async (name) => { const b64 = await page.evaluate(() => { updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }); fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, 'base64')); };
