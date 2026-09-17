@@ -38,5 +38,21 @@ const POSES = process.env.POSES ? POSES_ALL.filter(p => process.env.POSES.split(
         console.log('inject: ' + JSON.stringify(info));
         await doPoses('_sheets');
     }
+    // S35 §25: inject the sheets' own COLOUR too (color_stop.png from sheets.py --color: the source with every band texel
+    // replaced by its owning sheet's continued colour). Without this the shot shows the per-line wash over sheet geometry.
+    if (process.env.COLORPNG) {
+        const b64c = fs.readFileSync(process.env.COLORPNG).toString('base64');
+        const info2 = await page.evaluate(async (b64) => {
+            const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+            const { pw, ph } = window._qbSize; if (img.width !== pw || img.height !== ph) return { error: 'size ' + img.width + 'x' + img.height + ' vs ' + pw + 'x' + ph };
+            const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; cv.getContext('2d').drawImage(img, 0, 0);
+            const tex = new THREE.CanvasTexture(cv); tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+            const old = bgLayerMesh.material.uniforms.map.value; if (old && 'colorSpace' in old && 'colorSpace' in tex) tex.colorSpace = old.colorSpace;
+            bgLayerMesh.material.uniforms.map.value = tex; bgLayerMesh.material.needsUpdate = true;
+            return { replacedColor: pw * ph };
+        }, b64c);
+        console.log('injectColor: ' + JSON.stringify(info2));
+        await doPoses('_sheetcolor');
+    }
     await browser.close(); srv.kill(); console.log('done ' + OUT);
 })();
