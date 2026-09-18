@@ -356,7 +356,26 @@ def L3_figure_cluster(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: figure before a wall with a cluster of small things beside her'}
 
 
+# ---- S35 §39 (2026-09-18): the crease inside a hole — a hole wide enough that no data of either face lies beside it at the
+# crease's rows, so an interpolating plate has only the wall above and the floor below to go by ----
+def C1_screen(W=0.16, H=0.09):
+    """A wide thin screen (a box 0.55 W wide standing on the floor 0.25 W behind the window) before the back wall's crease with
+    the floor: behind it the truth is wall down to the crease line and floor below it, across most of the frame's width."""
+    depth = 0.8 * W
+    prims = room(W, H, depth)
+    prims.append(Box([-0.275 * W, -H / 2, -0.26 * W], [0.275 * W, -H / 2 + 0.55 * H, -0.25 * W], lambda p: tex_noise(p, scale=W * 0.02, base=(0.55, 0.35, 0.3), amp=0.3, axes=(0, 1)), THING, 'screen'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'crease family: wall-floor crease hidden behind a wide screen'}
+
+def C2_corner_figure(W=0.16, H=0.09):
+    """The S1 corner (a receding left wall, a back wall, a floor: one vertical crease and two floor creases, one of them slanted
+    in the image) with a broad figure standing before the corner, so all three creases run into its hole."""
+    prims, m = S1_corner(W, H)
+    _figure(prims, W, H, 0.0, -0.4 * W, W * 0.09, 'figure')
+    return prims, {'outer': m['outer'], 'inner': 0.0, 'element': 'crease family: vertical and slanted creases hidden behind a figure'}
+
+
 SCENES = {
+    'C1': C1_screen, 'C2': C2_corner_figure,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
