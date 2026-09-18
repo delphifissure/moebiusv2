@@ -290,7 +290,74 @@ def P6_grille(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'E6 porous silhouette, grille (thin bars both axes)'}
 
 
+
+# ---- S35 §29 (2026-09-18): the layer family — the configurations §28 could not separate, with exact truth ----
+def _figure(prims, W, H, x, z, r, name):
+    """A standing figure: a capsule body and a sphere head, feet on the floor at y = -H/2."""
+    prims.append(Cylinder([x, -H / 2, z], [x, H * 0.2, z], r, lambda p: tex_stripes(p, scale=W * 0.02, c1=(0.8, 0.55, 0.45), c2=(0.5, 0.3, 0.3), axis=1), THING, name + '_body'))
+    prims.append(Sphere([x, H * 0.2 + 0.9 * r, z], 0.9 * r, lambda p: tex_checker(p, scale=W * 0.015, c1=(0.9, 0.7, 0.55), c2=(0.6, 0.4, 0.3), axes=(1, 2)), THING, name + '_head'))
+
+def _forest(W, H, n_discs, seed=31):
+    """The troll's kind of background: a LAYER of many small things (leaf discs) at overlapping depths filling the frame
+    0.5..0.7 W behind the window, a far wall (the gap) 1.2 W behind it, and a figure 0.25 W behind the window in front.
+    Behind the figure the truth is the leaf layer where a leaf is, the wall where the layer has a gap."""
+    depth, prims = _porous_room(W, H)
+    prims.append(Canopy([0.0, 0.0, -0.6 * W], [W * 1.1, H * 1.1, W * 0.1], n_discs, W * 0.08, tex_solid((0.25, 0.5, 0.2)), seed=seed, name='forest'))
+    _figure(prims, W, H, -0.02 * W, -0.25 * W, W * 0.06, 'figure')
+    return prims, depth
+
+def L1_forest_dense(W=0.16, H=0.09):
+    """Layer, dense: 300 discs of radius 0.08 W (about nine tenths of the frame covered, the troll's forest; 1200 discs of half the
+    radius made every truth eye a multi-minute render)."""
+    prims, depth = _forest(W, H, 300)
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: dense leaf layer before a gap, figure in front'}
+
+def L4_forest_sparse(W=0.16, H=0.09):
+    """Layer, sparse: 100 discs of radius 0.08 W (about half the frame covered) — the case where the layer and the gap are even."""
+    prims, depth = _forest(W, H, 100)
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: sparse leaf layer before a gap, figure in front'}
+
+def L2_disc_field(W=0.16, H=0.09):
+    """The sunflowers: thin discs on thin stems before a ground plane, a big near head at the left, smaller heads deeper, two
+    leaves per stem chaining the plants. The sky is a far wall 4 W back painted sky-blue (as in the picture, where the sky is the
+    farthest surface, not infinity): with the ground running to 300 W the app's depth law put every plant and the near ground
+    within ten tolerances of one depth (d 0.482..0.491), which no sheet model can resolve -- a kit artefact, not a finding. A head
+    is a THING with next to no thickness: behind the big head the truth is the ground and the far wall (and one farther head
+    where it lies behind it), never the head itself."""
+    depth = 4.0 * W
+    prims = []
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.3, c1=(0.45, 0.55, 0.3), c2=(0.35, 0.45, 0.25), axes=(0, 2)), STUFF, 'ground'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 3 * W, 3 * H, lambda p: tex_noise(p, scale=W * 0.4, base=(0.55, 0.7, 0.95), amp=0.08, axes=(0, 1)), STUFF, 'sky_wall'))
+    heads = [(-0.18 * W, 0.05 * H, -0.25 * W, 0.11 * W), (-0.05 * W, 0.0, -0.55 * W, 0.07 * W), (0.12 * W, -0.05 * H, -0.5 * W, 0.075 * W),
+             (0.28 * W, 0.05 * H, -0.7 * W, 0.06 * W), (0.02 * W, 0.12 * H, -1.0 * W, 0.05 * W), (0.38 * W, -0.1 * H, -0.45 * W, 0.065 * W), (-0.32 * W, -0.12 * H, -0.8 * W, 0.05 * W)]
+    for k, (x, y, z, r) in enumerate(heads):
+        n = np.array([0.15 * ((k % 3) - 1), 0.25, 1.0]); n /= np.linalg.norm(n)
+        prims.append(Disc([x, y, z], n, r, (lambda k: (lambda p: tex_checker(p, scale=W * 0.012, c1=(0.95, 0.75, 0.15), c2=(0.35, 0.22, 0.08), axes=(0, 1))))(k), THING, f'head{k}'))
+        prims.append(Cylinder([x, -H / 2, z - 0.004 * W], [x, y, z - 0.004 * W], 0.008 * W, tex_solid((0.3, 0.45, 0.2)), THING, f'stem{k}'))
+        for j, (sx, dz) in enumerate(((-1, 0.06 * W), (1, -0.05 * W))):   # two leaves per stem, off to the sides and at other depths: the thicket that chains the heads
+            ln = np.array([0.6 * sx, 0.5, 1.0]); ln /= np.linalg.norm(ln)
+            prims.append(Disc([x + sx * 0.9 * r, y - 0.9 * r - 0.04 * W * j, z + dz], ln, 0.045 * W, tex_solid((0.28 + 0.04 * j, 0.5, 0.22)), THING, f'leaf{k}_{j}'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: thin discs (heads) before a far sky wall, big head in front'}
+
+def L3_figure_cluster(W=0.16, H=0.09):
+    """The milkmaid: a figure before a back wall, a table with a cluster of small things beside her and a little in
+    front of her, a box on the floor behind her to the right. Behind the figure the truth is the wall and the floor,
+    and the table's things only in the narrow strip the parallax uncovers next to them."""
+    depth = 0.8 * W
+    prims = room(W, H, depth)
+    _figure(prims, W, H, 0.05 * W, -0.3 * W, W * 0.06, 'figure')
+    t = -H / 2 + 0.3 * H
+    prims.append(Box([-0.5 * W, -H / 2, -0.42 * W], [-0.02 * W, t, -0.18 * W], lambda p: tex_noise(p, scale=W * 0.02, base=(0.2, 0.3, 0.55), amp=0.2, axes=(0, 2)), THING, 'table'))
+    prims.append(Sphere([-0.08 * W, t + 0.035 * W, -0.33 * W], 0.035 * W, lambda p: tex_checker(p, scale=W * 0.01, c1=(0.85, 0.8, 0.7), c2=(0.6, 0.5, 0.4), axes=(1, 2)), THING, 'loaf'))
+    prims.append(Box([-0.2 * W, t, -0.38 * W], [-0.12 * W, t + 0.07 * W, -0.3 * W], lambda p: tex_stripes(p, scale=W * 0.01, c1=(0.3, 0.4, 0.7), c2=(0.2, 0.25, 0.5), axis=1), THING, 'jug'))
+    prims.append(Cylinder([-0.05 * W, t, -0.24 * W], [-0.05 * W, t + 0.05 * W, -0.24 * W], 0.03 * W, lambda p: tex_noise(p, scale=W * 0.01, base=(0.7, 0.4, 0.3), amp=0.3, axes=(0, 1)), THING, 'bowl'))
+    b = 0.06 * W
+    prims.append(Box([0.25 * W, -H / 2, -0.7 * W], [0.25 * W + b, -H / 2 + b, -0.7 * W + b], lambda p: tex_noise(p, scale=W * 0.02, base=(0.75, 0.45, 0.30), amp=0.3, axes=(0, 1)), THING, 'foot_warmer'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: figure before a wall with a cluster of small things beside her'}
+
+
 SCENES = {
+    'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
     'S31': S31_hedge, 'S32': S32_hedge_open,
