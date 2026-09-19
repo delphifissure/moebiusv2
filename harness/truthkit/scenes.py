@@ -366,6 +366,16 @@ def C1_screen(W=0.16, H=0.09):
     prims.append(Box([-0.275 * W, -H / 2, -0.26 * W], [0.275 * W, -H / 2 + 0.55 * H, -0.25 * W], lambda p: tex_noise(p, scale=W * 0.02, base=(0.55, 0.35, 0.3), amp=0.3, axes=(0, 1)), THING, 'screen'))
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'crease family: wall-floor crease hidden behind a wide screen'}
 
+def C3_screen_deep(W=0.16, H=0.09):
+    """C1 with the wall at a depth of its own: the room runs to 1.5 W and a wall stands across it at 0.8 W. In C1 the wall sits at
+    the scene's outer depth, d = 0, which the app's depth law (and the prototype) treat as sky, so its crease with the floor is
+    never a crease between two plates; here it is, and the screen hides it across most of the frame's width."""
+    depth = 1.5 * W
+    prims = room(W, H, depth)
+    prims.append(Quad([0, 0, -0.8 * W], [1, 0, 0], [0, 1, 0], W * 3.0, H * 1.5, lambda p: tex_bricks(p, bw=W * 0.12, bh=W * 0.06, mortar=W * 0.008, axes=(0, 1)), STUFF, 'wall'))
+    prims.append(Box([-0.275 * W, -H / 2, -0.26 * W], [0.275 * W, -H / 2 + 0.55 * H, -0.25 * W], lambda p: tex_noise(p, scale=W * 0.02, base=(0.55, 0.35, 0.3), amp=0.3, axes=(0, 1)), THING, 'screen'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'crease family: wall-floor crease between two plates hidden behind a wide screen'}
+
 def C2_corner_figure(W=0.16, H=0.09):
     """The S1 corner (a receding left wall, a back wall, a floor: one vertical crease and two floor creases, one of them slanted
     in the image) with a broad figure standing before the corner, so all three creases run into its hole."""
@@ -375,7 +385,7 @@ def C2_corner_figure(W=0.16, H=0.09):
 
 
 SCENES = {
-    'C1': C1_screen, 'C2': C2_corner_figure,
+    'C1': C1_screen, 'C2': C2_corner_figure, 'C3': C3_screen_deep,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
