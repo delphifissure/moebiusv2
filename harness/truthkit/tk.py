@@ -325,15 +325,18 @@ def render(scene, portal, eye, K=6, shade=True, ambient=0.35):
     """Returns dict of arrays shaped (ny, nx, K): t, depth (= -z), pid, label, rgb (…,3), nrm (…,3), pts (…,3); missing = inf/-1."""
     o, d = portal.rays(eye)
     N = len(o)
-    cand_t = []; cand_pid = []
+    # S35 §54: a running top-K of the nearest hits instead of stacking every primitive's candidates (that was O(prims x N):
+    # L5's 180 primitives over the 1.44 M-sample canvas were 14 GB and the process was killed). Memory is O(N x K); the
+    # result is the same K nearest hits in the same stable order.
+    T = np.full((N, K), INF); PID = np.full((N, K), -1, dtype=np.int32)
     for pi, prim in enumerate(scene):
         for t in prim.hits(o, d):
-            cand_t.append(t); cand_pid.append(np.full(N, pi, dtype=np.int32))
-    while len(cand_t) < K:   # fewer candidate surfaces than layers: pad with misses
-        cand_t.append(np.full(N, INF)); cand_pid.append(np.full(N, -1, dtype=np.int32))
-    T = np.stack(cand_t, axis=1); PID = np.stack(cand_pid, axis=1)
-    order = np.argsort(T, axis=1, kind='stable')
-    T = np.take_along_axis(T, order, axis=1)[:, :K]; PID = np.take_along_axis(PID, order, axis=1)[:, :K]
+            hit = np.isfinite(t) & (t < T[:, -1])
+            if not hit.any(): continue
+            idx = np.flatnonzero(hit); tt = t[idx]
+            Ts = np.concatenate([T[idx], tt[:, None]], axis=1); Ps = np.concatenate([PID[idx], np.full((len(idx), 1), pi, dtype=np.int32)], axis=1)
+            order = np.argsort(Ts, axis=1, kind='stable')
+            T[idx] = np.take_along_axis(Ts, order, axis=1)[:, :K]; PID[idx] = np.take_along_axis(Ps, order, axis=1)[:, :K]
     # drop duplicate hits at the same t (touching surfaces)
     valid = np.isfinite(T)
     PID = np.where(valid, PID, -1)
