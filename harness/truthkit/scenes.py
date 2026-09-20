@@ -413,12 +413,41 @@ def L5_field(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: a graded clumpy field with heads in front (the sunflowers)'}
 
 
+def L6_forest_graded(W=0.16, H=0.09):
+    """S35 §56: the TROLL's configuration in exact truth. L1/L4 put their leaf layer in one narrow slab (0.5-0.7 W) with a flat
+    wall 1.2 W behind; the troll stands before a forest that recedes continuously, so behind him the truth is foliage, trunks,
+    ground and sky at many depths and never one plane. Here: a figure at 0.3 W, then forty trees (a trunk and a porous crown
+    each) in ten ranks from 0.5 W to 3.2 W, shrinking with distance and dense enough to close the canopy across the frame, over
+    a ground plane with a sky wall at 4 W. The forest is named tree* so that `truth_ids.py L6 --unlabelled tree` gives the map
+    the troll has under a click mask (the figure labelled, the forest left as depth components), and `truth_ids.py L6` labels
+    every tree."""
+    depth = 4.0 * W
+    prims = []
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.25, c1=(0.40, 0.46, 0.28), c2=(0.30, 0.38, 0.22), axes=(0, 2)), STUFF, 'ground'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 3 * W, 3 * H, lambda p: tex_noise(p, scale=W * 0.4, base=(0.55, 0.7, 0.95), amp=0.08, axes=(0, 1)), STUFF, 'sky_wall'))
+    _figure(prims, W, H, -0.13 * W, -0.30 * W, W * 0.075, 'figure')
+    rng = np.random.RandomState(56); k = 0
+    for rank in range(10):
+        z = -(0.50 + 0.28 * rank * (1 + 0.09 * rank)) * W          # ten ranks, 0.5 W to 3.2 W, spacing growing with distance
+        sc = 1.0 / (1.0 + 0.30 * rank)                              # trees shrink with distance
+        nT = 4 + rank // 3
+        for j in range(nT):
+            x = (-1.15 + 2.3 * (j + 0.5 + 0.7 * (rng.rand() - 0.5)) / nT) * W
+            z_ = z + W * 0.10 * (rng.rand() - 0.5)
+            th = H * (0.30 + 0.12 * rng.rand()) * sc                # trunk height
+            prims.append(Cylinder([x, -H / 2, z_], [x, -H / 2 + th, z_], W * 0.020 * sc, tex_solid((0.34, 0.24, 0.17)), THING, f'tree{k}_trunk'))
+            g = 0.42 + 0.14 * rng.rand()
+            prims.append(Canopy([x, -H / 2 + th + H * 0.30 * sc, z_], [W * 0.34 * sc, H * 0.46 * sc, W * 0.10 * sc], 90, W * 0.020 * sc,
+                                tex_solid((0.20, g, 0.17)), seed=56 + k, name=f'tree{k}_crown')); k += 1
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: a figure before a forest receding continuously (the troll)'}
+
+
 SCENES = {
     'C1': C1_screen, 'C2': C2_corner_figure, 'C3': C3_screen_deep,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
-    'S31': S31_hedge, 'S32': S32_hedge_open, 'L5': L5_field,
+    'S31': S31_hedge, 'S32': S32_hedge_open, 'L5': L5_field, 'L6': L6_forest_graded,
     'S27': S27_fishtank, 'S11': S11_rounded, 'S1': S1_corner, 'S2': S2_contact, 'S3': lambda W=0.16, H=0.09: S2_contact(W, H, floating=True),
     'S5': S5_pole, 'S9': S9_stacked, 'S10': S10_limb, 'S7': S7_canopy, 'S4': S4_figure_popout,
     # S28 = V6 the same room at three diorama depths (0.25, 0.75, 2.0 window widths)
