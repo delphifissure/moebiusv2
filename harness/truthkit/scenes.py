@@ -442,12 +442,87 @@ def L6_forest_graded(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'layer family: a figure before a forest receding continuously (the troll)'}
 
 
+def _ground_and_sky(W, H, depth):
+    prims = []
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001, lambda p: tex_checker(p, scale=W * 0.25, c1=(0.40, 0.46, 0.28), c2=(0.30, 0.38, 0.22), axes=(0, 2)), STUFF, 'ground'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 3 * W, 3 * H, lambda p: tex_noise(p, scale=W * 0.4, base=(0.55, 0.7, 0.95), amp=0.08, axes=(0, 1)), STUFF, 'sky_wall'))
+    return prims
+
+
+def L7_boulders(W=0.16, H=0.09):
+    """S38/S39, the L5 regime, sparse and large: rounded boulders RESTING ON the ground at graded depths, with a figure in
+    front. L5's clumps merge into the ground through their contact, so a click-the-heads map leaves them as part of the
+    ground's join group and the construction collapses; L6's crowns sit in the air and stay their own components. This scene
+    keeps L5's contact but makes the pieces far larger and sparser, so the ground shows between them -- the case where the
+    arm might cope. Field named boulder* for `truth_ids.py L7 --unlabelled boulder`."""
+    depth = 4.0 * W
+    prims = _ground_and_sky(W, H, depth)
+    _figure(prims, W, H, -0.12 * W, -0.30 * W, W * 0.085, 'figure')
+    rng = np.random.RandomState(70); k = 0
+    for rank in range(8):
+        z = -(0.55 + 0.34 * rank * (1 + 0.10 * rank)) * W
+        sc = 1.0 / (1.0 + 0.28 * rank)
+        for j in range(4 + rank // 3):
+            x = (-1.2 + 2.4 * (j + 0.5 + 0.6 * (rng.rand() - 0.5)) / (4 + rank // 3)) * W
+            r = W * (0.085 + 0.045 * rng.rand()) * sc
+            g = 0.40 + 0.16 * rng.rand()
+            prims.append(Ellipsoid([x, -H / 2 + r * 0.75, z + W * 0.12 * (rng.rand() - 0.5)], [r * 1.35, r * 0.8, r],
+                                   tex_solid((0.34 + 0.06 * rng.rand(), g * 0.7, 0.30)), THING, f'boulder{k}')); k += 1
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'L5 regime, sparse: boulders resting on the ground, figure in front'}
+
+
+def L8_crowd(W=0.16, H=0.09):
+    """S38/S39, the L5 regime with upright pieces: a CROWD of standing figures at graded depths on a ground, a larger figure
+    in front. Every one of them meets the ground, as L5's clumps do, but they are tall and narrow rather than round, so the
+    silhouette statistics are the opposite of L5's while the contact structure is the same. Field named crowd* for
+    `truth_ids.py L8 --unlabelled crowd`."""
+    depth = 4.0 * W
+    prims = _ground_and_sky(W, H, depth)
+    _figure(prims, W, H, -0.15 * W, -0.28 * W, W * 0.080, 'figure')
+    rng = np.random.RandomState(80); k = 0
+    for rank in range(9):
+        z = -(0.55 + 0.30 * rank * (1 + 0.09 * rank)) * W
+        sc = 1.0 / (1.0 + 0.30 * rank)
+        for j in range(3 + rank // 2):
+            n = 3 + rank // 2
+            x = (-1.15 + 2.3 * (j + 0.5 + 0.7 * (rng.rand() - 0.5)) / n) * W
+            r = W * (0.045 + 0.018 * rng.rand()) * sc
+            z_ = z + W * 0.10 * (rng.rand() - 0.5)
+            c1 = (0.35 + 0.45 * rng.rand(), 0.30 + 0.40 * rng.rand(), 0.35 + 0.40 * rng.rand())
+            prims.append(Cylinder([x, -H / 2, z_], [x, -H / 2 + H * (0.34 + 0.10 * rng.rand()) * sc, z_], r,
+                                  (lambda c: (lambda p: tex_stripes(p, scale=W * 0.02, c1=c, c2=(c[0] * 0.6, c[1] * 0.6, c[2] * 0.6), axis=1)))(c1), THING, f'crowd{k}_body'))
+            prims.append(Sphere([x, -H / 2 + H * (0.34 + 0.10 * rng.rand()) * sc + 0.9 * r, z_], 0.9 * r,
+                                tex_solid((0.80, 0.62, 0.50)), THING, f'crowd{k}_head')); k += 1
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'L5 regime, upright: a crowd of standing figures, larger figure in front'}
+
+
+def L9_tufts(W=0.16, H=0.09):
+    """S38/S39, the L5 regime at its extreme: a dense low field of small tufts sitting ON the ground, receding, with a figure
+    in front. The finest contact case -- hundreds of small pieces every one of which touches the ground, so nothing survives
+    as its own component under a click-the-heads map. Field named tuft* for `truth_ids.py L9 --unlabelled tuft`."""
+    depth = 4.0 * W
+    prims = _ground_and_sky(W, H, depth)
+    _figure(prims, W, H, -0.10 * W, -0.30 * W, W * 0.080, 'figure')
+    rng = np.random.RandomState(90); k = 0
+    for rank in range(16):
+        z = -(0.30 + 0.17 * rank * (1 + 0.07 * rank)) * W
+        sc = 1.0 / (1.0 + 0.40 * rank)
+        n = 10 + rank
+        for j in range(n):
+            x = (-1.25 + 2.5 * (j + 0.5 + 0.8 * (rng.rand() - 0.5)) / n) * W
+            r = W * (0.028 + 0.016 * rng.rand()) * sc
+            g = 0.40 + 0.18 * rng.rand()
+            prims.append(Ellipsoid([x, -H / 2 + r * 0.9, z + W * 0.05 * (rng.rand() - 0.5)], [r * 0.8, r * 1.5, r * 0.8],
+                                   tex_solid((0.22, g, 0.18)), THING, f'tuft{k}')); k += 1
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'L5 regime, extreme: a dense low field of tufts on the ground, figure in front'}
+
+
 SCENES = {
     'C1': C1_screen, 'C2': C2_corner_figure, 'C3': C3_screen_deep,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
     'S12': S12_framecut, 'S15': S15_open, 'S16': S16_ridge, 'S26': S26_overhang, 'S30': S30_dolly,
-    'S31': S31_hedge, 'S32': S32_hedge_open, 'L5': L5_field, 'L6': L6_forest_graded,
+    'S31': S31_hedge, 'S32': S32_hedge_open, 'L5': L5_field, 'L6': L6_forest_graded, 'L7': L7_boulders, 'L8': L8_crowd, 'L9': L9_tufts,
     'S27': S27_fishtank, 'S11': S11_rounded, 'S1': S1_corner, 'S2': S2_contact, 'S3': lambda W=0.16, H=0.09: S2_contact(W, H, floating=True),
     'S5': S5_pole, 'S9': S9_stacked, 'S10': S10_limb, 'S7': S7_canopy, 'S4': S4_figure_popout,
     # S28 = V6 the same room at three diorama depths (0.25, 0.75, 2.0 window widths)
