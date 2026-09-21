@@ -87,16 +87,30 @@ const ARMS = (process.env.ARMS || 'off,px0.5,px1,px2,px4,q8,fold').split(',').fi
     // quanta could never transfer between pictures. Printed, not used.
     const poses = (process.env.POSES || '0:0,1:0,1:1,-1:-1').split(',').map(s => s.split(':').map(Number));
 
-    let RECT = null;
+    let RECT = null; const BASE = {};
     const shot = async (fx, fy, arm, mode) => {
         const r = await page.evaluate(async ([fx, fy, armDef, mode, rect, unpaintedSrc, TS]) => {
             // arm the rule LIVE: nothing baked depends on it
             if (window._setPlateNearOnlyPx) window._setPlateNearOnlyPx(armDef.px);
             const ud = bgLayerMesh.userData || {};
+            // u_plateFold ALONE IS INERT. The plate's fold path is gated on u_fragTear > 0.5 and needs the rest of the
+            // A241 stretch law with it (the app arms four uniforms together at bake time, Sprint 17a). The first run of
+            // this sweep set only u_plateFold and the fold arm returned numbers IDENTICAL to off at every pose -- which
+            // is the a134 lesson this codebase already carries: an A/B arm must diverge downstream of the flag before
+            // its numbers are read. The assertion below enforces it rather than trusting this comment.
+            const sz0 = window._qbSize, la0 = sz0.pw / sz0.ph, fa0 = terrariumWidth / terrariumHeight;
+            const layerWf0 = (la0 > fa0) ? 1.0 : (la0 / fa0);
+            const plateScrPx0 = Math.max(1, renderer.domElement.width * layerWf0);
             for (const m of [bgLayerMesh].concat(ud.plate2 ? [ud.plate2] : [], ud.ring || [])) {
                 const u = m.material && m.material.uniforms; if (!u) continue;
                 if (u.u_plateNearOnly) u.u_plateNearOnly.value = armDef.q ? armDef.q * (window._qbSrcQuantum || 1 / 255) : 0.0;
                 if (u.u_plateFold) u.u_plateFold.value = armDef.fold || 0.0;
+                if (armDef.fold) {
+                    if (u.u_fragTear) u.u_fragTear.value = 1.0;
+                    if (u.u_fragTearGate) u.u_fragTearGate.value = 0.0;
+                    if (u.u_fragTearFactor) u.u_fragTearFactor.value = 2.0;
+                    if (u.u_texelsPerPxRest) u.u_texelsPerPxRest.value = sz0.pw / plateScrPx0;
+                } else if (u.u_fragTear && !window._fragTear) u.u_fragTear.value = 0.0;
             }
             const chk = document.getElementById('sdRegionsChk');
             const want = mode === 'sd';
@@ -150,6 +164,14 @@ const ARMS = (process.env.ARMS || 'off,px0.5,px1,px2,px4,q8,fold').split(',').fi
             return { W, Hh, rect: [x0,y0,x1,y1], area, placeholder: 100*placeholder/area, dark: 100*dark/area, png: cv.toDataURL('image/png'), unp, unpPng };
         }, [fx, fy, ARM_DEFS[arm], mode, RECT, UNPAINTED_FN, TS]);
         if (!RECT) { RECT = r.rect; console.log('  content rect ' + JSON.stringify(RECT) + ' = ' + r.area + ' px (' + (100*r.area/(r.W*r.Hh)).toFixed(1) + '% of the canvas)'); }
+        // A134: AN ARM THAT DID NOT DIVERGE IS NOT A RESULT. The fold arm silently matched `off` byte for byte on the
+        // first run because it was armed with one uniform instead of four; nothing in the numbers looked wrong. Every
+        // non-off arm is now compared against off's frame at the same pose and mode, and a match is reported loudly.
+        const key = mode + '_' + fx + '_' + fy;
+        if (arm === 'off') BASE[key] = r.png;
+        else if (BASE[key] && BASE[key] === r.png)
+            console.log('  !! ARM DID NOT DIVERGE: ' + arm + ' at ' + fx + ':' + fy + ' (' + mode + ') renders IDENTICALLY to off. ' +
+                        'Its row below is not a measurement of the arm. Check the uniforms it needs.');
         const stem = arm + '_' + mode + '_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm');
         fs.writeFileSync(path.join(OUT, stem + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
         if (r.unpPng) fs.writeFileSync(path.join(OUT, 'leak_' + stem + '.png'), Buffer.from(r.unpPng.split(',')[1], 'base64'));
