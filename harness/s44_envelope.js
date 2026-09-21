@@ -46,13 +46,16 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
         window._rayReproject = true; window._depthContractUI = false;   // no banner in the frames
         if (o.depth) { if (o.depth.outer !== undefined) outerVolumeDepth = o.depth.outer; if (o.depth.inner !== undefined) innerVolumeDepth = o.depth.inner; if (o.depth.pn !== undefined) currentNormPortalPlane = o.depth.pn; }
         if (o.sky) { const el = document.getElementById('bgPlateSkySel'); if (el) el.value = 'on'; }
+        if (o.sel) for (const k in o.sel) { const el = document.getElementById(k); if (el) el.value = o.sel[k]; }
         if (window._applyPlateOptions) window._applyPlateOptions();
+        if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
         window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
         const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
         const t0 = Date.now(); window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); window._bgUserBuiltOnce = true;
         return { bakeMs: Date.now() - t0, opts: window._bgPlateOptions, ceilCut: window._ceilCut, despeckle: window._despeckleLines,
                  envDeg: bgViewFadeEndDeg, cloneCount: window._qbCloneCount, contract: window._bgDepthContract ? window._bgDepthContract.warn.length : null };
-    }, { sky: !!process.env.SKY, depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
+    }, { sky: !!process.env.SKY, flags: process.env.FLAGS ? process.env.FLAGS.split(',') : null,
+         sel: process.env.SEL ? Object.fromEntries(process.env.SEL.split(',').map(z => z.split('='))) : null, depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
     console.log('bake ' + meta.bakeMs + ' ms, defaults ' + JSON.stringify(meta.opts) + ', ceilCut ' + meta.ceilCut + ', despeckle ' + meta.despeckle +
                 ', envelope ' + meta.envDeg + ' deg, clones ' + meta.cloneCount + ', depth-contract warnings ' + meta.contract);
 
@@ -88,11 +91,13 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
                 if (x1 < x0) { x0 = 0; y0 = 0; x1 = W - 1; y1 = Hh - 1; }
             }
             const area = Math.max(1, (x1 - x0 + 1) * (y1 - y0 + 1));
-            let placeholder = 0, dark = 0;
+            let placeholder = 0, dark = 0, stretched = 0;
             for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
                 const i = y * W + x;
                 const R = d[i*4], G = d[i*4+1], B = d[i*4+2];
                 if (R < 24 && G < 24 && B < 24) { dark++; continue; }
+                // the S17a fold-alpha check view paints every stretched-past-the-fold plate pixel pure magenta
+                if (mode === 'plain' && R > 230 && B > 230 && G < 60) { stretched++; continue; }
                 if (mode !== 'sd') continue;
                 // the S17 placeholder tints: cyan/blue (band), teal (carrier wash), magenta (plate 2), orange (beyond the frame)
                 if ((R > 150 && G > 60 && G < 170 && B < 90) ||            // orange
@@ -102,7 +107,7 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
                     (G > 120 && B > 100 && R < 90 && G > B)) placeholder++; // teal
             }
             isSweeping = false;
-            return { W, Hh, rect: [x0, y0, x1, y1], area, placeholder: 100 * placeholder / area, dark: 100 * dark / area, png: cv.toDataURL('image/png') };
+            return { W, Hh, rect: [x0, y0, x1, y1], area, placeholder: 100 * placeholder / area, dark: 100 * dark / area, stretched: 100 * stretched / area, png: cv.toDataURL('image/png') };
         }, [fx, fy, mode, RECT]);
         if (!RECT) { RECT = r.rect; console.log('  content rect ' + JSON.stringify(RECT) + ' = ' + r.area + ' px of ' + (r.W * r.Hh) + ' (' + (100 * r.area / (r.W * r.Hh)).toFixed(1) + '% of the canvas); everything below is measured inside it'); }
         fs.writeFileSync(path.join(OUT, mode + '_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm') + '.png'),
@@ -115,14 +120,15 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
         const plain = await shot(fx, fy, 'plain');
         const sd = await shot(fx, fy, 'sd');
         const deg = { h: +(Math.atan(Math.abs(fx) * Math.tan(meta.envDeg * Math.PI / 180)) * 180 / Math.PI).toFixed(1) };
-        rows.push({ fx, fy, degH: deg.h, placeholder: +sd.placeholder.toFixed(3), dark: +plain.dark.toFixed(3) });
+        rows.push({ fx, fy, degH: deg.h, placeholder: +sd.placeholder.toFixed(3), dark: +plain.dark.toFixed(3), stretched: +plain.stretched.toFixed(3) });
     }
     const rest = rows[0];
     console.log('\n  pose (fx:fy)   h deg |  placeholder %   d from rest |     dark %   d from rest');
     for (const r of rows) {
         console.log('  ' + String(r.fx + ':' + r.fy).padEnd(13) + String(r.degH).padStart(6) +
                     ' | ' + r.placeholder.toFixed(3).padStart(13) + (r.placeholder - rest.placeholder >= 0 ? '   +' : '   ') + (r.placeholder - rest.placeholder).toFixed(3).padStart(9) +
-                    ' | ' + r.dark.toFixed(3).padStart(10) + (r.dark - rest.dark >= 0 ? '   +' : '   ') + (r.dark - rest.dark).toFixed(3).padStart(9));
+                    ' | ' + r.dark.toFixed(3).padStart(10) + (r.dark - rest.dark >= 0 ? '   +' : '   ') + (r.dark - rest.dark).toFixed(3).padStart(9) +
+                    ' | stretched ' + r.stretched.toFixed(3).padStart(8));
     }
     const worst = rows.reduce((a, b) => (b.placeholder > a.placeholder ? b : a), rows[0]);
     console.log('\n  REST-TO-ENVELOPE DIFFERENCE: placeholder +' + (worst.placeholder - rest.placeholder).toFixed(3) +

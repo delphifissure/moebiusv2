@@ -3042,6 +3042,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // the cone rim. u_texelsPerPxRest = the foreground's texel density at rest.
         u_fragTear: { value: 0.0 },
         u_plateFold: { value: 0.0 },          // Sprint 17a (window._plateFoldAlpha): the PLATE obeys the A241 stretch law too — 1 discard, 2 magenta check view; 3 = S32 frame-edge tear (outside u_restFoot only)
+        u_plateNearOnly: { value: 0.0 },      // S46 (window._plateNearOnly): a ramp is opaque only within this much normalised depth of its own near extent; 0 = off. Negative = the same test as a magenta check view.
         u_restFoot: { value: new THREE.Vector2(1, 1) },   // S32: the picture's rest footprint in NDC half-extents for the mode-3 tear (the clip stays u_restClip)
         u_backTear: { value: 0.0 },          // A257e: 1 on the A257 object-back layer — its shader discards the mesh ramps between back and back-less texels
         u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
@@ -3118,6 +3119,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_bandCutUvRate;
         uniform float u_cutContactRamp;
         uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_plateFold;   // A241; Sprint 17a
+        uniform float u_plateNearOnly;   // S46
         uniform float u_backTear;   // A257e
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
@@ -3213,6 +3215,34 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
                 // a streak (first reading — "the border cells" — was wrong: every column's ramp spills, not the first);
                 // inside the footprint the ramps keep the panel's seam choice.
                 if (u_isBackgroundLayer && u_plateFold > 2.5 && isGap) { vec2 ndcE = vClip.xy / max(vClip.w, 1e-6); bool outsideE = abs(ndcE.x) > u_restFoot.x || abs(ndcE.y) > u_restFoot.y; if (!outsideE) isGap = false; }
+            }
+        }
+        // S46 THE RAMP IS OPAQUE ONLY AT ITS CAMERA-NEAREST EXTENT (user report, 2026-09-21: "the texels that are protruding
+        // to fill in the foreground are not rendered transparent behind their camera-nearest extent, creating tunneling
+        // between foreground and background").
+        //
+        // At a depth cliff the plate has one quad spanning from the near surface to the far one. There is no surface there;
+        // it is the mesh's own rubber band. Seen from an off-axis eye it projects to a long streak, drawn opaque along its
+        // whole length, which reads as a corridor joining the foreground to the background -- measured at 3.7 % of the
+        // picture at 45 degrees on the troll.
+        //
+        // The two existing answers are both all-or-nothing per cell: keep the whole ramp (seams = stretched, the shipped
+        // default, which is the streak) or discard it entirely (u_plateFold = 1, which removes the streak and opens 40 %
+        // more hole area at 45 degrees). This is the middle the report asks for: keep the ramp where it is doing the
+        // covering -- within u_plateNearOnly of its own near end -- and drop the tail that does the tunnelling.
+        //
+        // "Its own near end" is read from the plate's own depth map, which this material already samples: the largest depth
+        // among the four neighbouring texels is the nearest surface this cell touches. On a smooth surface the neighbours
+        // differ by about one quantum and nothing is discarded; on a ramp the uphill neighbour is the near surface, so the
+        // far tail exceeds the tolerance and goes. The tolerance is set in JS from the source quantum the bake already
+        // measures (a89), so no new constant enters here.
+        if (u_isBackgroundLayer && abs(u_plateNearOnly) > 0.0 && !isGap) {
+            vec2 tx = 1.0 / max(u_textureSize, vec2(1.0));
+            float dN = max(max(getDepth(vUv + vec2(tx.x, 0.0)), getDepth(vUv - vec2(tx.x, 0.0))),
+                           max(getDepth(vUv + vec2(0.0, tx.y)), getDepth(vUv - vec2(0.0, tx.y))));
+            if (dN - vNormalizedDepth > abs(u_plateNearOnly)) {
+                if (u_plateNearOnly < 0.0) { gl_FragColor = vec4(0.1, 1.0, 0.3, 1.0); return; }   // check view: the tail, in green
+                discard;   // the background layer's own gap path is gated on u_plateFold, so this rule discards directly
             }
         }
         if (u_useBandCut && (!u_isBackgroundLayer || u_bandCutAll) && !isGap) {
@@ -16636,6 +16666,17 @@ function bgBuildBackgroundLayerCore() {
             // not a continuation. The frame-edge fill wants the band's treatment at the band's scale, not a texture wrap.
             matQ.uniforms.u_isBackgroundLayer.value = true;
             matQ.uniforms.u_useEdgeMask.value = false;
+            // S46 (window._plateNearOnly = k, or -k for the green check view): a ramp is opaque only within k SOURCE QUANTA
+            // of its own near extent; the tail that tunnels between the foreground and the background is transparent.
+            // The tolerance is carried to the shader in normalised depth, computed from the quantum the bake measured
+            // (a89), so the rule introduces no constant of its own -- k is the arm, in the same units the tear law uses.
+            if (matQ.uniforms.u_plateNearOnly) {
+                const kNO = (typeof window._plateNearOnly === 'number') ? window._plateNearOnly : 0;
+                const qNO = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : (1 / 255);
+                matQ.uniforms.u_plateNearOnly.value = kNO ? Math.sign(kNO) * Math.abs(kNO) * qNO : 0.0;
+                if (kNO) console.log('[S46] plate near-extent rule armed: |k| ' + Math.abs(kNO) + ' source quanta = ' +
+                    (Math.abs(kNO) * qNO).toFixed(6) + ' in d' + (kNO < 0 ? ' (green check view: the discarded tail)' : ''));
+            }
             // Sprint 17a (window._plateFoldAlpha = 1 | 2): the plate obeys the A241 stretch law — the same rest texel density and
             // fold factor as the foreground (A212's criterion: shift span > cell extent <=> stretched past 2x at the fold), ungated.
             if (window._plateFoldAlpha && matQ.uniforms.u_plateFold) {
