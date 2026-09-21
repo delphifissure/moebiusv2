@@ -10650,6 +10650,22 @@ window._revealPxField = function (dq, pw, ph, opts) {
     }
     return { reveal: out, law: L, unit: opts.screen ? 'screen px' : 'plate texels' };
 };
+// S50: re-arm the rule on the LIVE plate without rebaking. Nothing in the bake depends on the tolerance -- it is a
+// fragment test evaluated every frame -- so a sweep costs one bake and N renders rather than N bakes. Plate 2 and the
+// A245 ring get it too (their ramps tunnel the same way); the S5 step faces deliberately do not, because a step face is
+// intended geometry spanning a depth step and the rule would delete every one of them.
+window._setPlateNearOnlyPx = function (T) {
+    window._plateNearOnlyPx = T;
+    if (typeof bgLayerMesh === 'undefined' || !bgLayerMesh) return null;
+    const sz = window._qbSize; if (!sz) return null;
+    const ud = bgLayerMesh.userData || {};
+    const targets = [bgLayerMesh].concat(ud.plate2 ? [ud.plate2] : [], ud.ring || []);
+    let n = 0;
+    for (const m of targets) { const u = m.material && m.material.uniforms; if (!u || !u.u_revealPxTol) continue; window._armRevealLaw(m.material, sz.pw, sz.ph); n++; }
+    if (ud.steps && ud.steps.material && ud.steps.material.uniforms && ud.steps.material.uniforms.u_revealPxTol) ud.steps.material.uniforms.u_revealPxTol.value = 0.0;
+    if (typeof render === 'function') { try { render(); } catch (e) {} }
+    return { armed: n, T };
+};
 window._armRevealLaw = function (mat, pw, ph) {
     const u = mat && mat.uniforms; if (!u || !u.u_revealLaw) return null;
     const L = window._revealLaw(pw, ph);
@@ -18006,6 +18022,12 @@ function bgBuildBackgroundLayerCore() {
                     const gS = new THREE.BufferGeometry(); gS.setAttribute('position', new THREE.BufferAttribute(pos, 3)); gS.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); gS.setIndex(new THREE.BufferAttribute(idx, 1));
                     const matS = matQ.clone(); matS.uniforms.displacementMap.value = dtS; matS.uniforms.map.value = texS; matS.side = THREE.DoubleSide;
                     if (matS.uniforms.u_sdPaintAll) matS.uniforms.u_sdPaintAll.value = true;   // C: a step face's colour is a rim mean — a placeholder over its whole area
+                    // S50: a step face is INTENDED geometry spanning a depth step, not a mesh ramp, so the near-extent
+                    // rule must not see it. Inherited from matQ it would delete every step face outright: the whole quad
+                    // is by definition far behind its own near end. (The clone copies matQ's values, so this must be
+                    // cleared here rather than relied on being off.)
+                    if (matS.uniforms.u_plateNearOnly) matS.uniforms.u_plateNearOnly.value = 0.0;
+                    if (matS.uniforms.u_revealPxTol) matS.uniforms.u_revealPxTol.value = 0.0;
                     const mS = new THREE.Mesh(gS, matS); mS.position.copy(L.mesh.position); mS.rotation.copy(L.mesh.rotation); mS.scale.copy(L.mesh.scale); mS.renderOrder = bgLayerMesh.renderOrder;
                     bgLayerMesh.userData.steps = mS;
                     console.log('[S5] step faces: ' + nP + ' quads between parallel-plane rims, one colour per rim segment (the mean of its rim texels); ' + (Date.now() - tS0) + 'ms');
