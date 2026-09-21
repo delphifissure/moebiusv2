@@ -10499,6 +10499,104 @@ async function _png16Decode(u8) {
     if (bd === 8) return { w, h, data: out, max: 255 };
     const d16 = new Uint16Array(w * h); for (let i = 0; i < w * h; i++) d16[i] = (out[2 * i] << 8) | out[2 * i + 1]; return { w, h, data: d16, max: 65535 };
 }
+
+// ============================================================================================ S45 / Sprint 25
+// THE SCREENED POISSON BAND SOLVE — how a returned depth is put back on the plate.
+//
+// R7 read the RGB-D inpainting literature and recommended InpaintFusion's contract: ask the model for the depth GRADIENT
+// rather than the depth, and recover the depth by Poisson integration with the observed depth as the Dirichlet boundary.
+// The claimed benefits are that the seam is exact by construction, the representation is scale-free, and the solve is a
+// sparse Laplacian on a thin band. All three are properties of the formulation and all three hold.
+//
+// What the literature could not tell us is whether it is better ON OUR DATA once the returned values are WRONG, which they
+// will be. Measured on the kit before this was built (`research/s35/bleed/poisson.py`, note S45), the answer is that
+// neither pure form wins:
+//   * the pure GRADIENT form is immune to a constant bias (a constant has no gradient) and wins at the seam, but it is
+//     ~25 % WORSE than an absolute return over the band interior, because integration accumulates the noise;
+//   * an ABSOLUTE return shifted PER BAND COMPONENT to meet its own visible rim is equally immune to bias and wins the
+//     interior, but is worse at the seam, where it is anchored by nothing.
+// Combining them wins both, and by a wide margin, because a value measurement and a gradient measurement of the same field
+// carry independent noise: the screened solve averages them. So the contract asks for BOTH and this solves
+//     min over the band of  || grad d - g ||^2  +  lam * || d - a ||^2,   d = observed on the rim,
+// with `a` the per-component-shifted absolute return. lam = 1 weights a value residual equally with a gradient residual;
+// the 0.25 / 1 / 4 sweep is flat there, so it is a natural choice rather than a tuned one.
+//   lam = 0 and no anchor  -> the pure gradient contract
+//   no gradients           -> the per-component shift alone, no solve
+window._screenedPoissonBand = function (o) {
+    const pw = o.pw, ph = o.ph, N = pw * ph, band = o.band, bc = o.bc;
+    const gx = o.gx || null, gy = o.gy || null, anchor = o.anchor || null;
+    const lam = (anchor && typeof o.lam === 'number') ? o.lam : (anchor ? 1 : 0);
+    const iters = o.iters || 600, omega = o.omega || 1.9, tol = o.tol || 1e-7;
+    const d = new Float64Array(N);
+    // start from the boundary data everywhere: outside the band it IS the answer, inside it is a sane seed
+    let sum = 0, cnt0 = 0;
+    for (let i = 0; i < N; i++) { d[i] = bc[i]; if (!band[i]) { sum += bc[i]; cnt0++; } }
+    const seed = cnt0 ? sum / cnt0 : 0;
+    const idx = []; for (let i = 0; i < N; i++) if (band[i]) { d[i] = anchor ? anchor[i] : seed; idx.push(i); }
+    if (!idx.length) return { d: Float32Array.from(d), iters: 0, resid: 0, n: 0 };
+    // divergence of the guidance field, once. gx[i] approximates d[i+1]-d[i], gy[i] approximates d[i+pw]-d[i].
+    const div = new Float64Array(N);
+    if (gx || gy) for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+        const i = y * pw + x; let v = 0;
+        if (gx && x > 0) v += gx[i] - gx[i - 1];
+        if (gy && y > 0) v += gy[i] - gy[i - pw];
+        div[i] = v;
+    }
+    // red-black Gauss-Seidel with over-relaxation, over the band texels only
+    const red = [], blk = [];
+    for (const i of idx) { const x = i % pw, y = (i / pw) | 0; ((x + y) & 1 ? blk : red).push(i); }
+    let it = 0, resid = 0;
+    for (; it < iters; it++) {
+        resid = 0;
+        for (const list of [red, blk]) {
+            for (let k = 0; k < list.length; k++) {
+                const i = list[k], x = i % pw, y = (i / pw) | 0;
+                let nb = 0, c = 0;
+                if (x > 0) { nb += d[i - 1]; c++; }
+                if (x < pw - 1) { nb += d[i + 1]; c++; }
+                if (y > 0) { nb += d[i - pw]; c++; }
+                if (y < ph - 1) { nb += d[i + pw]; c++; }
+                const num = nb - div[i] + (lam > 0 && anchor ? lam * anchor[i] : 0);
+                const den = (c || 1) + (lam > 0 && anchor ? lam : 0);
+                const nv = num / den, dv = omega * (nv - d[i]);
+                d[i] += dv;
+                const ad = dv < 0 ? -dv : dv; if (ad > resid) resid = ad;
+            }
+        }
+        if (resid < tol) { it++; break; }
+    }
+    return { d: Float32Array.from(d), iters: it, resid: resid, n: idx.length };
+};
+
+// Per-component shift: move each band component so its own values meet the observed depth on its own visible rim. This is
+// what makes an absolute return immune to a constant bias, and it is cheap. Components with no visible rim are left alone
+// and counted (on the kit, every one of 188-550 components per scene had a visible rim, so this has never yet fired).
+window._shiftBandComponents = function (val, band, bc, pw, ph) {
+    const N = pw * ph, lab = new Int32Array(N).fill(-1), out = Float32Array.from(val);
+    const qx = new Int32Array(N); let nC = 0, noRim = 0, noRimPx = 0;
+    for (let s = 0; s < N; s++) {
+        if (!band[s] || lab[s] >= 0) continue;
+        const c = nC++; let head = 0, tail = 0; qx[tail++] = s; lab[s] = c;
+        let sumD = 0, sumV = 0, nR = 0, nP = 0;
+        while (head < tail) {
+            const i = qx[head++]; nP++;
+            const x = i % pw, y = (i / pw) | 0;
+            const nbs = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+            for (const j of nbs) {
+                if (j < 0) continue;
+                if (band[j]) { if (lab[j] < 0) { lab[j] = c; qx[tail++] = j; } }
+                // a visible neighbour: compare the FILL AT THIS BAND TEXEL against the observed depth it has to meet.
+                // (Reading val[j] instead would compare against whatever the returned map happens to hold outside the
+                // band, which the contract does not define.)
+                else { sumD += bc[j]; sumV += val[i]; nR++; }
+            }
+        }
+        if (!nR) { noRim++; noRimPx += nP; continue; }
+        const sh = (sumD - sumV) / nR;
+        for (let k = 0; k < tail; k++) out[qx[k]] += sh;
+    }
+    return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx };
+};
 async function importObjectLayers() {
     if (!(window._bgQuickBaked && window._qbSize)) { alert('Object layers: build the plate first (S6 panel), then import.'); return; }
     const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
