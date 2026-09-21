@@ -10714,9 +10714,19 @@ window._screenedPoissonBand = function (o) {
 // Per-component shift: move each band component so its own values meet the observed depth on its own visible rim. This is
 // what makes an absolute return immune to a constant bias, and it is cheap. Components with no visible rim are left alone
 // and counted (on the kit, every one of 188-550 components per scene had a visible rim, so this has never yet fired).
-window._shiftBandComponents = function (val, band, bc, pw, ph) {
+//
+// NOT EVERY VISIBLE NEIGHBOUR IS A LEGAL ANCHOR, and the first round trip on a photograph is what showed it. A band
+// component is bounded on TWO sides: the background it continues (far) and the occluder that created it (near). Only the
+// first is the surface the fill has to meet. Averaging over both makes the shift absorb the CLIFF instead of the bias --
+// on the troll that made an absolute return eight times WORSE than not shifting it at all (band RMSE 0.245 against a raw
+// 0.030), while the kit never exposed it because its components are small and its rims are mostly far-side.
+// `opts.joined(dBand, dVisible)` filters the rim to neighbours that belong to the same surface as the band texel's own
+// far depth; the caller passes the rim law, which is the test the bake already uses for exactly this question.
+window._shiftBandComponents = function (val, band, bc, pw, ph, opts) {
+    opts = opts || {};
+    const joined = (typeof opts.joined === 'function') ? opts.joined : null;
     const N = pw * ph, lab = new Int32Array(N).fill(-1), out = Float32Array.from(val);
-    const qx = new Int32Array(N); let nC = 0, noRim = 0, noRimPx = 0;
+    const qx = new Int32Array(N); let nC = 0, noRim = 0, noRimPx = 0, rejected = 0;
     for (let s = 0; s < N; s++) {
         if (!band[s] || lab[s] >= 0) continue;
         const c = nC++; let head = 0, tail = 0; qx[tail++] = s; lab[s] = c;
@@ -10731,14 +10741,17 @@ window._shiftBandComponents = function (val, band, bc, pw, ph) {
                 // a visible neighbour: compare the FILL AT THIS BAND TEXEL against the observed depth it has to meet.
                 // (Reading val[j] instead would compare against whatever the returned map happens to hold outside the
                 // band, which the contract does not define.)
-                else { sumD += bc[j]; sumV += val[i]; nR++; }
+                else {
+                    if (joined && !joined(bc[i], bc[j])) { rejected++; continue; }   // the occluder side: not a surface this fill continues
+                    sumD += bc[j]; sumV += val[i]; nR++;
+                }
             }
         }
         if (!nR) { noRim++; noRimPx += nP; continue; }
         const sh = (sumD - sumV) / nR;
         for (let k = 0; k < tail; k++) out[qx[k]] += sh;
     }
-    return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx };
+    return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx, rimRejected: rejected };
 };
 // ============================================================================================ Sprint 25
 // THE REIMPORT: the band's returned colour and depth put back onto the LIVE plate.
@@ -10776,8 +10789,12 @@ window._importPlaneReturn = function (d) {
         const bc = new Float32Array(N); for (let i = 0; i < N; i++) bc[i] = pF[flip(i)];
         let anchor = null;
         if (d.depth && d.depth.length === N) {
-            const sh = window._shiftBandComponents(d.depth, band, bc, pw, ph);
-            anchor = sh.val; st.shift = { components: sh.components, noRim: sh.noRim, noRimPx: sh.noRimPx };
+            // the rim law decides which visible neighbours are the SAME SURFACE as this band texel's far depth; the
+            // occluder side is not one, and anchoring on it makes the shift absorb the cliff (see _shiftBandComponents)
+            let rlS = null; try { rlS = bgRimLawFor(pw, ph); } catch (e) { rlS = null; }
+            const sh = window._shiftBandComponents(d.depth, band, bc, pw, ph, (rlS && !d.anchorAllRims) ? { joined: rlS.joined } : {});
+            anchor = sh.val; st.shift = { components: sh.components, noRim: sh.noRim, noRimPx: sh.noRimPx, rimRejected: sh.rimRejected,
+                                          rimRule: (rlS && !d.anchorAllRims) ? 'far side only (rim law)' : 'every visible neighbour' };
         }
         const lam = (typeof d.lam === 'number') ? d.lam : 1;
         const t0 = Date.now();

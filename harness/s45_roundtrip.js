@@ -90,7 +90,12 @@ print('  meta.plane.returnContract keys = %s' % list((p.get('returnContract') or
     }
 
     // ---- 2-3. the return, three forms ----
-    const forms = [['absolute', { abs: true, grad: false }], ['gradient', { abs: false, grad: true }], ['both', { abs: true, grad: true }]];
+    // The last two arms exist because the first run of this harness falsified the shift as it was first written. A band
+    // component is bounded by the background it continues AND by the occluder that created it; averaging the rim over
+    // both makes the shift absorb the cliff rather than the bias. The "allrims" arms keep the original rule so the fix
+    // is an A/B and not an assertion.
+    const forms = [['absolute', { abs: true, grad: false }], ['gradient', { abs: false, grad: true }], ['both', { abs: true, grad: true }],
+                   ['abs-allrims', { abs: true, grad: false, allRims: true }], ['both-allrims', { abs: true, grad: true, allRims: true }]];
     const results = [];
     for (const [name, f] of forms) {
         await BAKE(page, opts);   // a fresh bake each time: the reimport mutates the plate in place
@@ -114,7 +119,7 @@ print('  meta.plane.returnContract keys = %s' % list((p.get('returnContract') or
             const colour = new Uint8ClampedArray(4 * N); for (let i = 0; i < N; i++) { colour[i * 4] = 17; colour[i * 4 + 1] = 200; colour[i * 4 + 2] = 91; colour[i * 4 + 3] = 255; }
             const before = window._qbPlateColor ? window._qbPlateColor.slice() : null;
             const st = window._importPlaneReturn({ depth: f.abs ? ret : null, gx: f.grad ? gx : null, gy: f.grad ? gy : null,
-                                                   color: colour, lam: f.abs && f.grad ? 1 : 0 });
+                                                   color: colour, lam: f.abs && f.grad ? 1 : 0, anchorAllRims: !!f.allRims });
             // score against the target over the band
             let se = 0, ae = 0, mx = 0;
             for (let i = 0; i < N; i++) if (band[i]) { const e = pF[flip(i)] - tgt[i]; se += e * e; ae += Math.abs(e); if (Math.abs(e) > mx) mx = Math.abs(e); }
