@@ -381,6 +381,63 @@ def app_norm_depth(z, pn, outer, inner, n_tab=8193):
     return np.interp(np.clip(z, -outer, inner), zt, dn)
 
 
+# --------------------------------------------------------------- S43 / Sprint 23: the score, defined once
+# S38 found a metre score is not comparable across scenes: the depth law's gain dm/dd varies twentyfold across the kit (0.57
+# on L1, 19.72 on S15), so a fixed relative error costs twenty times more in one scene than another for reasons that have
+# nothing to do with a construction's quality. S42 caught the law doing it -- L1's band reads 0.0112 m / 0.0198 d and L6's
+# reads 0.0154 m / 0.0106 d, so the two units RANK THOSE TWO SCENES IN OPPOSITE ORDERS.
+#
+# R7 found the fix is standard: every depth paper in that corpus reports a ratio metric alongside RMSE and both usual ones are
+# exactly gain-invariant. Four families, all reported:
+#   d      the app's own normalised depth. PRIMARY -- it is the space the app works in, parallax at the window follows it,
+#          and it removes the law's gain entirely.
+#   steps  the same over the scene's own visible quantisation step: "how many depth levels wrong", the §16 bar.
+#   m      metres behind the window. Kept for continuity with every table written before today; no longer primary.
+#   log10, delta   on the CAMERA distance D + metres behind the window, which is strictly positive so the log is defined.
+#          These are the literature's metrics and they make our numbers comparable with published work for the first time.
+def depth_scores(d_pred, d_true, mask, meta, step=None, prefix=''):
+    """d_pred, d_true: the app's normalised depth in [0, 1]. mask: where to score. Returns a flat dict."""
+    pn, outer, inner, D = meta['pn'], meta['outer'], meta['inner'], meta.get('D') or 0.0
+    m = mask & np.isfinite(d_pred) & np.isfinite(d_true)
+    n = int(m.sum()); out = {prefix + 'n': n}
+    if n == 0:
+        return out
+    a, b = np.asarray(d_pred)[m], np.asarray(d_true)[m]
+    ed = np.abs(a - b)
+    mp = -app_z_of_d(a, pn, outer, inner); mt = -app_z_of_d(b, pn, outer, inner)   # metres behind the window
+    em = np.abs(mp - mt)
+    zp, zt = D + mp, D + mt                                                        # camera distance, strictly positive
+    ok = (zp > 1e-9) & (zt > 1e-9)
+    out.update({prefix + 'd_med': float(np.median(ed)), prefix + 'd_p90': float(np.percentile(ed, 90)),
+                prefix + 'd_rms': float(np.sqrt(np.mean(ed ** 2))),
+                prefix + 'm_med': float(np.median(em)), prefix + 'm_p90': float(np.percentile(em, 90)),
+                prefix + 'm_rms': float(np.sqrt(np.mean(em ** 2)))})
+    if step:
+        out[prefix + 'steps_med'] = float(np.median(ed) / step)
+        out[prefix + 'steps_p90'] = float(np.percentile(ed, 90) / step)
+    if ok.any():
+        r = np.maximum(zp[ok] / zt[ok], zt[ok] / zp[ok])
+        out.update({prefix + 'log10': float(np.mean(np.abs(np.log10(zp[ok]) - np.log10(zt[ok])))),
+                    prefix + 'd1': float(np.mean(r < 1.25)), prefix + 'd2': float(np.mean(r < 1.25 ** 2)),
+                    prefix + 'd3': float(np.mean(r < 1.25 ** 3))})
+    return out
+
+
+def commit_scores(d_pred, d_occ, d_true, mask, meta, step, prefix='commit_'):
+    """Gen3R's accuracy/completeness split, adapted to a depth band. One aggregate error lets two opposite failures hide
+    behind each other: bleeding the occluder's own surface into the hole, and leaving the hole unfilled. A texel COUNTS AS
+    COMMITTED when the prediction has moved off the occluder's plate depth by more than the visible step -- which is exactly
+    §47's definition of a clone, since an unowned band texel keeps the occluder's depth by construction.
+      completeness  the fraction of scored texels the method committed on
+      accuracy      the error over those committed texels alone
+    A timid fill scores well on accuracy and badly on completeness; a cloning fill scores badly on both."""
+    fin = mask & np.isfinite(d_pred) & np.isfinite(d_true)
+    committed = fin & (np.abs(np.asarray(d_pred) - np.asarray(d_occ)) > step)
+    out = {prefix + 'completeness': float(committed.sum() / max(1, fin.sum()))}
+    out.update(depth_scores(d_pred, d_true, committed, meta, step, prefix))
+    return out
+
+
 # ----------------------------------------------------------------------------- io helpers
 def to_u8(img):
     return (np.clip(img, 0, 1) * 255 + 0.5).astype(np.uint8)

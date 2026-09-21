@@ -9,7 +9,7 @@ far-field depth on the band against the truth's first hidden layer.
 import sys, os, json
 import numpy as np
 from PIL import Image, ImageDraw
-from tk import to_u8, app_z_of_d
+from tk import to_u8, app_z_of_d, app_norm_depth, depth_scores, commit_scores
 
 gt = np.load(sys.argv[1]); probe = sys.argv[2]
 meta = json.load(open(os.path.join(probe, 'meta.json'))); pw, ph = meta['pw'], meta['ph']
@@ -47,6 +47,47 @@ if ff is not None:
     err = (d_app - d_true)[m]
     res['band_depth_err_m'] = {'n': int(m.sum()), 'mean': float(err.mean()) if m.any() else None, 'median_abs': float(np.median(np.abs(err))) if m.any() else None,
                                'p90_abs': float(np.percentile(np.abs(err), 90)) if m.any() else None, 'scene_depth_m': float(outer)}
+    # ---------------- Sprint 23 (S43): the same error in units that compare across scenes, plus the three splits the
+    # literature reports and this project never has. The metre block above is kept verbatim for continuity with every
+    # earlier table, but it is no longer the number to quote: S42 showed it reverses the ranking of two real scenes.
+    dQp = os.path.join(probe, 'dQ.f32')
+    dQ = np.fromfile(dQp, np.float32).reshape(ph, pw).astype(np.float64) if os.path.exists(dQp) else None
+    vis = ~dis
+    step = float(np.median(np.diff(np.unique(dQ[vis])[:200]))) if dQ is not None and vis.any() else None
+    dTn = np.where(np.isfinite(d_true), app_norm_depth(-d_true, pn, outer, inner), np.nan)   # truth in the app's own d
+    S23 = {'step': step, 'law_gain_dm_dd': float(outer * 1.5 / pn)}   # max |dm/dd| of the smoothstep law, for the record
+    # INTERIOR -- the band, which is all this project has ever scored
+    S23['interior'] = depth_scores(ff, dTn, m, meta, step)
+    if dQ is not None:
+        # the DO-NOTHING baseline: keep the occluder's own plate depth across the band. Nobody has reported how much of any
+        # band score is the band at all; this is the number every other row has to beat.
+        S23['interior_donothing'] = depth_scores(dQ, dTn, m, meta, step)
+        # accuracy vs completeness (Gen3R), so a clone and a hole cannot hide behind one aggregate
+        S23.update(commit_scores(ff, dQ, dTn, m, meta, step or 1e-9))
+    # EXTERIOR -- the visible plate against the scene's own rest depth. Catches a construction that improves the band while
+    # corrupting what the viewer already sees, which nothing in this harness could previously notice.
+    rdp = os.path.join(os.path.dirname(sys.argv[3]), 'rest_depth16.png')
+    if os.path.exists(rdp):
+        rd = np.asarray(Image.open(rdp)).astype(np.float64)
+        rd = (rd[..., 0] if rd.ndim == 3 else rd) / 65535.0
+        if rd.shape == (ph, pw):
+            pfp2 = os.path.join(probe, 'plateF.f32')
+            plate = np.fromfile(pfp2, np.float32).reshape(ph, pw)[::-1].astype(np.float64) if os.path.exists(pfp2) else dQ
+            if plate is not None:
+                S23['exterior'] = depth_scores(plate, rd, vis, meta, step)
+                S23['whole'] = depth_scores(np.where(dis, ff, plate), np.where(dis, dTn, rd),
+                                            np.isfinite(np.where(dis, dTn, rd)), meta, step)
+    # the error binned by the truth's own depth, so it is visible which depth band dominates a scalar (Counterfactual Depth
+    # Fig. 8). Bins are the scene's own quintiles of hidden depth, not a fixed grid.
+    if m.any():
+        q = np.percentile(d_true[m], [20, 40, 60, 80]); prev = -np.inf; S23['by_depth'] = []
+        for hi in list(q) + [np.inf]:
+            mm = m & (d_true > prev) & (d_true <= hi); prev = hi
+            if mm.sum() < 50: continue
+            r = depth_scores(ff, dTn, mm, meta, step)
+            S23['by_depth'].append({'m_upto': None if not np.isfinite(hi) else float(hi), 'n': r['n'],
+                                    'd_med': r.get('d_med'), 'm_med': r.get('m_med')})
+    res['s23'] = S23
     # the RENDERED plate depth (plateF.f32, stored bottom-up) after the ordering clamps and the slope limit: what the screen shows
     pfp = os.path.join(probe, 'plateF.f32')
     if os.path.exists(pfp):
