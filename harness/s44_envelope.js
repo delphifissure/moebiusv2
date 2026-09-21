@@ -1,0 +1,135 @@
+// S44 / Sprint 24: THE REST-VERSUS-ENVELOPE DIFFERENCE.
+//
+// R7 read twenty papers looking for an evaluation built for a viewer like ours and found exactly one. InpaintFusion's user
+// study collected three numbers, not one: a rating of a STILL, a rating of the same scene IN MOTION, and their DIFFERENCE.
+// Their planar baselines rated 5/10 as stills and 2-3/10 in motion (delta -1 and -2) while their own method rated 6 and 7
+// (delta +1) -- the static score alone would have ranked the methods almost identically and missed the entire effect.
+//
+// This project has never measured that axis. Every instrument scores the bake (the kit band, the hole counts) or the rest
+// frame; nothing scores what happens to the picture as the head moves through the envelope, which is the only thing the
+// product is for. This is the machine analogue:
+//
+//   placeholder %   the share of the frame whose colour was INVENTED by the bake, read off the S17 check view
+//                   (cyan/blue = band, teal = carrier wash, magenta = plate 2, orange = beyond the frame).
+//                   At rest it should be ~0: the viewer is looking at the picture. It grows with the head.
+//   dark %          the share that is near-black -- holes, plus the letterbox, which does not move.
+//
+// Both are reported at rest, at each envelope pose, and AS THE DIFFERENCE FROM REST. The difference is the number that
+// matters and it is also the clean one: the letterbox and any constant framing cancel out of it exactly.
+//
+//   IMG=color,depth TAG=... POSES="0:0,0.5:0,1:0,0:1,1:1" SKY=1 OUT=<dir> node harness/s44_envelope.js
+'use strict';
+const { chromium } = require('playwright-core');
+const { spawn } = require('child_process');
+const fs = require('fs'); const path = require('path');
+const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
+const H = __dirname, WT = path.resolve(__dirname, '..');
+const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG || 'troll');
+
+(async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    if (process.env.IMG) { const [c, d] = process.env.IMG.split(','); fs.copyFileSync(path.resolve(WT, c), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.resolve(WT, d), path.join(H, 'defaultImgDepth.png')); }
+    process.on('exit', () => { try { fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); } catch (e) {} });
+    const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' });
+    await new Promise(r => setTimeout(r, 1500));
+    const browser = await chromium.launch({ executablePath: CHROME, headless: true,
+        args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
+    const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
+    page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
+    page.on('console', m => { const t = m.text(); if (/\[S6\] plate|\[S44\]|FAILED|rror/.test(t)) console.log('  [page:log] ' + t.slice(0, 260)); });
+    await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
+    for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r2 => setTimeout(r2, 1000)); }
+
+    // Bake with WHATEVER THE PANEL SHIPS. That is the point of this instrument: it measures the defaults a new user gets,
+    // not an arm. Only sky is a per-picture choice, so only sky is overridden.
+    const meta = await page.evaluate(async (o) => {
+        window._rayReproject = true; window._depthContractUI = false;   // no banner in the frames
+        if (o.depth) { if (o.depth.outer !== undefined) outerVolumeDepth = o.depth.outer; if (o.depth.inner !== undefined) innerVolumeDepth = o.depth.inner; if (o.depth.pn !== undefined) currentNormPortalPlane = o.depth.pn; }
+        if (o.sky) { const el = document.getElementById('bgPlateSkySel'); if (el) el.value = 'on'; }
+        if (window._applyPlateOptions) window._applyPlateOptions();
+        window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
+        const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
+        const t0 = Date.now(); window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); window._bgUserBuiltOnce = true;
+        return { bakeMs: Date.now() - t0, opts: window._bgPlateOptions, ceilCut: window._ceilCut, despeckle: window._despeckleLines,
+                 envDeg: bgViewFadeEndDeg, cloneCount: window._qbCloneCount, contract: window._bgDepthContract ? window._bgDepthContract.warn.length : null };
+    }, { sky: !!process.env.SKY, depth: process.env.DEPTH_OUTER ? { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } : null });
+    console.log('bake ' + meta.bakeMs + ' ms, defaults ' + JSON.stringify(meta.opts) + ', ceilCut ' + meta.ceilCut + ', despeckle ' + meta.despeckle +
+                ', envelope ' + meta.envDeg + ' deg, clones ' + meta.cloneCount + ', depth-contract warnings ' + meta.contract);
+
+    const poses = (process.env.POSES || '0:0,0.5:0,1:0,0:1,1:1,-1:-1').split(',').map(s => s.split(':').map(Number));
+    // EVERY COUNT IS TAKEN INSIDE THE REST-POSE CONTENT RECTANGLE. The letterbox (a153/a168) is 53% of this canvas and it
+    // takes the browser background colour, which the SD check view also changes -- the first run of this instrument reported
+    // 53% placeholder at rest and was measuring the frame around the picture. The rect is the bounding box of everything
+    // that is not letterbox in the rest frame, computed once, and it is printed so it can be checked.
+    let RECT = null;
+    const shot = async (fx, fy, mode) => {
+        const r = await page.evaluate(async ([fx, fy, mode, rect]) => {
+            const chk = document.getElementById('sdRegionsChk');
+            const want = mode === 'sd';
+            if (chk && chk.checked !== want) { chk.checked = want; chk.dispatchEvent(new Event('change')); }
+            if (typeof updateVolumeGuidesVisibility === 'function') updateVolumeGuidesVisibility(false);
+            isSweeping = true;
+            const D = Math.abs(camera.position.z - portalPlaneWorldZ); const exR = D * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
+            camera.position.x = fx * exR; camera.position.y = fy * exR * bgEnvAspect();
+            updateCameraAndProjection(); render(); updateCameraAndProjection(); render();
+            const W = renderer.domElement.width, Hh = renderer.domElement.height;
+            const cv = document.createElement('canvas'); cv.width = W; cv.height = Hh;
+            const cx = cv.getContext('2d'); cx.drawImage(renderer.domElement, 0, 0, W, Hh);
+            const d = cx.getImageData(0, 0, W, Hh).data;
+            let x0 = 0, y0 = 0, x1 = W - 1, y1 = Hh - 1;
+            if (rect) { x0 = rect[0]; y0 = rect[1]; x1 = rect[2]; y1 = rect[3]; }
+            else {   // first call, rest + plain: find the content rect as the bbox of non-letterbox pixels
+                x0 = W; y0 = Hh; x1 = -1; y1 = -1;
+                for (let y = 0; y < Hh; y++) for (let x = 0; x < W; x++) {
+                    const i = y * W + x, R = d[i*4], G = d[i*4+1], B = d[i*4+2];
+                    if (R < 24 && G < 24 && B < 24) continue;
+                    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                }
+                if (x1 < x0) { x0 = 0; y0 = 0; x1 = W - 1; y1 = Hh - 1; }
+            }
+            const area = Math.max(1, (x1 - x0 + 1) * (y1 - y0 + 1));
+            let placeholder = 0, dark = 0;
+            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+                const i = y * W + x;
+                const R = d[i*4], G = d[i*4+1], B = d[i*4+2];
+                if (R < 24 && G < 24 && B < 24) { dark++; continue; }
+                if (mode !== 'sd') continue;
+                // the S17 placeholder tints: cyan/blue (band), teal (carrier wash), magenta (plate 2), orange (beyond the frame)
+                if ((R > 150 && G > 60 && G < 170 && B < 90) ||            // orange
+                    (B > 150 && G > 120 && R < 120) ||                     // cyan
+                    (R > 150 && B > 150 && G < 120) ||                     // magenta
+                    (B > 130 && G < 120 && R < 120) ||                     // blue
+                    (G > 120 && B > 100 && R < 90 && G > B)) placeholder++; // teal
+            }
+            isSweeping = false;
+            return { W, Hh, rect: [x0, y0, x1, y1], area, placeholder: 100 * placeholder / area, dark: 100 * dark / area, png: cv.toDataURL('image/png') };
+        }, [fx, fy, mode, RECT]);
+        if (!RECT) { RECT = r.rect; console.log('  content rect ' + JSON.stringify(RECT) + ' = ' + r.area + ' px of ' + (r.W * r.Hh) + ' (' + (100 * r.area / (r.W * r.Hh)).toFixed(1) + '% of the canvas); everything below is measured inside it'); }
+        fs.writeFileSync(path.join(OUT, mode + '_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm') + '.png'),
+                         Buffer.from(r.png.split(',')[1], 'base64'));
+        return r;
+    };
+
+    const rows = [];
+    for (const [fx, fy] of poses) {
+        const plain = await shot(fx, fy, 'plain');
+        const sd = await shot(fx, fy, 'sd');
+        const deg = { h: +(Math.atan(Math.abs(fx) * Math.tan(meta.envDeg * Math.PI / 180)) * 180 / Math.PI).toFixed(1) };
+        rows.push({ fx, fy, degH: deg.h, placeholder: +sd.placeholder.toFixed(3), dark: +plain.dark.toFixed(3) });
+    }
+    const rest = rows[0];
+    console.log('\n  pose (fx:fy)   h deg |  placeholder %   d from rest |     dark %   d from rest');
+    for (const r of rows) {
+        console.log('  ' + String(r.fx + ':' + r.fy).padEnd(13) + String(r.degH).padStart(6) +
+                    ' | ' + r.placeholder.toFixed(3).padStart(13) + (r.placeholder - rest.placeholder >= 0 ? '   +' : '   ') + (r.placeholder - rest.placeholder).toFixed(3).padStart(9) +
+                    ' | ' + r.dark.toFixed(3).padStart(10) + (r.dark - rest.dark >= 0 ? '   +' : '   ') + (r.dark - rest.dark).toFixed(3).padStart(9));
+    }
+    const worst = rows.reduce((a, b) => (b.placeholder > a.placeholder ? b : a), rows[0]);
+    console.log('\n  REST-TO-ENVELOPE DIFFERENCE: placeholder +' + (worst.placeholder - rest.placeholder).toFixed(3) +
+                ' points (rest ' + rest.placeholder.toFixed(3) + ' -> ' + worst.placeholder.toFixed(3) + ' at ' + worst.fx + ':' + worst.fy + '), ' +
+                'dark ' + (worst.dark - rest.dark >= 0 ? '+' : '') + (worst.dark - rest.dark).toFixed(3) + ' points.');
+    if (rest.placeholder > 0.5) console.log('  NOTE: ' + rest.placeholder.toFixed(2) + '% of the REST frame is placeholder. At rest the viewer should be looking at the picture.');
+    fs.writeFileSync(path.join(OUT, 'envelope.json'), JSON.stringify({ meta, rows }, null, 1));
+    console.log('  -> ' + OUT);
+    await browser.close(); try { srv.kill(); } catch (e) {}
+})();

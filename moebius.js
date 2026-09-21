@@ -990,6 +990,85 @@ async function bgDecodeDepth16(url) {
         return { data: out, w, h };
     } catch (e) { console.warn('[A99] float depth ingest failed, using 8-bit path: ' + e.message); return null; }
 }
+// S44 / Sprint 24: THE DEPTH-MAP INPUT CONTRACT (S19 §3.3, open since 2026-09-12; the one correctness gap a user can trip
+// over by loading an ordinary depth PNG). The app's convention is NORMALISED DISPARITY: 1 = near, 0 = far. Half the depth
+// estimators in circulation write the opposite, and an inverted map does not fail loudly — it parallaxes backwards, which
+// reads as "the 3D is broken" rather than "the input is upside down". Nothing in the app checked, so this does, on load.
+//
+// Every test states what it assumes, and none of them refuses the map: they warn. A picture may legitimately break any one
+// of them (a map shot looking down, a flat backdrop, a deliberately clipped sky), so the contract's job is to name what it
+// saw and let the user decide.
+function bgDepthContract(vals, w, h, srcBits, label) {
+    const N = w * h, out = { label: label || 'depth', w: w, h: h, warn: [], info: {} };
+    if (!N || !vals || vals.length < N) return out;
+    // distinct levels and the implied quantum, against the per-texel FOLD LIMIT at this width (a133: above ~1250 px one
+    // 8-bit level already exceeds it, so an 8-bit map is intrinsically fold-generating at the sizes this project ships)
+    const seen = new Set(); let mn = Infinity, mx = -Infinity, nAt0 = 0, nAt1 = 0, nBad = 0;
+    const stride = Math.max(1, Math.floor(N / 300000));          // the statistics do not need every texel
+    for (let i = 0; i < N; i += stride) {
+        const v = vals[i];
+        if (!isFinite(v)) { nBad++; continue; }
+        if (v < mn) mn = v; if (v > mx) mx = v;
+        if (v <= 0) nAt0++; if (v >= 1) nAt1++;
+        if (seen.size < 70000) seen.add(Math.round(v * 65535));
+    }
+    const nSamp = Math.ceil(N / stride) || 1;
+    const foldLimit = 1 / (396 * w / 1920);
+    const quantum = seen.size > 1 ? Math.max(1 / 65535, (mx - mn) / Math.max(1, seen.size - 1)) : 1;
+    Object.assign(out.info, { levels: seen.size, min: mn, max: mx, range: mx - mn, quantum: quantum,
+                              foldLimit: foldLimit, at0: nAt0 / nSamp, at1: nAt1 / nSamp, nonFinite: nBad, srcBits: srcBits || null });
+    // POLARITY. Assumption, stated: in an ordinary picture the bottom of the frame is nearer than the top, because the
+    // ground runs away from the viewer and the sky is at infinity. Under our convention that means the bottom decile of
+    // rows should carry a HIGHER d than the top decile. A map written far = white reverses it. Broken honestly by a
+    // top-down view, a ceiling, or a picture with no ground -- hence a warning that names the assumption.
+    const band = Math.max(1, Math.floor(h * 0.1));
+    let sTop = 0, nTop = 0, sBot = 0, nBot = 0;
+    for (let y = 0; y < band; y++) for (let x = 0; x < w; x++) { const v = vals[y * w + x]; if (isFinite(v)) { sTop += v; nTop++; } }
+    for (let y = h - band; y < h; y++) for (let x = 0; x < w; x++) { const v = vals[y * w + x]; if (isFinite(v)) { sBot += v; nBot++; } }
+    const topM = nTop ? sTop / nTop : 0, botM = nBot ? sBot / nBot : 0;
+    Object.assign(out.info, { topDecileMean: topM, bottomDecileMean: botM, bottomMinusTop: botM - topM });
+    if (nBad) out.warn.push(nBad + ' non-finite depth samples; they will bake as whatever the texture upload makes of them.');
+    if (mx - mn < 8 * quantum || mx - mn < 0.02) {
+        out.warn.push('The map is flat (range ' + (mx - mn).toFixed(4) + ' of 1). There will be almost no parallax and no band to fill.');
+    }
+    if (botM - topM < -0.10) {
+        out.warn.push('The map looks INVERTED: the top of the picture reads ' + (topM - botM).toFixed(3) +
+                      ' nearer than the bottom. This app wants normalised disparity, 1 = near, 0 = far. Assumption: the ' +
+                      'bottom of an ordinary picture is nearer than the top — a view looking down, or a ceiling, breaks it honestly.');
+    }
+    if (mx - mn < 0.5 && mx - mn >= 0.02) {
+        out.warn.push('The map uses only ' + Math.round((mx - mn) * 100) + '% of the range (' + mn.toFixed(3) + '..' + mx.toFixed(3) +
+                      '). Renormalising to the full range would give the same scene more parallax at the same depth law.');
+    }
+    if (nAt1 / nSamp > 0.25) out.warn.push(Math.round(100 * nAt1 / nSamp) + '% of the map is clipped at the near end (d = 1).');
+    if (nAt0 / nSamp > 0.45) out.warn.push(Math.round(100 * nAt0 / nSamp) + '% of the map is at the far end (d = 0). If that is not sky, the map is crushed.');
+    if (quantum > foldLimit) {
+        out.warn.push('Only ' + seen.size + ' distinct depth levels at ' + w + ' px wide: one level is ' + (quantum / foldLimit).toFixed(1) +
+                      'x the per-texel fold limit, so the smallest step this map can express already folds the mesh (a133). ' +
+                      'A 16-bit map of the same picture removes the artefact at the source.');
+    }
+    console.log('[S44] depth contract (' + out.label + ', ' + w + 'x' + h + '): levels ' + seen.size + ', range ' +
+                mn.toFixed(4) + '..' + mx.toFixed(4) + ', quantum/foldLimit ' + (quantum / foldLimit).toFixed(2) +
+                ', bottom-top ' + (botM - topM).toFixed(3) + (out.warn.length ? ' -- ' + out.warn.length + ' WARNING(S)' : ' -- ok'));
+    for (const wn of out.warn) console.warn('[S44] ' + wn);
+    window._bgDepthContract = out;
+    if (out.warn.length && window._depthContractUI !== false && typeof document !== 'undefined' && document.body) {
+        let el = document.getElementById('bgDepthContractBanner');
+        if (!el) { el = document.createElement('div'); el.id = 'bgDepthContractBanner'; document.body.appendChild(el); }
+        el.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:300;max-width:min(720px,92vw);' +
+            'background:#3a2b14;color:#ffdca8;border:1px solid #8a6a2a;border-radius:8px;padding:10px 14px;' +
+            'font:12.5px/1.45 system-ui,sans-serif;box-shadow:0 6px 22px rgba(0,0,0,0.45);';
+        el.innerHTML = '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+            '<b style="flex:0 0 auto;">Depth map warning</b><div style="flex:1 1 auto;">' +
+            out.warn.map((t) => '• ' + t.replace(/[<>]/g, '')).join('<br>') +
+            '<div style="opacity:.7;margin-top:6px;">Nothing has been changed. Details in the console under [S44].</div></div>' +
+            '<button style="flex:0 0 auto;background:none;border:0;color:#ffdca8;cursor:pointer;font-size:16px;">×</button></div>';
+        el.querySelector('button').onclick = () => el.remove();
+        clearTimeout(window._bgDepthBannerT); window._bgDepthBannerT = setTimeout(() => { try { el.remove(); } catch (e) {} }, 30000);
+    }
+    return out;
+}
+window.bgDepthContract = bgDepthContract;
 function bgConeSlopePerPx(pwArg) {
     const pwv = Math.max(1, pwArg | 0);
     if (window._coneSlopeDerived === true) {
@@ -4429,6 +4508,24 @@ async function applyLayersFromModal() {
                 // re-bake (measured: the decode logged, the bake never saw it).
                 const r16 = await bgDecodeDepth16(depthEl.src);
                 if (r16) layer._depth16 = r16;
+                // S44 / Sprint 24: check the loaded map against the app's contract (normalised disparity, 1 near, 0 far) and
+                // say so visibly if it does not hold. Runs on the 16-bit data when the float ingest succeeded, otherwise on
+                // the 8-bit element read back through a canvas, so an ordinary depth PNG is checked either way.
+                try {
+                    if (r16) bgDepthContract(r16.data, r16.w, r16.h, 16, depthEl.src.split('/').pop().split('?')[0]);
+                    else {
+                        const dw = depthEl.naturalWidth || depthEl.width, dh = depthEl.naturalHeight || depthEl.height;
+                        if (dw && dh) {
+                            const cv = document.createElement('canvas'); cv.width = dw; cv.height = dh;
+                            const cx = cv.getContext('2d', { willReadFrequently: true });
+                            cx.drawImage(depthEl, 0, 0, dw, dh);
+                            const px = cx.getImageData(0, 0, dw, dh).data;
+                            const f = new Float32Array(dw * dh);
+                            for (let i = 0; i < f.length; i++) f[i] = px[i * 4] / 255;
+                            bgDepthContract(f, dw, dh, 8, depthEl.src.split('/').pop().split('?')[0]);
+                        }
+                    }
+                } catch (e) { console.warn('[S44] depth contract check skipped: ' + e.message); }
             }
             if (layer.textures.alpha && alphaEl && alphaEl.tagName !== 'VIDEO') layer.textures.alpha.needsUpdate = true;
 
@@ -20788,7 +20885,7 @@ function _wireDebugSheetControls() {
         if (gapSel) gapSel.addEventListener('change', () => bakeGapRule(gapSel.value));
         window._bakeGapRule = bakeGapRule;
     }
-    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions.v2').
+    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions.v3').
     // far side: membrane (the shipped quick bake) | plane (the rim law + the plane far side, S3–S5 recipe);
     // fill: wash | mirror (the far side reflected across the rim); margin: off | picture | window (A245, clipped or not);
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
@@ -20804,13 +20901,28 @@ function _wireDebugSheetControls() {
         // 'picture' clip and the 'window' strips remain in the panel. The remaining trades (seams, margin, fold-alpha, tier)
         // are the panel's to change until they have been seen in motion. The storage key is versioned so a set saved under
         // the old defaults does not shadow these once.
-        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'cur' };
-        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions.v2') || 'null'); } catch (e) {}
+        // S44 / Sprint 24, 2026-09-21: RULES = 'new' is now the default (the ceiling cut AND the line-aware despeckle).
+        // Both carry a measured win and no measured cost, which is the bar S41 set for consolidating an arm:
+        //   ceiling cut (S23)      S7 precision 0.65 -> 0.86, S26 beams 0.46 -> 0.82, P6 grille 0.50 -> 0.69, and
+        //                          BYTE-IDENTICAL on every scene and picture with no ceiling plane found (the majority test
+        //                          simply does not fire -- the vermeer's ceiling is not found, so it is untouched).
+        //   line despeckle (S20)   S5 one-texel poles recall 0.51 -> 0.98 (wires, thin branches, railings survive), and on
+        //                          the troll and the six pictures it kept 270-1 070 texels each with no visible change and
+        //                          no clone. S5's precision falls only because a one-texel pole's band is a few texels wide
+        //                          against a truth of one, which is the truth being thin, not the arm being wrong.
+        // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
+        // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
+        // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
+        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new' };
+        // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
+        // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
+        // failure the versioning exists to prevent.
+        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions.v3') || 'null'); } catch (e) {}
         const opt = Object.assign({}, defaults, saved || {});
         for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
         const applyPlateOptions = () => {
             for (const k in els) if (els[k]) opt[k] = els[k].value;
-            try { localStorage.setItem('bgPlateOptions.v2', JSON.stringify(opt)); } catch (e) {}
+            try { localStorage.setItem('bgPlateOptions.v3', JSON.stringify(opt)); } catch (e) {}
             const plane = opt.far === 'plane';
             window._tearLaw = plane ? 'rim' : undefined; window._farRule = plane ? 'plane' : undefined;
             window._skyInf = (plane && opt.sky === 'on') ? 1 : 0;
