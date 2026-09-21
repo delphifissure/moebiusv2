@@ -3043,6 +3043,9 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         u_fragTear: { value: 0.0 },
         u_plateFold: { value: 0.0 },          // Sprint 17a (window._plateFoldAlpha): the PLATE obeys the A241 stretch law too — 1 discard, 2 magenta check view; 3 = S32 frame-edge tear (outside u_restFoot only)
         u_plateNearOnly: { value: 0.0 },      // S46 (window._plateNearOnly): a ramp is opaque only within this much normalised depth of its own near extent; 0 = off. Negative = the same test as a magenta check view.
+        u_revealLaw: { value: new THREE.Vector4(0, 0, 0.5, 1) },   // S48: (outer, inner, pn, D) — the portal depth law, for the reveal field
+        u_revealScale: { value: 0.0 },        // S48: |ex| * pxPerWorld, so a depth step prices in screen pixels at the envelope rim
+        u_revealPxTol: { value: 0.0 },        // S48 (window._plateNearOnlyPx): the SAME near-extent rule with its tolerance in those pixels; 0 = off, negative = check view
         u_restFoot: { value: new THREE.Vector2(1, 1) },   // S32: the picture's rest footprint in NDC half-extents for the mode-3 tear (the clip stays u_restClip)
         u_backTear: { value: 0.0 },          // A257e: 1 on the A257 object-back layer — its shader discards the mesh ramps between back and back-less texels
         u_fragTearGate: { value: 1.0 },      // 1 = only where the bake's demand mask backs the fragment (A212's scan gate)
@@ -3120,6 +3123,9 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         uniform float u_cutContactRamp;
         uniform float u_fragTear; uniform float u_fragTearGate; uniform float u_fragTearFactor; uniform float u_texelsPerPxRest; uniform float u_poseFrac; uniform float u_plateFold;   // A241; Sprint 17a
         uniform float u_plateNearOnly;   // S46
+        uniform vec4 u_revealLaw;        // S48: (outer, inner, pn, D) -- the app's own portal depth law, so the shader can
+        uniform float u_revealScale;     //      price a depth step in SCREEN PIXELS AT THE ENVELOPE RIM (= |ex| * pxPerWorld)
+        uniform float u_revealPxTol;     //      the cliff criterion in those pixels; 0 = off, negative = the green check view
         uniform float u_backTear;   // A257e
         uniform float u_pxScale;       // A189: rendered pixels -> canvas pixels (1.0 normally)
 
@@ -3146,6 +3152,30 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         
         // Helper: getDepth (will be defined by each mode)
         float getDepth(vec2 uv);
+
+        // S48 THE REVEAL FIELD: what a depth step is WORTH IN SCREEN PIXELS AT THE ENVELOPE RIM.
+        //
+        // Every cliff criterion in this file is expressed in some proxy -- a depth quantum (S46, a89), a fraction of a
+        // texel's own extent (A212), a normalised-depth step (fgTearStep). None of them is the unit the artefact appears
+        // in. The artefact is a gap in PIXELS, and the gap two adjacent texels open when the eye reaches the rim of the
+        // envelope is a closed form of the app's own parallax law:
+        //
+        //     reveal = | Z_a/(D+Z_a) - Z_b/(D+Z_b) | * |ex| * pxPerWorld,    Z = -z(d), ex = D * tan(envelope)
+        //
+        // That is S47's second takeaway, and it is a strictly better criterion than the proxies because it is scene- and
+        // relief-invariant by construction: the same threshold means the same visible gap on a bas-relief and on a deep
+        // scene. z(d) below IS viewSpaceDisplacement's law (smoothstep either side of the portal plane), not a re-derivation.
+        float _revealZofD(float d) {
+            float outer = u_revealLaw.x, inner = u_revealLaw.y, pn = clamp(u_revealLaw.z, 1e-4, 1.0 - 1e-4);
+            d = clamp(d, 0.0, 1.0);
+            if (d < pn) { float t = d / pn; return -outer + outer * (t * t * (3.0 - 2.0 * t)); }
+            float t2 = (d - pn) / (1.0 - pn); return inner * (t2 * t2 * (3.0 - 2.0 * t2));
+        }
+        float _revealPx(float dA, float dB) {
+            float D = max(u_revealLaw.w, 1e-4);
+            float Za = -_revealZofD(dA), Zb = -_revealZofD(dB);
+            return abs(Za / max(D + Za, 1e-4) - Zb / max(D + Zb, 1e-4)) * u_revealScale;
+        }
     `;
 
     const unifiedGapLogicGLSL = `
@@ -3236,12 +3266,19 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // differ by about one quantum and nothing is discarded; on a ramp the uphill neighbour is the near surface, so the
         // far tail exceeds the tolerance and goes. The tolerance is set in JS from the source quantum the bake already
         // measures (a89), so no new constant enters here.
-        if (u_isBackgroundLayer && abs(u_plateNearOnly) > 0.0 && !isGap) {
+        //
+        // S48: the SAME rule with its tolerance in screen pixels at the rim (u_revealPxTol) rather than in source quanta.
+        // A quantum is a property of the depth FILE; a pixel of reveal is a property of what the viewer sees, and the two
+        // differ by the relief, which varies 32x between the kit and the shipped app. When u_revealPxTol is set it wins.
+        if (u_isBackgroundLayer && (abs(u_plateNearOnly) > 0.0 || abs(u_revealPxTol) > 0.0) && !isGap) {
             vec2 tx = 1.0 / max(u_textureSize, vec2(1.0));
             float dN = max(max(getDepth(vUv + vec2(tx.x, 0.0)), getDepth(vUv - vec2(tx.x, 0.0))),
                            max(getDepth(vUv + vec2(0.0, tx.y)), getDepth(vUv - vec2(0.0, tx.y))));
-            if (dN - vNormalizedDepth > abs(u_plateNearOnly)) {
-                if (u_plateNearOnly < 0.0) { gl_FragColor = vec4(0.1, 1.0, 0.3, 1.0); return; }   // check view: the tail, in green
+            bool over; float sgn;
+            if (abs(u_revealPxTol) > 0.0) { over = _revealPx(dN, vNormalizedDepth) > abs(u_revealPxTol) && dN > vNormalizedDepth; sgn = u_revealPxTol; }
+            else { over = (dN - vNormalizedDepth) > abs(u_plateNearOnly); sgn = u_plateNearOnly; }
+            if (over) {
+                if (sgn < 0.0) { gl_FragColor = vec4(0.1, 1.0, 0.3, 1.0); return; }   // check view: the tail, in green
                 discard;   // the background layer's own gap path is gated on u_plateFold, so this rule discards directly
             }
         }
@@ -10552,6 +10589,82 @@ async function _png16Decode(u8) {
 // the 0.25 / 1 / 4 sweep is flat there, so it is a natural choice rather than a tuned one.
 //   lam = 0 and no anchor  -> the pure gradient contract
 //   no gradients           -> the per-component shift alone, no solve
+// ============================================================================================ S48
+// THE REVEAL FIELD — a cliff criterion in the units the artefact appears in.
+//
+// S47's second takeaway. Every cliff test in this file is written in a proxy: source quanta (S46), a fraction of a texel's
+// own extent (A212), a normalised-depth step (fgTearStep). The artefact is a gap in pixels. The gap two adjacent texels
+// open when the eye reaches the rim of the envelope has a closed form in the app's own law, so the criterion can simply be
+// written in that unit and the proxies retired:
+//
+//     reveal(a, b) = | Z_a/(D + Z_a) - Z_b/(D + Z_b) | * |ex| * pxPerWorld,    Z = -z(d),  ex = D * tan(envelope half-angle)
+//
+// Z/(D+Z) is the fraction of the eye's own motion that a texel's image follows; the difference between two texels is the
+// gap that opens between them, in world units on the portal plane; pxPerWorld converts it. The field is relief-invariant by
+// construction: on a bas-relief (outer 0.02, the shipped default) and on the kit's 32x deeper scenes the SAME threshold
+// means the same visible gap, which is exactly what a quantum threshold does not do.
+//
+// Two currencies, both returned, because they answer different questions:
+//   SCREEN pixels  (canvas width / terrarium width) -- what the viewer sees; the unit the live rule uses.
+//   PLATE texels   (pw / the layer's world width)   -- resolution-independent; the unit S47 measured offline on the kit,
+//                                                      and the one the exported field carries so the two are comparable.
+window._revealLaw = function (pw, ph) {
+    const _pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+    const D = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0.6) - _pz));
+    const tw = (typeof terrariumWidth === 'number') ? terrariumWidth : 0.16, th = (typeof terrariumHeight === 'number') ? terrariumHeight : 0.09;
+    const la = pw / ph, fa = tw / th;
+    const layerW = (la > fa) ? tw : th * la;                 // the app's own fit (see the u_plateFold arming: layerWf)
+    const exH = D * Math.tan((bgViewFadeEndDeg || 45) * Math.PI / 180);
+    const exV = D * Math.tan(((typeof bgViewFadeEndDegV === 'number' ? bgViewFadeEndDegV : 30)) * Math.PI / 180);
+    const canvasW = (typeof renderer !== 'undefined' && renderer && renderer.domElement) ? renderer.domElement.width : pw;
+    // screen px per world metre on the portal plane. The layer occupies layerW/tw of the frame's width and (canvasW * that)
+    // of its pixels, so the ratio reduces to canvasW / tw exactly -- the layer's own fit cancels.
+    return { D, layerW, exH, exV,
+             pxPerWorldScreen: canvasW / Math.max(tw, 1e-6),
+             pxPerWorldTexel: pw / Math.max(layerW, 1e-6),
+             outer: (typeof outerVolumeDepth === 'number') ? outerVolumeDepth : 0.02,
+             inner: (typeof innerVolumeDepth === 'number') ? innerVolumeDepth : 0.0001,
+             pn: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5 };
+};
+window._revealZofD = function (d, L) {
+    const pn = Math.min(Math.max(L.pn, 1e-4), 1 - 1e-4); d = Math.min(1, Math.max(0, d));
+    if (d < pn) { const t = d / pn; return -L.outer + L.outer * (t * t * (3 - 2 * t)); }
+    const t2 = (d - pn) / (1 - pn); return L.inner * (t2 * t2 * (3 - 2 * t2));
+};
+// the per-texel field: the largest gap this texel opens against any 4-neighbour, in PLATE TEXELS at the rim (h uses the
+// horizontal half-angle, v the vertical -- the envelope is rectangular, so the two axes are not interchangeable)
+window._revealPxField = function (dq, pw, ph, opts) {
+    opts = opts || {}; const L = window._revealLaw(pw, ph); const N = pw * ph;
+    const ppw = opts.screen ? L.pxPerWorldScreen : L.pxPerWorldTexel;
+    const sH = L.exH * ppw, sV = L.exV * ppw;
+    const s = new Float64Array(N);
+    for (let i = 0; i < N; i++) { const Z = -window._revealZofD(dq[i], L); s[i] = Z / (L.D + Z); }
+    const out = new Float32Array(N);
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
+        const i = y * pw + x; let m = 0;
+        if (x > 0) m = Math.max(m, Math.abs(s[i] - s[i - 1]) * sH);
+        if (x < pw - 1) m = Math.max(m, Math.abs(s[i] - s[i + 1]) * sH);
+        if (y > 0) m = Math.max(m, Math.abs(s[i] - s[i - pw]) * sV);
+        if (y < ph - 1) m = Math.max(m, Math.abs(s[i] - s[i + pw]) * sV);
+        out[i] = m;
+    }
+    return { reveal: out, law: L, unit: opts.screen ? 'screen px' : 'plate texels' };
+};
+window._armRevealLaw = function (mat, pw, ph) {
+    const u = mat && mat.uniforms; if (!u || !u.u_revealLaw) return null;
+    const L = window._revealLaw(pw, ph);
+    u.u_revealLaw.value.set(L.outer, L.inner, L.pn, L.D);
+    // the shader tests ONE axis pair at a time against a single scale, so the horizontal (larger) half-angle is used: a
+    // tolerance stated in pixels must be the worst case over the envelope, not an average of the two axes.
+    u.u_revealScale.value = L.exH * L.pxPerWorldScreen;
+    const T = (typeof window._plateNearOnlyPx === 'number') ? window._plateNearOnlyPx : 0;
+    u.u_revealPxTol.value = T;
+    if (T) console.log('[S48] plate near-extent rule armed in SCREEN PIXELS: |T| ' + Math.abs(T) + ' px at the rim' +
+        (T < 0 ? ' (green check view)' : '') + '; law outer ' + L.outer + ' inner ' + L.inner + ' pn ' + L.pn + ' D ' + L.D.toFixed(4) +
+        ', scale ' + (L.exH * L.pxPerWorldScreen).toFixed(1) + ' px per unit of image-follow fraction');
+    return L;
+};
+
 window._screenedPoissonBand = function (o) {
     const pw = o.pw, ph = o.ph, N = pw * ph, band = o.band, bc = o.bc;
     const gx = o.gx || null, gy = o.gy || null, anchor = o.anchor || null;
@@ -10627,6 +10740,119 @@ window._shiftBandComponents = function (val, band, bc, pw, ph) {
     }
     return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx };
 };
+// ============================================================================================ Sprint 25
+// THE REIMPORT: the band's returned colour and depth put back onto the LIVE plate.
+//
+// Until now the hand-off was one-way for depth. The bundle carried the band out; only colour came back, through a legacy
+// patch mesh built from one colour+depth pair (Import SD Inpaint Result), which is not the plane bake. This is the plane
+// arm's own entry point, and it applies the contract S45 measured rather than pasting values:
+//
+//   colour  -> written into the plate's own colour canvas on the inpaint mask, and nowhere else.
+//   depth   -> never pasted. The absolute return is shifted per band component to meet its own visible rim (which removes
+//              any constant bias the model carries), the gradients are used as the guidance field, and the two are
+//              reconciled by the screened solve with the OBSERVED plate depth as the Dirichlet boundary. The seam is
+//              therefore exact by construction, not by tuning.
+//
+// Known limitation, stated rather than hidden: the plate's TRIANGLE INDEX was torn at bake time from the baked depth. A
+// returned depth that moves a cliff does not re-tear the mesh, and this reports how many triangles the rim law would now
+// decide differently so the size of that gap is a number and not an assertion. Rebaking re-tears.
+window._importPlaneReturn = function (d) {
+    d = d || {};
+    if (!(bgFarRuleOn() && window._bgQuickBaked && window._qbPlateF && window._qbDQ && window._qbSize &&
+          typeof bgLayerMesh !== 'undefined' && bgLayerMesh && bgLayerMesh.material && bgLayerMesh.material.uniforms)) {
+        console.warn('[Sprint 25] plane return needs a plane bake on screen'); return null; }
+    const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph;
+    const pF = window._qbPlateF, paint = window._qbPlatePaint, dis = window._qbDisocc;
+    const flip = (i) => { const x = i % pw; return (ph - 1 - ((i - x) / pw)) * pw + x; };
+    const band = new Uint8Array(N); let nB = 0;
+    const src = (d.mask && d.mask.length === N) ? d.mask : (paint || dis);
+    if (!src) { console.warn('[Sprint 25] no inpaint mask on this bake'); return null; }
+    for (let i = 0; i < N; i++) if (src[i]) { band[i] = 1; nB++; }
+    if (!nB) { console.warn('[Sprint 25] the inpaint mask is empty'); return null; }
+    const st = { pw, ph, band: nB, maskSource: (d.mask && d.mask.length === N) ? 'caller' : (paint ? 'plane_mask_inpaint (placeholder classes)' : 'the texture band') };
+
+    // ---- depth ----
+    if (d.depth || d.gx || d.gy) {
+        const bc = new Float32Array(N); for (let i = 0; i < N; i++) bc[i] = pF[flip(i)];
+        let anchor = null;
+        if (d.depth && d.depth.length === N) {
+            const sh = window._shiftBandComponents(d.depth, band, bc, pw, ph);
+            anchor = sh.val; st.shift = { components: sh.components, noRim: sh.noRim, noRimPx: sh.noRimPx };
+        }
+        const lam = (typeof d.lam === 'number') ? d.lam : 1;
+        const t0 = Date.now();
+        const sol = window._screenedPoissonBand({ pw, ph, band, bc, gx: (d.gx && d.gx.length === N) ? d.gx : null,
+                                                  gy: (d.gy && d.gy.length === N) ? d.gy : null, anchor, lam });
+        st.solve = { iters: sol.iters, resid: +sol.resid.toExponential(2), n: sol.n, ms: Date.now() - t0,
+                     form: (anchor && (d.gx || d.gy)) ? 'screened (both), lam ' + lam : (anchor ? 'absolute + per-component shift, no solve term' : 'pure gradient (lam 0)') };
+        let mx = 0, sum = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(sol.d[i] - bc[i]); if (dd > mx) mx = dd; sum += dd; }
+        st.change = { maxD: +mx.toFixed(5), meanD: +(sum / nB).toFixed(5) };
+        // the seam: the returned field against the observed depth across the band's outer boundary. Zero by construction —
+        // measured anyway, because "by construction" is a claim and this is the instrument that would catch it failing.
+        let seam = 0, nS = 0;
+        for (let i = 0; i < N; i++) { if (band[i]) continue; const x = i % pw, y = (i - x) / pw; let touches = false;
+            if (x > 0 && band[i - 1]) touches = true; if (x < pw - 1 && band[i + 1]) touches = true;
+            if (y > 0 && band[i - pw]) touches = true; if (y < ph - 1 && band[i + pw]) touches = true;
+            if (touches) { seam = Math.max(seam, Math.abs(sol.d[i] - bc[i])); nS++; } }
+        st.seam = { rimTexels: nS, maxAbsD: +seam.toFixed(8) };
+        // how many triangles the rim law would now tear differently (the index is the bake's; this is the gap, quantified)
+        try { const rl = bgRimLawFor(pw, ph); let flipped = 0, pairs = 0;
+            for (let i = 0; i < N; i++) { const x = i % pw, y = (i - x) / pw;
+                for (const j of [x < pw - 1 ? i + 1 : -1, y < ph - 1 ? i + pw : -1]) { if (j < 0) continue; if (!(band[i] || band[j])) continue; pairs++;
+                    if (rl.joined(bc[i], bc[j]) !== rl.joined(sol.d[i], sol.d[j])) flipped++; } }
+            st.retear = { pairsTouchingTheBand: pairs, decisionsChanged: flipped, note: 'the mesh index is the bake\'s; rebake to re-tear' };
+        } catch (eT) { st.retear = { error: String(eT) }; }
+        for (let i = 0; i < N; i++) if (band[i]) pF[flip(i)] = sol.d[i];
+        const dm = bgLayerMesh.material.uniforms.displacementMap; if (dm && dm.value) dm.value.needsUpdate = true;
+        // the sibling meshes (plate 2, the ring, the step faces) clone matQ and share this same texture object
+        for (const m of (bgLayerMesh.userData.objLayers || [])) { const u = m.material && m.material.uniforms; if (u && u.displacementMap && u.displacementMap.value === (dm && dm.value)) u.displacementMap.value.needsUpdate = true; }
+    }
+
+    // ---- colour ----
+    if (d.color && (d.color.length === 4 * N || d.color.length === 3 * N)) {
+        const st4 = d.color.length === 4 * N ? 4 : 3;
+        const mp = bgLayerMesh.material.uniforms.map, img = mp && mp.value && mp.value.image;
+        if (img && img.getContext) {
+            const cx = img.getContext('2d'); const id = cx.getImageData(0, 0, pw, ph); const dd = id.data;
+            let n = 0; for (let i = 0; i < N; i++) if (band[i]) { dd[i * 4] = d.color[i * st4]; dd[i * 4 + 1] = d.color[i * st4 + 1]; dd[i * 4 + 2] = d.color[i * st4 + 2]; dd[i * 4 + 3] = 255; n++; }
+            cx.putImageData(id, 0, 0); mp.value.needsUpdate = true; st.colour = { texels: n };
+            if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) for (let i = 0; i < N; i++) if (band[i]) { window._qbPlateColor[i * 4] = dd[i * 4]; window._qbPlateColor[i * 4 + 1] = dd[i * 4 + 1]; window._qbPlateColor[i * 4 + 2] = dd[i * 4 + 2]; }
+        } else st.colour = { skipped: 'the plate is rendering from a render target, not its own colour canvas (no plane colour pass on this bake)' };
+    }
+    window._qbReturnStat = st;
+    console.log('[Sprint 25] plane return ' + JSON.stringify(st));
+    if (typeof render === 'function') { try { render(); } catch (e) {} }
+    return st;
+};
+window._importPlaneReturnFiles = async function (files) {   // return_band_color.png / _depth16.png / _gradx16.png / _grady16.png
+    if (!(window._bgQuickBaked && window._qbSize)) return null;
+    const pw = window._qbSize.pw, ph = window._qbSize.ph, N = pw * ph; const got = {};
+    for (const f of files) {
+        const m = /^return_band_(color|colour|depth16|gradx16|grady16)\.png$/i.exec(f.name);
+        if (!m) { console.warn('[Sprint 25] skipped ' + f.name + ' (expected return_band_color.png / _depth16.png / _gradx16.png / _grady16.png)'); continue; }
+        const k = /col/i.test(m[1]) ? 'color' : m[1].toLowerCase();
+        if (k === 'color') { got.color = await _pngToRgba(f, pw, ph); continue; }
+        let g = null; try { g = await _png16Decode(new Uint8Array(await f.arrayBuffer())); } catch (e) { g = null; }
+        const a = new Float32Array(N);
+        if (g && g.w === pw && g.h === ph) { for (let i = 0; i < N; i++) a[i] = g.data[i] / g.max; }
+        else { const r8 = await _pngToRgba(f, pw, ph); for (let i = 0; i < N; i++) a[i] = r8[i * 4] / 255; console.warn('[Sprint 25] ' + f.name + ' read through the canvas (8-bit)'); }
+        // gradients are carried as (g + 0.5): a gradient is signed and a PNG is not
+        if (k === 'depth16') got.depth = a; else { for (let i = 0; i < N; i++) a[i] -= 0.5; got[k === 'gradx16' ? 'gx' : 'gy'] = a; }
+    }
+    if (!(got.color || got.depth || got.gx || got.gy)) return null;
+    return window._importPlaneReturn(got);
+};
+async function importPlaneReturn() {
+    if (!(window._bgQuickBaked && window._qbSize)) { alert('Plane return: build the plate first (S6 panel), then import.'); return; }
+    const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
+    const files = await new Promise((res) => { input.onchange = (ev) => res(Array.from(ev.target.files || [])); input.click(); });
+    if (!files.length) return;
+    const st = await window._importPlaneReturnFiles(files);
+    alert(st ? ('Plane return applied to ' + st.band + ' band texels; the report is in the console. A new Build drops it.')
+             : 'Plane return failed: expected return_band_color.png / return_band_depth16.png / return_band_gradx16.png / return_band_grady16.png.');
+}
+window.importPlaneReturn = importPlaneReturn;
+
 async function importObjectLayers() {
     if (!(window._bgQuickBaked && window._qbSize)) { alert('Object layers: build the plate first (S6 panel), then import.'); return; }
     const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
@@ -10853,7 +11079,8 @@ function exportSDBundle() {
                     meta.files['plane_out_depth16.png'] = 'plate 1 depth edge-extended into the margin (16-bit)' + tagM;
                     meta.plane_margin = { Mx, My, clip: mg.clip, note: 'clip = picture: the strips are drawn only inside the frame\'s rest footprint; window: the whole portal' }; }
                 // S27: the occluders as objects — the layer model's input (boxes / masks) and the key the reimport matches on
-                try { const ob = _planeObjects(true); if (ob) {
+                let obIds = null;
+                try { const ob = _planeObjects(true); if (ob) { obIds = ob.ids;
                     mask8('plane_object_ids.png', (i) => ob.ids[i], 'object id per texel (0 = none; 1..254 = objects, largest first; 255 = beyond the cap): one continuous occluder surface standing in front of the background its band reveals — the footprint a layer model completes; boxes in meta.plane_objects');
                     const L0o = mediaLayers[0]; const im0 = L0o && ((L0o.elements && L0o.elements.color) || (L0o.textures && L0o.textures.color && L0o.textures.color.image));
                     meta.plane_objects = { source: ob.source || 'depth-only (A253 + continuity)', rule: ob.source ? ('external object map: ' + ob.source + '; footprint / band demand / depths recomputed on this bake') : 'A253: texels in front of the a-priori far field by more than the cliff step (fgTearStep = ' + ((typeof fgTearStep === 'number') ? fgTearStep.toFixed(4) : '?') + '), joined under the rim law; ranked by band demand; components without band demand not exported', count: ob.objects.length, overflow: window._qbObjOverflow || 0, withoutDemand: window._qbObjNoDemand || 0, nativeRes: [pw, ph], sourceImageSize: im0 ? [im0.naturalWidth || im0.videoWidth || im0.width, im0.naturalHeight || im0.videoHeight || im0.height] : null,
@@ -10861,6 +11088,59 @@ function exportSDBundle() {
                         depthConvention: 'frontDepthMean / backgroundDepthMean are normalised disparity (1 near, 0 far) as in the 16-bit files',
                         reimport: 'obj_<id>_color.png (RGBA at the plate grid; alpha = the completed object, hidden part included) [+ obj_<id>_visible.png: the object\'s visible footprint, white; strongly recommended — without it the app\'s own footprint (this id map) is used] [+ obj_<id>_depth16.png: any depth or disparity, aligned on the object\'s visible front] -> Import object layers (S27). Visible texels keep the source depth; hidden texels continue the object\'s own front (zero-thickness rule, S26 §3b) or the aligned depth, then sit behind whatever is visible at them (ordering clamp, one quantum).',
                         objects: ob.objects }; } } catch (eO) { console.warn('[S27] objects failed:', eO); }
+                // ===== S48: THE REVEAL FIELD (the cliff criterion in the units the artefact appears in) =====
+                // S47's second takeaway. Per texel, the largest gap it opens against a 4-neighbour when the eye reaches the
+                // rim, in PLATE TEXELS -- the same quantity `research/s35/bleed/subpixel.py` measures offline, so the
+                // exported field and the kit measurement are directly comparable. The live rule uses screen pixels; both
+                // scales are in meta.plane.reveal.
+                let revStats = null;
+                try {
+                    const rf = window._revealPxField(dQ, pw, ph, { screen: false });
+                    const r = rf.reveal; let mx = 0, sum = 0; for (let i = 0; i < N; i++) { if (r[i] > mx) mx = r[i]; sum += r[i]; }
+                    const CAP = 16;   // the PNG carries 0..CAP texels at 1/16 of a texel per step; the tail is in meta
+                    gray16('plane_reveal_px.png', (i) => Math.min(r[i], CAP) / CAP, 'S48 reveal field');
+                    meta.files['plane_reveal_px.png'] = 'S48 REVEAL FIELD: the gap in PLATE TEXELS this texel opens against its widest 4-neighbour when the eye reaches the envelope rim — the cliff criterion in the units the artefact appears in. [16-bit grey PNG, native ' + pw + 'x' + ph + ', rows top-first; value/65535 * ' + CAP + ' = texels, clipped at ' + CAP + '. NOT a depth: see meta.plane.reveal for the law, the percentiles and the screen-pixel scale.]';
+                    const srt = Float32Array.from(r).sort();
+                    const pc = (p) => srt[Math.min(N - 1, Math.floor(p * N))];
+                    const over = (t) => { let n = 0; for (let i = 0; i < N; i++) if (r[i] > t) n++; return n; };
+                    revStats = { unit: 'plate texels at the envelope rim', pngScale: CAP, max: +mx.toFixed(3),
+                                 mean: +(sum / N).toFixed(4), p50: +pc(0.5).toFixed(4), p90: +pc(0.9).toFixed(4), p99: +pc(0.99).toFixed(4),
+                                 over1: over(1), over2: over(2), over4: over(4),
+                                 screenPxPerTexel: +(rf.law.pxPerWorldScreen / rf.law.pxPerWorldTexel).toFixed(4),
+                                 law: { D: +rf.law.D.toFixed(4), exH: +rf.law.exH.toFixed(4), exV: +rf.law.exV.toFixed(4), layerW: +rf.law.layerW.toFixed(4),
+                                        pxPerWorldTexel: +rf.law.pxPerWorldTexel.toFixed(2), pxPerWorldScreen: +rf.law.pxPerWorldScreen.toFixed(2),
+                                        relief: +(rf.law.outer / rf.law.D).toFixed(4) },
+                                 formula: 'reveal = |Z_a/(D+Z_a) - Z_b/(D+Z_b)| * ex * pxPerWorld, Z = -z(d) under the portal depth law; ex = D*tan(half-angle), horizontal for x-neighbours, vertical for y',
+                                 liveRule: 'window._plateNearOnlyPx = T (screen px, negative = green check view): a plate fragment more than T px of reveal behind its own near extent is transparent (S46 in S48 units)' };
+                } catch (eR) { console.warn('[S48] reveal field failed:', eR); }
+                // ===== Sprint 25: THE NO-CLONE CONSTRAINT AND THE OCCLUDER-REMOVED SEED =====
+                // R7 items 4 and 5. PACO tried three inpainter contracts WITH the ground-truth amodal mask and all three
+                // failed: inpainting the hole alone makes the model complete the occluder, greying it leaks the grey, and
+                // extending the mask invents new objects. A hole does not tell a model whose surface it is. So the bundle
+                // states the legal source region explicitly, and hands over a picture with the occluder already gone.
+                let ctxCount = null;
+                try {
+                    const illegal = new Uint8Array(N); let nIll = 0;
+                    for (let i = 0; i < N; i++) { if ((obIds && obIds[i] > 0) || (paint && paint[i])) { illegal[i] = 1; nIll++; } }
+                    if (nIll && nIll < N) {
+                        mask8('plane_mask_context.png', (i) => illegal[i] ? 0 : 255, 'Sprint 25 (R7 §4) THE LEGAL SOURCE REGION: white = a texel whose colour may be copied or attended to when filling the band — the background the picture already shows. Black = an occluder footprint (plane_object_ids > 0) or a placeholder. An occluder footprint IS the set of texels standing in front of the band it reveals, so black is exactly "not strictly behind the occluder". Per-occluder refinement: intersect with plane_object_ids != <that id>.');
+                        if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) {
+                            // the occluder replaced by a HARMONIC CONTINUATION of the legal background, not left in and not
+                            // flat grey (PACO tested grey: the fill colour leaks). This is the same Laplace solve the depth
+                            // return uses, run per channel with the legal colour as the Dirichlet boundary.
+                            const src = window._qbPlateColor; const outC = new Uint8ClampedArray(4 * N);
+                            const ITER = 240;   // a seed, not content: the solve is capped and meta says so
+                            for (let c = 0; c < 3; c++) {
+                                const bcC = new Float32Array(N); for (let i = 0; i < N; i++) bcC[i] = src[i * 4 + c] / 255;
+                                const s = window._screenedPoissonBand({ pw, ph, band: illegal, bc: bcC, iters: ITER, omega: 1.9 });
+                                for (let i = 0; i < N; i++) outC[i * 4 + c] = Math.round(255 * Math.min(1, Math.max(0, s.d[i])));
+                            }
+                            for (let i = 0; i < N; i++) outC[i * 4 + 3] = 255;
+                            rgba8('plane_color_occluder_removed.png', outC, 'Sprint 25 (R7 §5) the plate colour with EVERY occluder footprint and placeholder replaced by a harmonic continuation of the legal background (Laplace, Dirichlet on plane_mask_context, ' + ITER + ' sweeps). A seed and a context, not content: inpaint plane_mask_inpaint on THIS, not on plane_plate_color, so the model is never shown the occluder it would otherwise complete.');
+                        }
+                        ctxCount = { legal: N - nIll, illegal: nIll, occluderPx: obIds ? (() => { let n = 0; for (let i = 0; i < N; i++) if (obIds[i] > 0) n++; return n; })() : 0 };
+                    }
+                } catch (eC) { console.warn('[Sprint 25] context/occluder-removed failed:', eC); }
                 const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
                 meta.plane = {
                     nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null,
@@ -10871,9 +11151,25 @@ function exportSDBundle() {
                     counts: { band: cnt(dis), carriers: cnt(car), placeholders: cnt(paint), paintClass1: cnt(paint, (v) => v === 1), bandOutsideTier: cnt(paint, (v) => v === 2), carrierOnly: cnt(paint, (v) => v === 3), plate2: has2 ? cnt(has2) : 0, sky: skyOn ? cnt(dQ, (v) => v < sq) : 0, torn: cnt(window._qbPlateTorn), clones: window._qbCloneCount ?? null },
                     placeholderClasses: { 1: 'paint: synthesised colour uncovered inside the tier (or no tier)', 2: 'band outside the tier: synthesised, the wash may stay', 3: 'carrier-only: synthesised for continuity, never demanded', 4: 'plate 2 (its own files)' },
                     liveView: 'SD regions: cyan = class 1, blue = 2, teal = 3, magenta = plate 2, orange = beyond the frame, backdrop = uncovered',
+                    reveal: revStats, context: ctxCount,
+                    // ===== Sprint 25: WHAT TO SEND BACK, AND WHAT THE APP DOES WITH IT =====
+                    // Settled by measurement, not by preference: `research/s35/bleed/poisson.py` (note S45) compared the
+                    // three candidate contracts on six kit scenes with the returned values deliberately corrupted, and the
+                    // combination beat both pure forms on every row. The reason is not subtle -- a value measurement and a
+                    // gradient measurement of the same field carry independent noise, so the screened solve averages them.
+                    returnContract: {
+                        files: { 'return_band_color.png': 'RGB at the plate grid, rows top-first: the inpainted colour. Only texels where plane_mask_inpaint is white are read.',
+                                 'return_band_depth16.png': 'OPTIONAL 16-bit grey, same convention as plane_plate_depth16 (value/65535 = normalised disparity, 1 near 0 far): the ABSOLUTE depth return. Any constant bias is removed by the app (per-component shift), so it does not need to be aligned.',
+                                 'return_band_gradx16.png / return_band_grady16.png': 'OPTIONAL 16-bit grey: the depth GRADIENT in the same units, ENCODED AS (g + 0.5) so 32768 = zero gradient. gx[i] approximates d[i+1] - d[i], gy[i] approximates d[i+pw] - d[i].' },
+                        integration: 'min over the band of ||grad d - g||^2 + lam*||d - a||^2, with d = the observed plate depth on the band rim (Dirichlet). `a` is the absolute return after a PER BAND COMPONENT shift that makes each component meet its own visible rim; lam = 1. Depth returns are never pasted: the seam is a boundary condition, so it is exact by construction.',
+                        lam: 1,
+                        measured: 'kit, six scenes, returns corrupted at sigma 0.04 in d: absolute-with-shift ~0.0269, pure gradient ~0.0320, BOTH ~0.0175. The 0.25 / 1 / 4 sweep on lam is flat, so lam = 1 is a natural choice and not a tuned one.',
+                        degenerate: ['gradients only, no absolute -> the pure InpaintFusion contract (lam = 0)', 'absolute only -> the per-component shift alone, no solve', 'neither -> colour is imported and the depth is left as baked'],
+                        colourContext: 'inpaint on plane_color_occluder_removed, restricted to plane_mask_context: the occluder is not in the picture the model sees, and the legal source region is stated rather than hoped for (R7 §4/§5, PACO).',
+                        entryPoint: 'window._importPlaneReturn(files) in the app, or the Import plane return button; harness/s45_roundtrip.js drives it headlessly.' },
                     notes: ['16-bit files clamp d to [0,1]: sky texels (plate depth a hair below 0 under the plane at infinity) read 0 — use plane_sky_mask, not a threshold, to find them',
                             'plate 2 depth equals plate 1 where plane_plate2_mask is black (the vertex rides plate 1)',
-                            'reimport: completed object layers via Import object layers (S27, obj_<id>_*.png, see meta.plane_objects.reimport); the plate colour itself has no reimport yet — the legacy Import SD Inpaint Result builds a patch mesh from one colour+depth pair'] };
+                            'reimport: the band itself via Import plane return (Sprint 25, return_band_*.png, see returnContract); completed object layers via Import object layers (S27, obj_<id>_*.png, see meta.plane_objects.reimport)'] };
                 planeSet = true;
                 console.log('[SD-BUNDLE] plane set: ' + files.filter(f => f.name.startsWith('plane_')).length + ' files at ' + pw + 'x' + ph + '; counts ' + JSON.stringify(meta.plane.counts));
             } catch (eP) { console.error('[SD-BUNDLE] plane set FAILED:', eP); }
@@ -16677,6 +16973,10 @@ function bgBuildBackgroundLayerCore() {
                 if (kNO) console.log('[S46] plate near-extent rule armed: |k| ' + Math.abs(kNO) + ' source quanta = ' +
                     (Math.abs(kNO) * qNO).toFixed(6) + ' in d' + (kNO < 0 ? ' (green check view: the discarded tail)' : ''));
             }
+            // S48 (window._plateNearOnlyPx = T screen pixels, or -T for the green check view): the SAME rule with its
+            // tolerance in the units the artefact appears in. The law goes to the shader so the conversion is exact per
+            // fragment rather than a linearisation at one depth.
+            if (matQ.uniforms.u_revealPxTol) window._armRevealLaw(matQ, pw, ph);
             // Sprint 17a (window._plateFoldAlpha = 1 | 2): the plate obeys the A241 stretch law — the same rest texel density and
             // fold factor as the foreground (A212's criterion: shift span > cell extent <=> stretched past 2x at the fold), ungated.
             if (window._plateFoldAlpha && matQ.uniforms.u_plateFold) {
@@ -27683,6 +27983,7 @@ function setupStaticControlListeners() {
     
     document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
+    const importPlaneRetBtn = document.getElementById('importPlaneReturnButton'); if (importPlaneRetBtn) importPlaneRetBtn.addEventListener('click', importPlaneReturn);   // Sprint 25
     const objViewBtn = document.getElementById('objectViewButton'); if (objViewBtn) objViewBtn.addEventListener('click', () => window._objectView());   // S27
     const objMaskBtn = document.getElementById('importObjMasksButton'); if (objMaskBtn) objMaskBtn.addEventListener('click', importObjectMasks);   // S28
     const objHLBtn = document.getElementById('objHighlightButton'); if (objHLBtn) objHLBtn.addEventListener('click', () => { const v = document.getElementById('objHighlightId'); const n = v ? parseInt(v.value, 10) : -1; window._objectHighlight(isNaN(n) ? -1 : n); });   // S28

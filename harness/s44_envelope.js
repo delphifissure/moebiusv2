@@ -19,9 +19,16 @@
 //
 //   IMG=color,depth TAG=... POSES="0:0,0.5:0,1:0,0:1,1:1" SKY=1 OUT=<dir> node harness/s44_envelope.js
 'use strict';
+//
+// S48 ADDS THE UNPAINTED-PIXEL ASSERTION to the same pass (harness/unpainted.js). "dark %" above sums two different
+// failures — cracks the renderer should have spanned, and reveals the fill stage owes content — and no instrument in this
+// project has ever separated them. The assertion does it mechanically: an unpainted run at most T pixels long with
+// painted pixels at both ends is a gap we should have covered; anything wider is a genuine disocclusion.
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
+const { UNPAINTED_FN } = require('./unpainted.js');
+const TS = (process.env.T || '1,2,4').split(',').map(Number);
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
 const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG || 'troll');
@@ -32,6 +39,7 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
     process.on('exit', () => { try { fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); } catch (e) {} });
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 1500));
+    const unpaintedSrc = UNPAINTED_FN;
     const browser = await chromium.launch({ executablePath: CHROME, headless: true,
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
@@ -66,7 +74,7 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
     // that is not letterbox in the rest frame, computed once, and it is printed so it can be checked.
     let RECT = null;
     const shot = async (fx, fy, mode) => {
-        const r = await page.evaluate(async ([fx, fy, mode, rect]) => {
+        const r = await page.evaluate(async ([fx, fy, mode, rect, unpaintedSrc, TS]) => {
             const chk = document.getElementById('sdRegionsChk');
             const want = mode === 'sd';
             if (chk && chk.checked !== want) { chk.checked = want; chk.dispatchEvent(new Event('change')); }
@@ -106,12 +114,36 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
                     (B > 130 && G < 120 && R < 120) ||                     // blue
                     (G > 120 && B > 100 && R < 90 && G > B)) placeholder++; // teal
             }
+            // S48: the unpainted-pixel assertion, on the plain frame (the SD check view repaints holes, so it cannot be
+            // asked this question). The leak map is drawn over a dimmed copy of the frame and returned as its own PNG.
+            let unp = null, unpPng = null;
+            if (mode === 'plain') {
+                const fn = eval('(' + unpaintedSrc + ')');
+                const u = fn(d, W, Hh, [x0, y0, x1, y1], TS, 24);
+                unp = { area: u.area, hole: u.hole, T: u.T, leak: u.leak, genuine: u.genuine, unbounded: u.unbounded };
+                if (u.hole) {
+                    const cv2 = document.createElement('canvas'); cv2.width = u.rectW; cv2.height = u.rectH;
+                    const c2 = cv2.getContext('2d'); const id2 = c2.createImageData(u.rectW, u.rectH); const dd = id2.data;
+                    for (let y = 0; y < u.rectH; y++) for (let x = 0; x < u.rectW; x++) {
+                        const p = y * u.rectW + x, s = ((y + y0) * W + (x + x0)) * 4;
+                        const m = u.leakMask[p];
+                        if (m === 3) { dd[p * 4] = 255; dd[p * 4 + 1] = 40; dd[p * 4 + 2] = 40; }          // leaks at the tightest T: red
+                        else if (m === 2) { dd[p * 4] = 255; dd[p * 4 + 1] = 190; dd[p * 4 + 2] = 40; }    // leaks only at a larger T: amber
+                        else if (m === 1) { dd[p * 4] = 40; dd[p * 4 + 1] = 120; dd[p * 4 + 2] = 255; }    // genuine disocclusion (bounded): blue
+                        else if (m === 4) { dd[p * 4] = 70; dd[p * 4 + 1] = 70; dd[p * 4 + 2] = 90; }      // unbounded: beyond the frame, not a disocclusion
+                        else { dd[p * 4] = d[s] * 0.3; dd[p * 4 + 1] = d[s + 1] * 0.3; dd[p * 4 + 2] = d[s + 2] * 0.3; }
+                        dd[p * 4 + 3] = 255;
+                    }
+                    c2.putImageData(id2, 0, 0); unpPng = cv2.toDataURL('image/png');
+                }
+            }
             isSweeping = false;
-            return { W, Hh, rect: [x0, y0, x1, y1], area, placeholder: 100 * placeholder / area, dark: 100 * dark / area, stretched: 100 * stretched / area, png: cv.toDataURL('image/png') };
-        }, [fx, fy, mode, RECT]);
+            return { W, Hh, rect: [x0, y0, x1, y1], area, placeholder: 100 * placeholder / area, dark: 100 * dark / area, stretched: 100 * stretched / area, png: cv.toDataURL('image/png'), unp, unpPng };
+        }, [fx, fy, mode, RECT, unpaintedSrc, TS]);
         if (!RECT) { RECT = r.rect; console.log('  content rect ' + JSON.stringify(RECT) + ' = ' + r.area + ' px of ' + (r.W * r.Hh) + ' (' + (100 * r.area / (r.W * r.Hh)).toFixed(1) + '% of the canvas); everything below is measured inside it'); }
-        fs.writeFileSync(path.join(OUT, mode + '_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm') + '.png'),
-                         Buffer.from(r.png.split(',')[1], 'base64'));
+        const stem = mode + '_' + String(fx).replace('-', 'm') + '_' + String(fy).replace('-', 'm');
+        fs.writeFileSync(path.join(OUT, stem + '.png'), Buffer.from(r.png.split(',')[1], 'base64'));
+        if (r.unpPng) fs.writeFileSync(path.join(OUT, 'leak_' + stem + '.png'), Buffer.from(r.unpPng.split(',')[1], 'base64'));
         return r;
     };
 
@@ -120,7 +152,7 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
         const plain = await shot(fx, fy, 'plain');
         const sd = await shot(fx, fy, 'sd');
         const deg = { h: +(Math.atan(Math.abs(fx) * Math.tan(meta.envDeg * Math.PI / 180)) * 180 / Math.PI).toFixed(1) };
-        rows.push({ fx, fy, degH: deg.h, placeholder: +sd.placeholder.toFixed(3), dark: +plain.dark.toFixed(3), stretched: +plain.stretched.toFixed(3) });
+        rows.push({ fx, fy, degH: deg.h, placeholder: +sd.placeholder.toFixed(3), dark: +plain.dark.toFixed(3), stretched: +plain.stretched.toFixed(3), unp: plain.unp });
     }
     const rest = rows[0];
     console.log('\n  pose (fx:fy)   h deg |  placeholder %   d from rest |     dark %   d from rest');
@@ -135,6 +167,19 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's44_env', process.env.TAG 
                 ' points (rest ' + rest.placeholder.toFixed(3) + ' -> ' + worst.placeholder.toFixed(3) + ' at ' + worst.fx + ':' + worst.fy + '), ' +
                 'dark ' + (worst.dark - rest.dark >= 0 ? '+' : '') + (worst.dark - rest.dark).toFixed(3) + ' points.');
     if (rest.placeholder > 0.5) console.log('  NOTE: ' + rest.placeholder.toFixed(2) + '% of the REST frame is placeholder. At rest the viewer should be looking at the picture.');
+    // S48: the unpainted set split into what we should have covered and what is genuinely revealed
+    console.log('\n  THE UNPAINTED-PIXEL ASSERTION (S48): an unpainted run of at most T px with painted pixels at BOTH ends is');
+    console.log('  a gap we should have covered; wider is a genuine disocclusion. "dark %" above is the sum of the two.');
+    console.log('  "unbounded" reaches the rectangle edge on both axes: beyond the frame, not a disocclusion at all.');
+    console.log('  pose (fx:fy)   unpainted %   unbounded | ' + TS.map(t => ('leak T=' + t).padStart(16)).join(' | '));
+    for (const r of rows) {
+        if (!r.unp) continue;
+        const u = r.unp, bounded = Math.max(1, u.hole - (u.unbounded || 0));
+        console.log('  ' + String(r.fx + ':' + r.fy).padEnd(13) + (100 * u.hole / u.area).toFixed(3).padStart(11) +
+            (100 * (u.unbounded || 0) / Math.max(1, u.hole)).toFixed(1).padStart(11) + '% | ' +
+            TS.map((t, k) => (u.hole ? (100 * u.leak[k] / bounded).toFixed(1) + '% of bounded' : '        —   ').padStart(16)).join(' | ') +
+            '   (' + TS.map((t, k) => u.leak[k]).join(' / ') + ' px)');
+    }
     fs.writeFileSync(path.join(OUT, 'envelope.json'), JSON.stringify({ meta, rows }, null, 1));
     console.log('  -> ' + OUT);
     await browser.close(); try { srv.kill(); } catch (e) {}
