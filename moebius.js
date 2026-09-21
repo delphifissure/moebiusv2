@@ -10726,7 +10726,7 @@ window._shiftBandComponents = function (val, band, bc, pw, ph, opts) {
     opts = opts || {};
     const joined = (typeof opts.joined === 'function') ? opts.joined : null;
     const N = pw * ph, lab = new Int32Array(N).fill(-1), out = Float32Array.from(val);
-    const qx = new Int32Array(N); let nC = 0, noRim = 0, noRimPx = 0, rejected = 0;
+    const qx = new Int32Array(N); let nC = 0, noRim = 0, noRimPx = 0, rejected = 0; const shifts = [];
     for (let s = 0; s < N; s++) {
         if (!band[s] || lab[s] >= 0) continue;
         const c = nC++; let head = 0, tail = 0; qx[tail++] = s; lab[s] = c;
@@ -10750,8 +10750,18 @@ window._shiftBandComponents = function (val, band, bc, pw, ph, opts) {
         if (!nR) { noRim++; noRimPx += nP; continue; }
         const sh = (sumD - sumV) / nR;
         for (let k = 0; k < tail; k++) out[qx[k]] += sh;
+        shifts.push({ sh, px: nP, rim: nR });
     }
-    return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx, rimRejected: rejected };
+    // The applied shifts themselves, pixel-weighted. A caller that knows the true bias can read straight off this whether
+    // the shift is estimating it or estimating something else, which is the difference between "the anchor is noisy" and
+    // "the anchor is measuring the wrong quantity" -- and those have different fixes.
+    let sm = 0, spx = 0; for (const s of shifts) { sm += s.sh * s.px; spx += s.px; }
+    const bySh = shifts.slice().sort((a, b) => a.sh - b.sh);
+    let acc = 0, p50 = 0, p90 = 0; for (const s of bySh) { acc += s.px; if (!p50 && acc >= 0.5 * spx) p50 = s.sh; if (!p90 && acc >= 0.9 * spx) { p90 = s.sh; break; } }
+    return { val: out, components: nC, noRim: noRim, noRimPx: noRimPx, rimRejected: rejected,
+             shiftStats: shifts.length ? { meanPxWeighted: sm / Math.max(spx, 1), p50, p90,
+                                           min: bySh[0].sh, max: bySh[bySh.length - 1].sh,
+                                           rimPairsP50: bySh.map(s => s.rim).sort((a, b) => a - b)[bySh.length >> 1] } : null };
 };
 // ============================================================================================ Sprint 25
 // THE REIMPORT: the band's returned colour and depth put back onto the LIVE plate.
@@ -10794,14 +10804,25 @@ window._importPlaneReturn = function (d) {
             let rlS = null; try { rlS = bgRimLawFor(pw, ph); } catch (e) { rlS = null; }
             const sh = window._shiftBandComponents(d.depth, band, bc, pw, ph, (rlS && !d.anchorAllRims) ? { joined: rlS.joined } : {});
             anchor = sh.val; st.shift = { components: sh.components, noRim: sh.noRim, noRimPx: sh.noRimPx, rimRejected: sh.rimRejected,
-                                          rimRule: (rlS && !d.anchorAllRims) ? 'far side only (rim law)' : 'every visible neighbour' };
+                                          rimRule: (rlS && !d.anchorAllRims) ? 'far side only (rim law)' : 'every visible neighbour',
+                                          stats: sh.shiftStats };
         }
+        const gxU = (d.gx && d.gx.length === N) ? d.gx : null, gyU = (d.gy && d.gy.length === N) ? d.gy : null;
         const lam = (typeof d.lam === 'number') ? d.lam : 1;
         const t0 = Date.now();
-        const sol = window._screenedPoissonBand({ pw, ph, band, bc, gx: (d.gx && d.gx.length === N) ? d.gx : null,
-                                                  gy: (d.gy && d.gy.length === N) ? d.gy : null, anchor, lam });
+        let sol;
+        if (anchor && !gxU && !gyU && !d.forceSolve) {
+            // THE DEGENERATE CASE, AND IT HAD TO BE WRITTEN OUT. With an anchor but no gradients the guidance field is
+            // zero, so the screened solve is a LAPLACE problem: at lam = 0 it discards the return entirely and returns a
+            // harmonic interpolation of the rim, and at any finite lam it drags the return toward that membrane. The
+            // contract's degenerate form is "the per-component shift alone, no solve", and the first round trip scored
+            // the membrane instead (RMSE 0.245 against a raw return of 0.030) because the caller passed lam = 0. There is
+            // nothing for a solve to do here: the shifted values ARE the answer on the band, and the rim is untouched.
+            const dOut = Float32Array.from(bc); for (let i = 0; i < N; i++) if (band[i]) dOut[i] = anchor[i];
+            sol = { d: dOut, iters: 0, resid: 0, n: nB };
+        } else sol = window._screenedPoissonBand({ pw, ph, band, bc, gx: gxU, gy: gyU, anchor, lam });
         st.solve = { iters: sol.iters, resid: +sol.resid.toExponential(2), n: sol.n, ms: Date.now() - t0,
-                     form: (anchor && (d.gx || d.gy)) ? 'screened (both), lam ' + lam : (anchor ? 'absolute + per-component shift, no solve term' : 'pure gradient (lam 0)') };
+                     form: (anchor && (gxU || gyU)) ? 'screened (both), lam ' + lam : (anchor ? 'absolute + per-component shift, no solve (the degenerate form)' : 'pure gradient (lam 0)') };
         let mx = 0, sum = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(sol.d[i] - bc[i]); if (dd > mx) mx = dd; sum += dd; }
         st.change = { maxD: +mx.toFixed(5), meanD: +(sum / nB).toFixed(5) };
         // the seam: the returned field against the observed depth across the band's outer boundary. Zero by construction —
@@ -11181,6 +11202,7 @@ function exportSDBundle() {
                         integration: 'min over the band of ||grad d - g||^2 + lam*||d - a||^2, with d = the observed plate depth on the band rim (Dirichlet). `a` is the absolute return after a PER BAND COMPONENT shift that makes each component meet its own visible rim; lam = 1. Depth returns are never pasted: the seam is a boundary condition, so it is exact by construction.',
                         lam: 1,
                         measured: 'kit, six scenes, returns corrupted at sigma 0.04 in d: absolute-with-shift ~0.0269, pure gradient ~0.0320, BOTH ~0.0175. The 0.25 / 1 / 4 sweep on lam is flat, so lam = 1 is a natural choice and not a tuned one.',
+                        measuredOnAPhotograph: 'S48, the troll, same corruption (bias 0.020, raw RMSE 0.0304): pure GRADIENT 0.0118 (2.57x better than the raw return), both 0.0349 (0.87x), absolute+shift 0.0431 (0.70x). The seam is 0 in every form. THE ORDER IS THE OPPOSITE OF THE KIT\'S, and the cause is measured: a band opens onto background that recedes from the rim, so the far field at the rim is systematically the SHALLOWEST part of a component -- the observed rim depth runs 0.036 in d nearer than the far field beside it, and the per-component shift comes out +0.016 where -0.020 was wanted. A constant estimated from the rim is biased by construction, not by sampling, and the median component has only 10 rim pairs; 100 of 261 have no far-side rim at all. The Dirichlet boundary already meets the rim POINTWISE, which is what the gradient form relies on and why it wins. The default is left at lam = 1 because one photograph does not outweigh six kit scenes, but prefer the gradient channel if you can only send one.',
                         degenerate: ['gradients only, no absolute -> the pure InpaintFusion contract (lam = 0)', 'absolute only -> the per-component shift alone, no solve', 'neither -> colour is imported and the depth is left as baked'],
                         colourContext: 'inpaint on plane_color_occluder_removed, restricted to plane_mask_context: the occluder is not in the picture the model sees, and the legal source region is stated rather than hoped for (R7 §4/§5, PACO).',
                         entryPoint: 'window._importPlaneReturn(files) in the app, or the Import plane return button; harness/s45_roundtrip.js drives it headlessly.' },

@@ -94,10 +94,15 @@ print('  meta.plane.returnContract keys = %s' % list((p.get('returnContract') or
     // component is bounded by the background it continues AND by the occluder that created it; averaging the rim over
     // both makes the shift absorb the cliff rather than the bias. The "allrims" arms keep the original rule so the fix
     // is an A/B and not an assertion.
+    // 'abs-membrane' keeps the call that the first run made by mistake -- an anchor with no gradients AND lam = 0, which
+    // is a Laplace problem that throws the return away and interpolates the rim. It is kept as an arm because it is the
+    // do-nothing-shaped baseline for this contract and it should be visible what the solve is worth against it.
     const forms = [['absolute', { abs: true, grad: false }], ['gradient', { abs: false, grad: true }], ['both', { abs: true, grad: true }],
-                   ['abs-allrims', { abs: true, grad: false, allRims: true }], ['both-allrims', { abs: true, grad: true, allRims: true }]];
+                   ['abs-allrims', { abs: true, grad: false, allRims: true }], ['both-allrims', { abs: true, grad: true, allRims: true }],
+                   ['abs-membrane', { abs: true, grad: false, lam0: true }]];
     const results = [];
-    for (const [name, f] of forms) {
+    const only = process.env.FORMS ? process.env.FORMS.split(',') : null;
+    for (const [name, f] of forms.filter(([n]) => !only || only.includes(n))) {
         await BAKE(page, opts);   // a fresh bake each time: the reimport mutates the plate in place
         const r = await page.evaluate(async ([f, SIGMA, BIAS]) => {
             const sz = window._qbSize, pw = sz.pw, ph = sz.ph, N = pw * ph;
@@ -119,7 +124,8 @@ print('  meta.plane.returnContract keys = %s' % list((p.get('returnContract') or
             const colour = new Uint8ClampedArray(4 * N); for (let i = 0; i < N; i++) { colour[i * 4] = 17; colour[i * 4 + 1] = 200; colour[i * 4 + 2] = 91; colour[i * 4 + 3] = 255; }
             const before = window._qbPlateColor ? window._qbPlateColor.slice() : null;
             const st = window._importPlaneReturn({ depth: f.abs ? ret : null, gx: f.grad ? gx : null, gy: f.grad ? gy : null,
-                                                   color: colour, lam: f.abs && f.grad ? 1 : 0, anchorAllRims: !!f.allRims });
+                                                   color: colour, lam: f.lam0 ? 0 : 1, anchorAllRims: !!f.allRims,
+                                                   forceSolve: !!f.lam0 });
             // score against the target over the band
             let se = 0, ae = 0, mx = 0;
             for (let i = 0; i < N; i++) if (band[i]) { const e = pF[flip(i)] - tgt[i]; se += e * e; ae += Math.abs(e); if (Math.abs(e) > mx) mx = Math.abs(e); }
