@@ -28,6 +28,28 @@ objects" is their objection from wanting the album back. For a background band, 
 Inpainter: LaMa (big-lama), feed-forward, CPU. It is one of the baselines PACO compares against (Suvorov et al. 2022),
 which makes the comparison to their figure direct rather than analogical.
 
+--- R8 item 5 (2026-09-22): THE OCCLUDER CHANNEL IS NOT POSSIBLE WITH THIS INPAINTER, AND THAT IS A MEASUREMENT ---
+
+R8's action list asked for plane_object_ids to be fed to the inpainter AS ITS OWN CHANNEL, on four papers' evidence
+that occluder information helps. It cannot be done with LaMa, and the reason is checked rather than assumed:
+
+    >>> torch.load('big-lama.pt').named_parameters() -> first param
+    model.generator.model.1.ffc.convl2l.weight   (64, 4, 7, 7)
+
+Four input channels: RGB plus the mask. The checkpoint is a frozen TorchScript archive, so the first convolution
+cannot even be widened in place, let alone trained. A fifth channel needs a different inpainter and a training run,
+and this environment has no GPU. So the honest position is: THE CHANNEL IS NOT TESTED HERE, and nothing below should
+be read as testing it.
+
+What a fixed 4-channel model CAN be given is a better-shaped mask, and that is the other half of item 5. Arm B is
+already occluder-informed in the only way the interface allows -- the occluder's footprint enters the mask, so the
+model neither copies from it nor has to guess which side of the silhouette it is on. The new arms vary the one
+remaining free parameter, HOW MUCH OF THE RIM IS WITHHELD AS CONTEXT:
+
+  D  band dilated 4 px      -- the band's outer rim is where the wash is streakiest, and LaMa's context is the
+  E  band dilated 12 px        pixels just outside the mask. Dilating stops the model conditioning on our own
+  F  (band + occluder) +4      artefact. Against that: a bigger hole is a harder inpaint and more room to invent.
+
   python3 harness/s52_inpaint.py <bundle.zip> <outdir>
 """
 import sys, os, io, json, zipfile, time
@@ -70,10 +92,36 @@ print('  band %d px (%.2f%%), occluder %d px (%.2f%%)' %
 from simple_lama_inpainting import SimpleLama
 t0 = time.time(); lama = SimpleLama(device='cpu'); print('LaMa loaded %.1fs' % (time.time() - t0))
 
+# The interface check behind the docstring's claim: run it, do not trust the note.
+try:
+    import torch as _t
+    _sd = _t.jit.load('/root/.cache/torch/hub/checkpoints/big-lama.pt', map_location='cpu')
+    _n, _p = next(iter(_sd.named_parameters()))
+    print('LaMa first conv %s %s -> %d input channels (RGB+mask). An occluder channel needs a different model.'
+          % (_n, tuple(_p.shape), tuple(_p.shape)[1]))
+except Exception as _e:
+    print('could not read the LaMa input width: %s' % _e)
+
+
+def dilate(m, r):
+    """Binary dilation by a square of radius r, via a separable running max. No scipy dependency."""
+    a = m.astype(bool)
+    for ax in (0, 1):
+        b = a.copy()
+        for k in range(1, r + 1):
+            b |= np.roll(a, k, axis=ax) | np.roll(a, -k, axis=ax)
+        a = b
+    return a.astype(np.uint8)
+
+
+bg = occrm if occrm is not None else plate
 ARMS = [
-    ('A_band_occrm', occrm if occrm is not None else plate, band, 'Sprint 25: band mask, occluder replaced by a harmonic continuation'),
-    ('B_bandocc_occrm', occrm if occrm is not None else plate, np.maximum(band, occ), 'PACO (c): band + occluder mask, the strategy their own evidence prefers'),
+    ('A_band_occrm', bg, band, 'Sprint 25: band mask, occluder replaced by a harmonic continuation'),
+    ('B_bandocc_occrm', bg, np.maximum(band, occ), 'PACO (c): band + occluder mask, the strategy their own evidence prefers'),
     ('C_band_raw', plate, band, 'PACO (a) control: band mask on the raw plate colour, occluder left in'),
+    ('D_band_dil4', bg, dilate(band, 4), 'R8 item 5: band dilated 4 px -- withhold the streaky rim from the context'),
+    ('E_band_dil12', bg, dilate(band, 12), 'R8 item 5: band dilated 12 px -- the same, further out'),
+    ('F_bandocc_dil4', bg, dilate(np.maximum(band, occ), 4), 'R8 item 5: PACO (c) plus the 4 px dilation'),
 ]
 report = {'bundle': BUNDLE, 'plate': [pw, ph], 'arms': []}
 for name, src, msk, desc in ARMS:
