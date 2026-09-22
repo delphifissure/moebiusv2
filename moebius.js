@@ -10725,10 +10725,55 @@ window._armRevealLaw = function (mat, pw, ph) {
     return L;
 };
 
+function lamFDesc(a) {   // a per-texel lambda, summarised for the status line
+    let mn = Infinity, mx = -Infinity, s = 0;
+    for (let i = 0; i < a.length; i++) { const v = a[i]; if (v < mn) mn = v; if (v > mx) mx = v; s += v; }
+    return '[' + mn.toFixed(3) + '..' + mx.toFixed(3) + ' mean ' + (s / a.length).toFixed(3) + ']';
+}
+
+// THE RETURN'S CONFIDENCE, FROM TWO ESTIMATES DISAGREEING, WITH NO GROUND TRUTH.
+//
+// 2503.20211 (Yan et al.) Eq.9-11, read first-hand for R8: C_cst = exp(-beta |D_syn - D_day| / D_syn), used to
+// weight a pseudo-label loss, "assigning higher weights to consistent regions and lower weights to highly
+// inconsistent areas". They have no truth for adverse-weather depth either; the agreement of two estimators is the
+// substitute, and it costs nothing because both estimates already exist.
+//
+// WHY IT BELONGS IN OUR CONTRACT. The screened Poisson takes ONE lambda, so the return's absolute values are
+// trusted equally over the whole band. They should not be: the plane far side is confident where a run is long and
+// clean and near-arbitrary where the evidence is thin, and the project's only current uncertainty (_geoFarAxS) is
+// derived INSIDE one law -- half the rim tolerance plus slope uncertainty times distance -- so it cannot see that
+// law being wrong, only that law being imprecise. Two independent estimates can.
+//
+// THE FREE SECOND ESTIMATE WE ALREADY COMPUTE. planeFS.farAxV holds the ROW and COLUMN continuation candidates per
+// texel. The law picks one; their disagreement is exactly the quantity above, and S51 already converts both to
+// depth to run its labelling. Any other supplier (a model return, plate 2) works the same way.
+//
+//   a, b   two estimates of the same field, in the app's normalised d
+//   beta   sensitivity; the paper tunes it, here it is exposed and defaulted to 8 (see the harness for the sweep)
+//   lamMax the lambda a fully-confident texel gets; the contract's current scalar, so agreement reproduces today
+window._returnConfidence = function (a, b, opts) {
+    const o = opts || {}, beta = (typeof o.beta === 'number') ? o.beta : 8, lamMax = (typeof o.lamMax === 'number') ? o.lamMax : 1;
+    const eps = (typeof o.eps === 'number') ? o.eps : 1e-3;
+    const N = a.length, lam = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+        const av = a[i], bv = b[i];
+        const rel = Math.abs(av - bv) / Math.max(Math.abs(av), eps);
+        lam[i] = lamMax * Math.exp(-beta * rel);
+    }
+    return lam;
+};
+
 window._screenedPoissonBand = function (o) {
     const pw = o.pw, ph = o.ph, N = pw * ph, band = o.band, bc = o.bc;
     const gx = o.gx || null, gy = o.gy || null, anchor = o.anchor || null;
-    const lam = (anchor && typeof o.lam === 'number') ? o.lam : (anchor ? 1 : 0);
+    // LAMBDA MAY BE A FIELD, NOT ONLY A NUMBER. lam weights the absolute anchor against the gradient guidance, and
+    // one number says "trust the return's absolute values equally everywhere", which is false wherever the supplier
+    // is unsure. 2503.20211 Eq.9-11 builds exactly this weight with NO ground truth, from the DISAGREEMENT OF TWO
+    // ESTIMATORS: C = exp(-beta |D1 - D2| / D1), "assigning higher weights to consistent regions and lower weights
+    // to highly inconsistent areas". window._returnConfidence below makes the field; this consumes it. A scalar
+    // behaves exactly as before, asserted against a constant field in harness/s53_lambda_test.js.
+    const lamArr = (o.lam && o.lam.length === N) ? o.lam : null;
+    const lam = (anchor && !lamArr && typeof o.lam === 'number') ? o.lam : (anchor ? 1 : 0);
     const iters = o.iters || 600, omega = o.omega || 1.9, tol = o.tol || 1e-7;
     const d = new Float64Array(N);
     // start from the boundary data everywhere: outside the band it IS the answer, inside it is a sane seed
@@ -10759,8 +10804,9 @@ window._screenedPoissonBand = function (o) {
                 if (x < pw - 1) { nb += d[i + 1]; c++; }
                 if (y > 0) { nb += d[i - pw]; c++; }
                 if (y < ph - 1) { nb += d[i + pw]; c++; }
-                const num = nb - div[i] + (lam > 0 && anchor ? lam * anchor[i] : 0);
-                const den = (c || 1) + (lam > 0 && anchor ? lam : 0);
+                const li = lamArr ? lamArr[i] : lam;
+                const num = nb - div[i] + (li > 0 && anchor ? li * anchor[i] : 0);
+                const den = (c || 1) + (li > 0 && anchor ? li : 0);
                 const nv = num / den, dv = omega * (nv - d[i]);
                 d[i] += dv;
                 const ad = dv < 0 ? -dv : dv; if (ad > resid) resid = ad;
@@ -10868,10 +10914,14 @@ window._importPlaneReturn = function (d) {
                                           stats: sh.shiftStats };
         }
         const gxU = (d.gx && d.gx.length === N) ? d.gx : null, gyU = (d.gy && d.gy.length === N) ? d.gy : null;
-        const lam = (typeof d.lam === 'number') ? d.lam : 1;
+        // lam is a number, or a PER-TEXEL FIELD of length N (see _screenedPoissonBand / _returnConfidence). A field
+        // also makes the degenerate branch below wrong to take, because with a varying lam there IS something for a
+        // solve to do: the low-confidence texels must be pulled toward the rim while the confident ones hold.
+        const lamF = (d.lam && d.lam.length === N) ? d.lam : null;
+        const lam = lamF || ((typeof d.lam === 'number') ? d.lam : 1);
         const t0 = Date.now();
         let sol;
-        if (anchor && !gxU && !gyU && !d.forceSolve) {
+        if (anchor && !gxU && !gyU && !d.forceSolve && !lamF) {
             // THE DEGENERATE CASE, AND IT HAD TO BE WRITTEN OUT. With an anchor but no gradients the guidance field is
             // zero, so the screened solve is a LAPLACE problem: at lam = 0 it discards the return entirely and returns a
             // harmonic interpolation of the rim, and at any finite lam it drags the return toward that membrane. The
@@ -10882,7 +10932,10 @@ window._importPlaneReturn = function (d) {
             sol = { d: dOut, iters: 0, resid: 0, n: nB };
         } else sol = window._screenedPoissonBand({ pw, ph, band, bc, gx: gxU, gy: gyU, anchor, lam });
         st.solve = { iters: sol.iters, resid: +sol.resid.toExponential(2), n: sol.n, ms: Date.now() - t0,
-                     form: (anchor && (gxU || gyU)) ? 'screened (both), lam ' + lam : (anchor ? 'absolute + per-component shift, no solve (the degenerate form)' : 'pure gradient (lam 0)') };
+                     form: (anchor && (gxU || gyU)) ? ('screened (both), lam ' + (lamF ? lamFDesc(lamF) : lam))
+                           : (anchor ? (lamF ? 'absolute, per-texel lam ' + lamFDesc(lamF) + ' (solved, not the degenerate form)'
+                                             : 'absolute + per-component shift, no solve (the degenerate form)')
+                                     : 'pure gradient (lam 0)') };
         let mx = 0, sum = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(sol.d[i] - bc[i]); if (dd > mx) mx = dd; sum += dd; }
         st.change = { maxD: +mx.toFixed(5), meanD: +(sum / nB).toFixed(5) };
         // the seam: the returned field against the observed depth across the band's outer boundary. Zero by construction —
