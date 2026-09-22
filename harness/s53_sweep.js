@@ -27,6 +27,11 @@ const OUT = process.env.OUT || path.join(H, 'shots', 's53_sweep', TAG);
 const SWEEP = process.env.SWEEP || 'h';          // h: 0 -> +1 horizontal   d: 0 -> (+1,-1) diagonal
 const N = parseInt(process.env.N || '21', 10);   // frames, inclusive of rest
 const FLAGS = process.env.FLAGS ? JSON.parse(process.env.FLAGS) : {};
+// Viewport. The renderer here is SwiftShader on four cores and a frame at the envelope edge costs minutes at
+// 912x513, which makes a six-arm sweep a multi-hour job. Every arm renders at the SAME size and the metrics are
+// comparisons between arms, so dropping the viewport costs resolution in the absolute numbers and nothing in the
+// ordering. Stated rather than silently chosen.
+const VW = parseInt(process.env.VW || '608', 10), VH = parseInt(process.env.VH || '342', 10);
 
 // The path. Frame 0 is always rest, so every arm starts from the same picture and the curve reads as "how fast does
 // this degrade as the viewer moves", which is the question the envelope poses.
@@ -42,11 +47,24 @@ function pathOf(kind, n) {
 
 (async () => {
     fs.mkdirSync(OUT, { recursive: true });
+    // DEPTH/COLOR swap, as harness/s51_label.js does it: the page reads defaultImg*.png from the harness directory,
+    // so an alternative depth map (R8 item 4's 2x run) becomes just another arm of this same instrument, measured
+    // the same way. Restored on exit so the next arm starts from the shipped pair.
+    const WT2 = path.resolve(H, '..');
+    if (process.env.DEPTH) fs.copyFileSync(path.resolve(WT2, process.env.DEPTH), path.join(H, 'defaultImgDepth.png'));
+    if (process.env.COLOR) fs.copyFileSync(path.resolve(WT2, process.env.COLOR), path.join(H, 'defaultImgColor.png'));
+    if (process.env.DEPTH || process.env.COLOR) {
+        console.log('source swap: depth=' + (process.env.DEPTH || 'shipped') + ' colour=' + (process.env.COLOR || 'shipped'));
+        process.on('exit', () => { try {
+            fs.copyFileSync(path.join(WT2, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png'));
+            fs.copyFileSync(path.join(WT2, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png'));
+        } catch (e) {} });
+    }
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 1500));
     const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell', headless: true,
         args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
-    const page = await browser.newPage({ viewport: { width: 912, height: 513 } });
+    const page = await browser.newPage({ viewport: { width: VW, height: VH } });
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 220)));
     page.on('console', m => { const t = m.text(); if (/\[S51\]|\[Sprint 25\]|\[S52\]|FAILED/.test(t)) console.log('  [page] ' + t.slice(0, 260)); });
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
