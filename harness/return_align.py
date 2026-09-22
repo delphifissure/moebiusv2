@@ -28,6 +28,29 @@ return than on a sharp one, regardless of whether the pair is truly aligned. Rea
 calibration line this script prints (the same measurement on the visible plate, where colour and depth are both
 observed and therefore aligned by construction), and read the ratio alongside it, never the raw NCC alone.
 
+THE RIM CONFOUND, FOUND 2026-09-22 AND FIXED HERE, WITH THE MEASUREMENT THAT FOUND IT.
+Bornemann & Maerz (J. Math. Imaging Vis. 28, 2007) S5 "Boundary Effects": any filter run near a fill front
+without normalising by the validity mask treats the unfilled side as content and turns the region's own boundary
+into a SPURIOUS EDGE -- "in general, this makes the boundary a spurious edge, aligning the coherence flow
+tangentially to it". sobel() below is a central difference, so at a band texel one pixel inside the rim its
+support reaches onto the plate and carries the rim step. return_grad.py measured that step at median |g| 0.0828
+in d. The colour has an edge at the same place (the occluder silhouette). So both fields shared a large,
+correlated, spurious edge on a one-texel ring, and the NCC was reading it as alignment.
+
+Measured on the troll bundle (band 39.9%), scoring on the band eroded by k texels:
+
+  k=0 (as shipped) 0.4006      k=1 0.1454      k=2 0.1324      k=3 0.1322      k=5 0.1294
+
+The score falls 64% at k=1 and is flat thereafter -- exactly the signature of a one-texel ring, which is 9.5% of
+the band and carries depth edges 5.9x stronger than the band's interior (mean 0.1433 against 0.0243). Worse, the
+VERDICT was resting on it: score-vs-shifted margin +0.2178 as shipped, +0.0020 once the ring is excluded. The
+test reported a strong alignment; almost all of it was the rim, and on the band proper the pair is not
+distinguishable from a displaced copy of itself.
+
+So the band is eroded by one texel before scoring, and BOTH numbers are printed -- the honest one and the
+shipped one -- so the size of the old defect stays visible instead of being quietly corrected away. No published
+conclusion rested on this instrument (it is cited descriptively in S53 only), so nothing is retracted.
+
 WHAT IS MEASURED. On the band, the normalised cross-correlation between the colour's edge magnitude and the
 depth's edge magnitude. A real surface boundary shows in both: the depth steps and the colour changes. The number
 alone means little -- natural images have texture edges with no depth step at all, so even a perfect pair scores
@@ -68,6 +91,15 @@ def edges_of_colour(rgb):
     return sobel(lum)
 
 
+def erode1(mask):
+    """Drop the one-texel ring whose sobel support reaches across the rim. See THE RIM CONFOUND above:
+    without this the score is 2.8x higher and the verdict rests almost entirely on the rim step."""
+    out = mask.copy()
+    out[1:, :] &= mask[:-1, :]; out[:-1, :] &= mask[1:, :]
+    out[:, 1:] &= mask[:, :-1]; out[:, :-1] &= mask[:, 1:]
+    return out
+
+
 def main(colour_path, depth_path):
     z = zipfile.ZipFile(BUNDLE)
     m = lambda n: np.array(Image.open(io.BytesIO(z.read(n))).convert('L'))
@@ -84,23 +116,31 @@ def main(colour_path, depth_path):
     assert col.shape[:2] == band.shape and dep.shape == band.shape
 
     ec, ed = edges_of_colour(col), sobel(dep)
-    print('colour %s   depth %s   band %d px' % (os.path.basename(colour_path), dname, band.sum()))
-    score = ncc(ec, ed, band)
+    inner = erode1(band)          # the honest mask: no sobel support crosses the rim
+    print('colour %s   depth %s   band %d px, scored on %d (%.1f%% dropped as the rim ring)'
+          % (os.path.basename(colour_path), dname, band.sum(), inner.sum(),
+             100.0 * (band.sum() - inner.sum()) / max(band.sum(), 1)))
 
-    # control 1: the depth edges shifted. An aligned pair must beat a displaced copy of itself.
-    sh = []
-    for k in (2, 4, 8):
-        for ax in (0, 1):
-            sh.append(ncc(ec, np.roll(ed, k, axis=ax), band))
-            sh.append(ncc(ec, np.roll(ed, -k, axis=ax), band))
-    shifted = float(np.mean(sh))
-    # control 2: the depth edge magnitudes permuted inside the band. The floor.
-    perm = ed.copy(); v = perm[band].copy(); RNG.shuffle(v); perm[band] = v
-    shuffled = ncc(ec, perm, band)
+    def three(mask):
+        s = ncc(ec, ed, mask)
+        # control 1: the depth edges shifted. An aligned pair must beat a displaced copy of itself.
+        sh = []
+        for k in (2, 4, 8):
+            for ax in (0, 1):
+                sh.append(ncc(ec, np.roll(ed, k, axis=ax), mask))
+                sh.append(ncc(ec, np.roll(ed, -k, axis=ax), mask))
+        # control 2: the depth edge magnitudes permuted inside the mask. The floor.
+        perm = ed.copy(); v = perm[mask].copy(); RNG.shuffle(v); perm[mask] = v
+        return s, float(np.mean(sh)), ncc(ec, perm, mask)
+
+    score, shifted, shuffled = three(inner)
+    rimscore, rimshift, _ = three(band)
 
     print('  NCC(colour edges, depth edges) on the band   %.4f' % score)
     print('  the same with the depth edges shifted 2-8 px %.4f   (an aligned pair must beat this)' % shifted)
     print('  the same with the depth edges shuffled       %.4f   (the floor: no relationship)' % shuffled)
+    print('  [rim ring INCLUDED, the pre-2026-09-22 number: %.4f, margin %+.4f -- see THE RIM CONFOUND]'
+          % (rimscore, rimscore - rimshift))
     margin = score - shifted
     ratio = score / shifted if shifted > 1e-9 else float('inf')
     print('  margin over the shifted control              %+.4f   (ratio %.2fx)' % (margin, ratio))
