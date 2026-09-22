@@ -7,3 +7,5 @@ harness/shots/
 harness/objlayers_demo/_ids/
 harness/vendor/ort
 harness/vendor/sam2
+__pycache__/
+*.pyc
