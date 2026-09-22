@@ -66,7 +66,7 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 400; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 1000)); }
 
-    const res = await page.evaluate(([LAM, SWEEPS]) => {
+    const res = await page.evaluate(([LAM, SWEEPS, RS]) => {
         const sz = window._qbSize; if (!sz) return { error: 'no bake' };
         const pw = sz.pw, ph = sz.ph, N = pw * ph;
         const dQ = window._qbDQ, ff = window._geoFarField, axis = window._geoFarAxis, axV = window._geoFarAxV,
@@ -140,6 +140,11 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
         // the uncertainty is in the candidate's own units (disparity), so it is priced by converting BOTH ends
         const dataPx = (i, l) => { if (!free[i]) return 0; const s = axS[2 * i + l]; if (!(s >= 0)) return 1e6;
             const v = axV[2 * i + l]; return Math.abs(sOf(dOfDisp(v + s, i)) - sOf(dOfDisp(v, i))) * sH; };
+        // THE ENERGY, so a search can be compared to another search rather than to a table of classes
+        const energy = (lb) => { let e = 0;
+            for (let k = 0; k < pv.length; k++) { const i = pv[k]; e += wallV(valAt(i, lb[i]), valAt(i + pw, lb[i + pw])); }
+            for (let k = 0; k < phz.length; k++) { const i = phz[k]; e += wallH(valAt(i, lb[i]), valAt(i + 1, lb[i + 1])); }
+            return e; };
         const lamInf = !isFinite(LAM);
         const cost = (i, l) => {
             const x = i % pw, y = (i - x) / pw, v = valAt(i, l);
@@ -153,35 +158,79 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
         };
         const ffD = new Float64Array(N); for (let i = 0; i < N; i++) ffD[i] = ff[i];
         const before = score(ffD);
-        // ICM, red-black so a sweep is order-independent within a colour
+        // ICM, red-black so a sweep is order-independent within a colour. THE ORACLE BOUND SAID THE LABEL SET HOLDS AN
+        // 80.7 % ARTEFACT REDUCTION AND GREEDY DESCENT FROM THE LAW'S SEED FOUND 33 %, so the search is the limitation
+        // and not the representation. Restarts: the law's own choice, then all-row, all-column, and random seeds; keep
+        // the lowest energy. Cheap, and it separates "a weak optimiser" from "a local optimum that is the answer".
         let changed = 0, sweeps = 0;
-        for (let sw = 0; sw < SWEEPS; sw++) {
-            let ch2 = 0;
-            for (let par = 0; par < 2; par++)
-                for (let y = 0; y < ph; y++) for (let x = ((y & 1) ^ par); x < pw; x += 2) {
-                    const i = y * pw + x; if (!free[i]) continue;
-                    const c0 = cost(i, 0), c1 = cost(i, 1);
-                    const nl = (c1 < c0) ? 1 : 0;
-                    if (nl !== lab[i]) { lab[i] = nl; ch2++; }
-                }
-            sweeps = sw + 1; changed = ch2;
-            if (!ch2) break;
+        const RESTARTS = +(RS || 1);
+        const runICM = () => { let ch2 = 0, sw = 0;
+            for (sw = 0; sw < SWEEPS; sw++) { ch2 = 0;
+                for (let par = 0; par < 2; par++)
+                    for (let y = 0; y < ph; y++) for (let x = ((y & 1) ^ par); x < pw; x += 2) {
+                        const i = y * pw + x; if (!free[i]) continue;
+                        const c0 = cost(i, 0), c1 = cost(i, 1);
+                        const nl = (c1 < c0) ? 1 : 0;
+                        if (nl !== lab[i]) { lab[i] = nl; ch2++; }
+                    }
+                if (!ch2) break; }
+            return { sw: sw + 1, ch: ch2 }; };
+        let bestLab = null, bestE = Infinity; const seedLog = [];
+        let rs = 1; for (let r = 0; r < RESTARTS; r++) {
+            if (r === 0) { for (let i = 0; i < N; i++) lab[i] = free[i] ? (axis[i] === 2 ? 1 : 0) : 0; }
+            else if (r === 1) { for (let i = 0; i < N; i++) lab[i] = 0; }
+            else if (r === 2) { for (let i = 0; i < N; i++) lab[i] = free[i] ? 1 : 0; }
+            else if (r === 3) {
+                // THE ORACLE-VOTE SEED. Each free texel takes the label its own pairs prefer, counted over the four
+                // neighbours with the neighbour held at the law's choice. If the oracle's per-pair optima are mutually
+                // consistent this lands in a much better basin; if they conflict, the bound is loose and ICM's answer
+                // is near the truth. This distinguishes "hard landscape" from "loose bound" without a max-flow.
+                const seed0 = new Uint8Array(N); for (let i = 0; i < N; i++) seed0[i] = free[i] ? (axis[i] === 2 ? 1 : 0) : 0;
+                for (let i = 0; i < N; i++) { if (!free[i]) { lab[i] = 0; continue; }
+                    const x = i % pw, y = (i - x) / pw; let w0 = 0, w1 = 0;
+                    const add = (j, wf) => { if (j < 0 || !band[j]) return; const vj = valAt(j, seed0[j]);
+                        w0 += wf(cand[2 * i], vj); w1 += wf(cand[2 * i + 1], vj); };
+                    add(x > 0 ? i - 1 : -1, wallH); add(x < pw - 1 ? i + 1 : -1, wallH);
+                    add(y > 0 ? i - pw : -1, wallV); add(y < ph - 1 ? i + pw : -1, wallV);
+                    lab[i] = (w1 < w0) ? 1 : 0; }
+            }
+            else { for (let i = 0; i < N; i++) { rs = (rs * 1103515245 + 12345) & 0x7fffffff; lab[i] = free[i] ? ((rs >> 16) & 1) : 0; } }
+            const rr = runICM(); const e = energy(lab);
+            seedLog.push({ seed: r === 0 ? 'law' : r === 1 ? 'all-row' : r === 2 ? 'all-col' : r === 3 ? 'ORACLE-VOTE' : 'random', sweeps: rr.sw, energy: Math.round(e) });
+            if (e < bestE) { bestE = e; bestLab = lab.slice(); }
+            sweeps = rr.sw; changed = rr.ch;
         }
+        lab.set(bestLab);
         const after = new Float64Array(N); for (let i = 0; i < N; i++) after[i] = valAt(i, lab[i]);
         const aft = score(after);
+        // ---- THE ORACLE BOUND: is the LABEL SET capable of the fix, independently of the optimiser? ----
+        // For each visible bend, take the best of the four label combinations for that pair ALONE, ignoring that
+        // neighbours share labels. That is a strict upper bound on what ANY labelling could achieve -- a perfect
+        // optimiser included -- so if it is small the label set is proven insufficient and no better solver helps.
+        const oracle = { wall: [0, 0, 0, 0, 0], best: [0, 0, 0, 0, 0] };
+        const pairOracle = (i, j, cls, wf) => {
+            const li = free[i] ? 2 : 1, lj = free[j] ? 2 : 1;
+            let bw = Infinity;
+            for (let a = 0; a < li; a++) for (let b = 0; b < lj; b++) bw = Math.min(bw, wf(valAt(i, a), valAt(j, b)));
+            const cur = wf(ffD[i], ffD[j]);
+            if (cur > VISIBLE) { oracle.wall[cls] += cur; oracle.best[cls] += Math.min(bw, cur); }
+        };
+        for (let k = 0; k < pv.length; k++) pairOracle(pv[k], pv[k] + pw, cv[k], wallV);
+        for (let k = 0; k < phz.length; k++) pairOracle(phz[k], phz[k] + 1, ch[k], wallH);
         let flipped = 0; for (let i = 0; i < N; i++) if (free[i] && lab[i] !== (axis[i] === 2 ? 1 : 0)) flipped++;
         // how far the field moved, in d and in screen px, so "it smoothed everything flat" is checkable
         let mx = 0, sum = 0, n = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(after[i] - ff[i]); if (dd > mx) mx = dd; sum += dd; n++; }
         return { pw, ph, nBand, nFree, pairsV: pv.length, pairsH: phz.length, sweeps, lastChanged: changed, flipped,
-                 seedErr, before, after: aft, moved: { maxD: mx, meanD: sum / Math.max(n, 1) },
+                 seedErr, seedLog, before, after: aft, oracle, moved: { maxD: mx, meanD: sum / Math.max(n, 1) },
                  law: { exH: L.exH, exV: L.exV, pxPerWorldScreen: L.pxPerWorldScreen, D: L.D } };
-    }, [process.env.LAMBDA === 'inf' || !process.env.LAMBDA ? Infinity : +process.env.LAMBDA, +(process.env.SWEEPS || 40)]);
+    }, [process.env.LAMBDA === 'inf' || !process.env.LAMBDA ? Infinity : +process.env.LAMBDA, +(process.env.SWEEPS || 40), +(process.env.RESTARTS || 1)]);
 
     if (res.error) { console.log('FAILED: ' + res.error); }
     else {
         const f = (o) => o.wall.map(v => v.toFixed(0));
         console.log('\nplate ' + res.pw + 'x' + res.ph + ', band ' + res.nBand + ' texels, ' + res.nFree + ' with both candidates (' +
                     (100 * res.nFree / Math.max(res.nBand, 1)).toFixed(1) + '% free), pairs ' + res.pairsV + ' v / ' + res.pairsH + ' h');
+        console.log('restarts: ' + JSON.stringify(res.seedLog));
         console.log('ICM: ' + res.sweeps + ' sweeps, ' + res.lastChanged + ' changed in the last, ' + res.flipped + ' texels relabelled (' +
                     (100 * res.flipped / Math.max(res.nFree, 1)).toFixed(1) + '% of free)');
         console.log('field moved: mean ' + res.moved.meanD.toFixed(5) + ' in d, max ' + res.moved.maxD.toFixed(4));
@@ -197,6 +246,12 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
                         '  ' + (o.wall[2].toFixed(0) + ' (' + o.count[2] + ')').padStart(18) + '  ' + (o.wall[3].toFixed(0) + ' (' + o.count[3] + ')').padStart(18) +
                         '   ' + o.total.toFixed(0));
         }
+        const o = res.oracle;
+        console.log('\n  THE ORACLE BOUND -- the best ANY labelling of this candidate set could do, per pair, ignoring');
+        console.log('  that neighbours share labels. A strict upper bound: if it is small, no better solver helps.');
+        console.log('  ' + 'class'.padEnd(8) + 'wall now'.padStart(12) + 'best possible'.padStart(16) + 'headroom'.padStart(12));
+        for (const c of [1, 2, 3]) console.log('  ' + String(c).padEnd(8) + o.wall[c].toFixed(0).padStart(12) + o.best[c].toFixed(0).padStart(16) +
+            ((100 * (1 - o.best[c] / Math.max(o.wall[c], 1e-9))).toFixed(1) + '%').padStart(12));
         const a1 = res.before.wall[1] + res.before.wall[3], a2 = res.after.wall[1] + res.after.wall[3];
         console.log('\n  ARTEFACT WALL (class 1 + 3): ' + a1.toFixed(0) + ' -> ' + a2.toFixed(0) + ' px  (' + (100 * (1 - a2 / Math.max(a1, 1e-9))).toFixed(1) + '% reduction; the bar is 50%)');
         console.log('  REAL STEP WALL (class 2):    ' + res.before.wall[2].toFixed(0) + ' -> ' + res.after.wall[2].toFixed(0) + ' px  (must survive)');

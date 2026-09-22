@@ -9042,6 +9042,50 @@ window._plugGeoBand = function (opts) {
         else if (skyOnR) for (let i = 0; i < N; i++) if (free[i] && dSky[i] < dGnd[i]) { skyClass[i] = 1; nSkyClass++; }
         window._geoSkyClass = skyOnR ? skyClass : null;
         fixedFF = new Uint8Array(N); valFF = new Float32Array(dQ);
+        // S51 / Sprint 27 (window._farLabel): CHOOSE THE AXIS CONSISTENTLY ACROSS LINES, with the visible wall as the
+        // cost. The law picks each texel's row-or-column continuation independently, which is why adjacent texels
+        // disagree — S33 measured 74 % of the troll's visible streak LENGTH as the field disagreeing with itself. This
+        // re-chooses among the candidates the law already computed, minimising the wall each choice draws against its
+        // neighbours in SCREEN PIXELS AT THE RIM (S48's field), by red-black ICM seeded at the law's own answer.
+        //
+        // MEASURED BEFORE BEING BUILT (S51, troll): artefact wall (S33 classes 1+3) 292 801 -> 194 819 screen px,
+        // -33.5 %, against a bar of 50 % — so this MISSES the bar and is off by default. What it does buy is the long
+        // walls: class 3, the axis arbitration flipping between neighbours, HALVES (179 081 -> 87 609). Class 1, the
+        // fine hatching, barely moves. Five structurally different seeds converge within a few per cent and lambda is
+        // inert from 0.25 to infinity, so 33 % is close to what this construction can do rather than a weak search.
+        // Kept behind a flag so the screen can judge whether half the long streaks is worth the 11 % of real-step wall
+        // it also costs.
+        if (planeFS && window._farLabel && planeFS.farAxV && planeFS.farField) {
+            try {
+                const t0L = Date.now(); const rlL = bgRimLawFor(pw, ph);
+                const axV = planeFS.farAxV, ffL = planeFS.farField, axisL = planeFS.farAxis;
+                const freeL = new Uint8Array(N); let nF = 0;
+                for (let i = 0; i < N; i++) if (free[i] && axV[2 * i] >= 0 && axV[2 * i + 1] >= 0) { freeL[i] = 1; nF++; }
+                // the candidates are DISPARITY; convert exactly as the law does, bisection then the visible-depth clamp
+                const dOf = (v, i) => { let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rlL.dispAt(md) < v) lo = md; else hi = md; } return Math.min(dQ[i], 0.5 * (lo + hi)); };
+                const cd = new Float64Array(2 * N);
+                for (let i = 0; i < N; i++) if (freeL[i]) { cd[2 * i] = dOf(axV[2 * i], i); cd[2 * i + 1] = dOf(axV[2 * i + 1], i); }
+                const LL = window._revealLaw(pw, ph);
+                const sOfL = (d) => { const Z = -window._revealZofD(d, LL); return Z / (LL.D + Z); };
+                const sHL = LL.exH * LL.pxPerWorldScreen, sVL = LL.exV * LL.pxPerWorldScreen;
+                const vAt = (i, l) => freeL[i] ? cd[2 * i + l] : ffL[i];
+                const labL = new Uint8Array(N);
+                for (let i = 0; i < N; i++) labL[i] = freeL[i] ? (axisL[i] === 2 ? 1 : 0) : 0;
+                for (let sw = 0; sw < 40; sw++) { let ch = 0;
+                    for (let par = 0; par < 2; par++) for (let y = 0; y < ph; y++) for (let x = ((y & 1) ^ par); x < pw; x += 2) {
+                        const i = y * pw + x; if (!freeL[i]) continue;
+                        let c0 = 0, c1 = 0;
+                        const acc = (j, sc) => { if (j < 0 || !free[j]) return; const vj = vAt(j, labL[j]), sj = sOfL(vj);
+                            c0 += Math.abs(sOfL(cd[2 * i]) - sj) * sc; c1 += Math.abs(sOfL(cd[2 * i + 1]) - sj) * sc; };
+                        acc(x > 0 ? i - 1 : -1, sHL); acc(x < pw - 1 ? i + 1 : -1, sHL);
+                        acc(y > 0 ? i - pw : -1, sVL); acc(y < ph - 1 ? i + pw : -1, sVL);
+                        const nl = (c1 < c0) ? 1 : 0; if (nl !== labL[i]) { labL[i] = nl; ch++; } }
+                    if (!ch) break; }
+                let nRe = 0; for (let i = 0; i < N; i++) if (freeL[i] && labL[i] !== (axisL[i] === 2 ? 1 : 0)) { ffL[i] = cd[2 * i + labL[i]]; axisL[i] = labL[i] ? 2 : 1; nRe++; }
+                console.log('[S51] cross-line axis labelling: ' + nRe + ' of ' + nF + ' free texels relabelled (' +
+                            (100 * nRe / Math.max(nF, 1)).toFixed(1) + '%), ' + (Date.now() - t0L) + 'ms');
+            } catch (eL) { console.warn('[S51] labelling failed, the law\'s own choice stands:', eL); }
+        }
         if (planeFS) {   // S3: no membrane — every texel is a boundary value: its plane far side where free, itself elsewhere
             for (let i = 0; i < N; i++) { fixedFF[i] = 1; if (free[i]) valFF[i] = planeFS.farField[i]; }
             window._geoFarKind = planeFS.farKind; window._geoFarAxis = planeFS.farAxis;
