@@ -8931,6 +8931,7 @@ window._plugGeoBand = function (opts) {
     // from the shift law, the resolution and the envelope.
     let fixedFF = rim, nReach = 0, nEdgeU = 0, ffNeumann = null, valFF = null, nSkyClass = 0, planeFS = null;
     window._geoFarKind = null; window._geoFarAxis = null; window._geoHorizon = null; window._geoFarRim = null; window._geoFarField2 = null; window._geoFarRim2 = null; window._geoStepRims = null; window._geoSelfMirror = null;
+    window._geoFarConf = null; window._geoFarCandA = null; window._geoFarCandB = null; window._geoFarCandBoth = null;   // S53: the per-texel lambda and the two candidates it comes from
     if (bgRimLawOn()) {
         const rl = bgRimLawFor(pw, ph), lutR = bgShiftLUTFor(pw, ph), aspR = bgEnvAspect();
         const skyOnR = bgSkyInfOn(), sqR = bgSkyQ();
@@ -9098,6 +9099,53 @@ window._plugGeoBand = function (opts) {
             window._geoGround = planeFS.ground ? { a: planeFS.ground.a, b: planeFS.ground.b, c: planeFS.ground.c } : null; window._geoGroundTex = planeFS.groundTex; window._geoGroundCol = planeFS.groundCol;   // S12
             window._geoCeil = planeFS.ceil ? { a: planeFS.ceil.a, b: planeFS.ceil.b, c: planeFS.ceil.c, nRuns: planeFS.ceil.nRuns, nPicks: planeFS.ceil.nPicks } : null; window._geoCeilTex = planeFS.ceilTex || null; window._geoCeilCol = planeFS.ceilCol || null;   // S16 audit: the ground plane (disparity = a + b x + c y) and its texels/columns
             { const rlZ = bgRimLawFor(pw, ph); const lut = new Float32Array(1025); for (let k = 0; k <= 1024; k++) lut[k] = rlZ.zeAt(k / 1024); window._geoZeLut = lut; window._geoRimT = rlZ.t; }
+            // THE FREE SECOND ESTIMATE, MADE INTO A CONFIDENCE (2503.20211 Eq.9-11; see window._returnConfidence).
+            // farAxV already holds BOTH continuation candidates per texel -- the row one and the column one. The law
+            // picks one of them and throws the other away; their disagreement is a second opinion that costs nothing
+            // and, unlike _geoFarAxS, it is not derived inside a single law, so it can see that law being WRONG and
+            // not merely imprecise. Where a texel has only one valid candidate there is no second opinion, so the
+            // confidence stays at lamMax -- today's behaviour exactly -- rather than inventing a doubt; the count of
+            // those texels is reported so the coverage of this signal is never assumed.
+            try {
+                const axV = planeFS.farAxV;
+                if (axV && axV.length >= 2 * N) {
+                    const rlC = bgRimLawFor(pw, ph);
+                    const dOfC = (v, i) => { let lo = 0, hi = 1; for (let it = 0; it < 24; it++) { const md = 0.5 * (lo + hi); if (rlC.dispAt(md) < v) lo = md; else hi = md; } return Math.min(dQ[i], 0.5 * (lo + hi)); };
+                    const ca = new Float32Array(N), cb = new Float32Array(N), both = new Uint8Array(N);
+                    let nBoth = 0;
+                    for (let i = 0; i < N; i++) {
+                        if (!free[i] || axV[2 * i] < 0 || axV[2 * i + 1] < 0) { ca[i] = cb[i] = valFF[i]; continue; }
+                        ca[i] = dOfC(axV[2 * i], i); cb[i] = dOfC(axV[2 * i + 1], i); both[i] = 1; nBoth++;
+                    }
+                    window._geoFarCandA = ca; window._geoFarCandB = cb; window._geoFarCandBoth = both;
+                    // THE PAPER'S RELATIVE FORM DOES NOT TRANSFER, AND THE FIRST RUN PROVED IT. 2503.20211 divides by
+                    // D_syn, which is metric depth -- a large number -- so |D1-D2|/D1 is a modest relative error. Our
+                    // d is NORMALISED DISPARITY and the far field sits near zero (band median 0.069), so the same
+                    // division explodes: with beta 8 the field came out at median lambda 0.004, p90 0.41, 92% of
+                    // texels below 0.5. That is not a confidence map, it is "trust nothing".
+                    //
+                    // The scale this project already owns is S48's REVEAL FIELD: it converts a depth disagreement
+                    // into the SCREEN PIXELS the two answers differ by at the rim, which is exactly what "do these
+                    // two candidates matter" means here, and it is the same unit Sprint 26's cliff tolerance uses.
+                    // So the confidence is exp(-px / T): a disagreement too small to see is full confidence, and T
+                    // is a screen-pixel tolerance rather than an opaque beta. Troll reveal percentiles for scale:
+                    // p50 0.116 px, p90 0.544, p99 4.641.
+                    const T = (typeof window._confTolPx === 'number') ? window._confTolPx : 1.0;
+                    const LC = window._revealLaw(pw, ph);
+                    const sOfC = (v) => { const Z = -window._revealZofD(v, LC); return Z / (LC.D + Z); };
+                    const sMax = Math.max(LC.exH, LC.exV) * LC.pxPerWorldScreen;
+                    const conf = new Float32Array(N);
+                    for (let i = 0; i < N; i++) conf[i] = both[i] ? Math.exp(-Math.abs(sOfC(ca[i]) - sOfC(cb[i])) * sMax / T) : 1;
+                    window._geoFarConf = conf;
+                    window._geoFarConfPx = (() => { const a2 = new Float32Array(N); for (let i = 0; i < N; i++) a2[i] = both[i] ? Math.abs(sOfC(ca[i]) - sOfC(cb[i])) * sMax : 0; return a2; })();
+                    for (let i = 0; i < N; i++) if (!both[i]) window._geoFarConf[i] = 1;   // no second opinion -> today's lambda
+                    let s = 0, lo = 1, n2 = 0;
+                    for (let i = 0; i < N; i++) if (both[i]) { const v = window._geoFarConf[i]; s += v; if (v < lo) lo = v; if (v < 0.5) n2++; }
+                    console.log('[S53] far-side confidence from the two axis candidates: ' + nBoth + ' of ' + N + ' texels have both (' +
+                                (100 * nBoth / N).toFixed(1) + '%), mean lambda ' + (nBoth ? (s / nBoth).toFixed(3) : 'n/a') +
+                                ', min ' + lo.toFixed(3) + ', ' + n2 + ' below 0.5; the rest keep lambda 1');
+                } else window._geoFarConf = null;
+            } catch (eC) { window._geoFarConf = null; console.warn('[S53] far-side confidence failed, lambda stays scalar:', eC); }
             // S5 SELF-OCCLUSION MIRROR (experiment): objects = 4-connected components of texels that have a far side; a texel
             // whose first layer's rim texel lies in its own component is occluding itself, and the texel mirrored across that
             // rim (the same distance into the far run) is the sample. -1 where the rim is another object or the mirror leaves it.
@@ -10917,7 +10965,16 @@ window._importPlaneReturn = function (d) {
         // lam is a number, or a PER-TEXEL FIELD of length N (see _screenedPoissonBand / _returnConfidence). A field
         // also makes the degenerate branch below wrong to take, because with a varying lam there IS something for a
         // solve to do: the low-confidence texels must be pulled toward the rim while the confident ones hold.
-        const lamF = (d.lam && d.lam.length === N) ? d.lam : null;
+        // lam: a number, a field of length N, or 'auto' -- which takes the bake's own per-texel confidence built
+        // from the two far-side candidates disagreeing (window._geoFarConf). 'auto' with no bake to draw on falls
+        // back to the scalar default and SAYS SO in st.solve.form, rather than silently behaving like lam 1.
+        let lamF = (d.lam && d.lam.length === N) ? d.lam : null;
+        let lamAuto = null;
+        if (d.lam === 'auto') {
+            const cf = window._geoFarConf;
+            if (cf && cf.length === N) { lamF = cf; lamAuto = 'from _geoFarConf'; }
+            else lamAuto = 'REQUESTED BUT UNAVAILABLE (no _geoFarConf from this bake); fell back to the scalar';
+        }
         const lam = lamF || ((typeof d.lam === 'number') ? d.lam : 1);
         const t0 = Date.now();
         let sol;
@@ -10932,8 +10989,10 @@ window._importPlaneReturn = function (d) {
             sol = { d: dOut, iters: 0, resid: 0, n: nB };
         } else sol = window._screenedPoissonBand({ pw, ph, band, bc, gx: gxU, gy: gyU, anchor, lam });
         st.solve = { iters: sol.iters, resid: +sol.resid.toExponential(2), n: sol.n, ms: Date.now() - t0,
+                     lamAuto: lamAuto || undefined,
                      form: (anchor && (gxU || gyU)) ? ('screened (both), lam ' + (lamF ? lamFDesc(lamF) : lam))
-                           : (anchor ? (lamF ? 'absolute, per-texel lam ' + lamFDesc(lamF) + ' (solved, not the degenerate form)'
+                           : (anchor ? ((lamF || d.forceSolve)
+                                             ? 'absolute, solved (lam ' + (lamF ? lamFDesc(lamF) : lam) + '), not the degenerate form'
                                              : 'absolute + per-component shift, no solve (the degenerate form)')
                                      : 'pure gradient (lam 0)') };
         let mx = 0, sum = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(sol.d[i] - bc[i]); if (dd > mx) mx = dd; sum += dd; }
