@@ -139,8 +139,13 @@ def main_scored(gtp, probe, npairs, ratio, rimpx, outp):
     if arr['ff'] is not None:
         cands['far field (shipped)'] = comp(arr['ff'])
     cands['do nothing'] = comp(obs)
-    if arr['plateF'] is not None:
-        cands['plate'] = comp(arr['plateF'][::-1])
+    # extra candidates supplied on the command line as name=path.npy, composited the same way so the comparison
+    # is like for like. 'plate' is dropped: inside the band it IS the far field, so it duplicated that column.
+    for spec in os.environ.get('EXTRA', '').split(';'):
+        if '=' in spec:
+            nm, pth = spec.split('=', 1)
+            try: cands[nm] = comp(np.load(pth).astype(np.float64))
+            except Exception as e: print('extra %s failed: %s' % (nm, e))
 
     out_ring, in_ring = rim_ring(dis, rimpx)
     # THE RIM PAIRS ARE ADJACENT TEXELS, not two texels within r of each other. A random visible neighbour inside a
