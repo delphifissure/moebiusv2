@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ramp_width import widths
 from ramp_collapse import law, visible_step, load16
 
-def collapse_colour(d, rgb, outer, inner, pn, D, step):
+def collapse_colour(d, rgb, outer, inner, pn, D, step, single_edge=True):   # single_edge False = v1, True = v2 (S61 section 7)
     disp, inv = law(outer, inner, pn, D)
     Dsp = disp(d); tol = np.abs(disp(np.minimum(1, d + step)) - disp(np.maximum(0, d - step))) + 1e-12
     best = np.full(d.shape, -1.0); newD = Dsp.copy(); stats = {'candidates': 0, 'noColourEdge': 0, 'oneSided': 0, 'collapsed': 0}
@@ -56,7 +56,7 @@ def collapse_colour(d, rgb, outer, inner, pn, D, step):
                     # ONE colour edge: an estimator blurs one boundary; real faceted geometry (exact S2: a dark one-texel
                     # rim, a sloped face, a second face) shows several colour edges inside the run -> left alone
                     others = np.delete(dC[li, a:b], ce - a)
-                    if others.size and others.max() > fl:
+                    if single_edge and others.size and others.max() > fl:
                         stats['manyColourEdges'] = stats.get('manyColourEdges', 0) + 1; i = j + 1; continue
                     L = b - a; pAm = row[a] + sA * (0.5 * (a + b) - a); pBm = row[b] - sB * (b - 0.5 * (a + b)); steep_ = abs(pAm - pBm) / L
                     inter = []
