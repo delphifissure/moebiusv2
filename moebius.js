@@ -544,7 +544,11 @@ function bgApplySourceHole() {
         gQ.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1)); tri = { kept: n / 3, dropped: drop };
     } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
     const p2 = bgLayerMesh.userData && bgLayerMesh.userData.plate2; if (p2) p2.visible = false;
-    window._qbDisocc = r.hole; window._qbSrcHole = r.hole;
+    // the SD bundle's captures, from the new hole (they held the per-line bake's): every hole texel is a placeholder to
+    // paint (class 1: no tier), the carriers are the hole, and the per-line captures with no meaning here are cleared
+    window._qbDisocc = r.hole; window._qbSrcHole = r.hole; window._qbCarrier = r.hole;
+    { const paint = new Uint8Array(N); for (let i = 0; i < N; i++) paint[i] = r.hole[i] ? 1 : 0; window._qbPlatePaint = paint; }
+    window._qbBandTier = null; window._qbBandPose = null; window._qbPlateTorn = null; window._qbPlateF2 = null; window._qbPlate2Has = null; window._qbPlateColor2 = null;
     const st = Object.assign({}, r.stats, { plateTriangles: tri, edges: window._qbEdgeSharpen || null, msTotal: Date.now() - t0 });
     window._qbSourceHole = st; console.log('[S62] source-anchored hole ' + JSON.stringify(st));
     if (typeof render === 'function') { try { render(); } catch (e) {} }
@@ -11957,6 +11961,7 @@ function exportSDBundle() {
                 const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
                 meta.plane = {
                     nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null,
+                    sourceHole: window._srcHole ? { note: 'S62: the source-anchored hole (hole depth: source). The inpaint mask is the hole itself (every texel class 1); the plate depth is the source outside it and a membrane pinned at the flat background inside; the plate colour is the source outside and the wash inside; no plate 2, no tier.', stats: window._qbSourceHole || null } : null,
                     depth: { convention: 'normalised disparity d in [0,1] (1 = near, 0 = far); the app maps d to view depth with outerVolumeDepth / innerVolumeDepth / currentNormPortalPlane (the portal depth law)', outerVolumeDepth: (typeof outerVolumeDepth === 'number') ? outerVolumeDepth : null, innerVolumeDepth: (typeof innerVolumeDepth === 'number') ? innerVolumeDepth : null, currentNormPortalPlane: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : null,
                              sourceGrid: window._qbSrcGrid ?? null, sourceNoiseSigma: window._qbSrcNoise ?? null, visibleStep: window._qbVisStep ?? null, effectiveQuantum: window._qbSrcQuantum ?? null, skyThreshold: skyOn ? sq : null },
                     envelope: { halfAngleHDeg: bgViewFadeEndDeg, halfAngleVDeg: (typeof bgViewFadeEndDegV === 'number') ? bgViewFadeEndDegV : null, aspect: bgEnvAspect(), eyeDistanceD: Dm, terrarium: [terrariumWidth, terrariumHeight] },
