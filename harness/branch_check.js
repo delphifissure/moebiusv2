@@ -9,6 +9,7 @@ const Z = 0.2, T = (deg) => Z * Math.tan(deg * Math.PI / 180);
 const POSES = [['rest', 0, 0], ['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['pitch30', 0, T(30)]];
 (async () => {
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore' }); await new Promise(r => setTimeout(r, 1500));
+    { const r = await fetch('http://localhost:8099/__root').then(x => x.text()).catch(() => ''); if (r !== H) { console.error('ABORT: port 8099 is served from ' + (r.slice(0, 80) || 'nothing') + ', not this tree (' + H + ')'); srv.kill(); process.exit(4); } }
     const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell', headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } }); const logs = [];
     page.on('console', m => { const t = m.text(); if (/\[S61\]|\[S6\] plate bake/.test(t)) logs.push(t.slice(0, 400)); });
