@@ -1,0 +1,136 @@
+"""The source-anchored hole, all in 2-D: no per-line value anywhere (user, 2026-09-23, after the S59 A/B found all three
+arms noisy: "drop per-line, and also the stopping law. This needs to work no matter what"; "naturally I want smooth
+(disocclusions never look like scraggly lines)").
+
+Reads a streak_class dump (dQ.f32 source depth, color.png, meta.json) -- NOT its band -- and writes a full-frame plate.
+
+  1. ramps     the colour-guided ramp collapse (S61, v1 'strong') turns DA3's blurred silhouettes into one-texel cliffs
+               at the image's own edge, so a silhouette is one rim, not a staircase of small ones
+  2. rims      every 4-neighbour pair, rows AND columns, torn by the rim law's ratio test on eye distance
+               (t = 1 + (hfov/pw)/tan 2 deg, bgRimLawFor); the nearer texel is the rim's near side
+  3. the hole  a rim reveals, at the envelope's edge, the app's own shift difference of its two sides:
+               R = s(near) - s(far) texels, s(d) = D tan(45) z/(D-z) px/m (bgShiftLUTFor's fwd table); vertically
+               R tan30/tan45 (the rectangular envelope, bgEnvAspect). The reach spreads from the rim through the
+               occluder only -- texels in front of the background that rim reveals by more than two visible steps
+               (S35 s47) -- in the envelope's box norm, plus the same-depth pinholes it encloses (S61 s10). Its outline
+               is the silhouette swept by the envelope, clipped to the object: no scanline anywhere.
+  4. depth     a membrane on the hole, pinned at every neighbour outside it that lies behind the adjacent hole texel by
+               more than two steps (the background), free elsewhere (the occluder side); a hole texel not behind its
+               own source depth by two steps is clamped there and counted; a component with no pin is flat at its
+               farthest border depth (counted)
+  5. wash      the same membrane per RGB channel, pinned at the same texels to their own source colour
+  Outside the hole the plate is the source depth (ramps collapsed, as the app draws it with ramps = strong) and the
+  source colour.
+
+  python3 srcfill.py <dump dir> <out dir>
+Writes plateD.f32 (source rows), washD.png, hole.u8, stats.json.
+"""
+import sys, os, json, time
+import numpy as np
+from PIL import Image
+from scipy import sparse
+from scipy.ndimage import label, binary_fill_holes, binary_dilation
+import pyamg
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ramp_colour import collapse_colour
+from ramp_collapse import rim_t, TW, TH
+
+D0, OUT = sys.argv[1], sys.argv[2]; os.makedirs(OUT, exist_ok=True); t0 = time.time()
+m = json.load(open(os.path.join(D0, 'meta.json'))); pw, ph = m['pw'], m['ph']; N = pw * ph; step = m['quantum']
+outer, inner, pn, D = m['outer'], m['inner'], m['pn'], m['D']
+src = np.fromfile(os.path.join(D0, 'dQ.f32'), np.float32).astype(np.float64).reshape(ph, pw)
+rgb = np.asarray(Image.open(os.path.join(D0, 'color.png')).convert('RGB')).astype(np.float64)
+st = {'pw': pw, 'ph': ph, 'step': step}
+
+# 1. ramps
+dQ, nch, _ = collapse_colour(src, rgb, outer, inner, pn, D, step, single_edge=False); st['rampTexelsCollapsed'] = int(nch)
+
+# the app's depth law and shift at the envelope's edge
+def z_of_d(d):
+    d = np.clip(d, 0, 1); s1 = d / pn; s2 = (d - pn) / (1 - pn)
+    return np.where(d < pn, -outer + outer * (s1 * s1 * (3 - 2 * s1)), inner * (s2 * s2 * (3 - 2 * s2)))
+la, fa = pw / ph, TW / TH; layerW = TW if la > fa else TH * la; ppm = pw / layerW
+ex = D * np.tan(np.radians(45)); env = np.tan(np.radians(30)) / np.tan(np.radians(45))
+z = z_of_d(dQ); ze = D - z; s = ex * z / ze * ppm                      # px at the envelope's horizontal edge
+
+# 2. rims, both axes. A silhouette DA3 blurred over several texels is a RUN of torn steps of one sign across the edge
+#    (S59 s2: 88 % of ring texels still descending three texels out); the rim is the whole run: its near side is the run's
+#    top texel and the background it reveals is the run's bottom texel (the edge's own depth profile, in both axes)
+t = rim_t(pw, ph, D); R = np.zeros((ph, pw)); F = np.full((ph, pw), np.inf); rampF = np.full((ph, pw), -np.inf)
+def runs(T):                                          # consecutive True pairs along axis 1: (row, first pair, last pair)
+    Tp = np.pad(T, ((0, 0), (1, 1))); d = np.diff(Tp.astype(np.int8), axis=1)
+    sy, sx = np.nonzero(d == 1); ey, ex_ = np.nonzero(d == -1); return sy, sx, ex_ - 1
+for ax in (0, 1):
+    V = dQ if ax == 1 else dQ.T; Z = ze if ax == 1 else ze.T; Sx = s if ax == 1 else s.T
+    torn = np.maximum(Z[:, :-1], Z[:, 1:]) / np.minimum(Z[:, :-1], Z[:, 1:]) > t
+    for down in (True, False):                        # depth falling toward higher index, or toward lower index
+        T = torn & ((V[:, :-1] > V[:, 1:]) if down else (V[:, :-1] < V[:, 1:]))
+        y, x0, x1 = runs(T)
+        nx, fx = (x0, x1 + 1) if down else (x1 + 1, x0)
+        r = Sx[y, nx] - Sx[y, fx]; f = V[y, fx]
+        ny_, nx_ = (y, nx) if ax == 1 else (nx, y)
+        o = np.argsort(r); ny_, nx_, r, f = ny_[o], nx_[o], r[o], f[o]     # larger reach written last wins
+        upd = r > R[ny_, nx_]; R[ny_[upd], nx_[upd]] = r[upd]; F[ny_[upd], nx_[upd]] = f[upd]
+        # the run's interior texels (the blur itself) belong to the hole: they stand between the object and its background
+        L = x1 - x0; ks = np.repeat(np.arange(L.size), L); off = np.arange(L.sum()) - np.repeat(np.cumsum(L) - L, L)
+        ix = x0[ks] + 1 + off; iy = y[ks]; fv = f[ks]
+        ry, rx = (iy, ix) if ax == 1 else (ix, iy); rampF[ry, rx] = np.maximum(rampF[ry, rx], fv)
+rim = R > 0; st['rimTexels'] = int(rim.sum()); st['reachMaxPx'] = round(float(R.max()), 1)
+
+# 3. the hole: what the occluder slides over. From each rim the reach spreads THROUGH the occluder only (texels in front of
+#    the background that rim reveals by more than two visible steps, S35 s47), in the envelope's box norm (a step costs
+#    1 across, 1/env down, max of the two diagonally: the rectangle |dx| <= R, |dy| <= R env, clipped to the occluder)
+Bud = np.where(rim, R, -np.inf); Fc = F.copy(); iters = 0
+moves = [(dy, dx, max(abs(dx), abs(dy) / env)) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+def sh(a, dy, dx, fill):
+    o = np.full_like(a, fill); o[max(dy, 0):ph + min(dy, 0), max(dx, 0):pw + min(dx, 0)] = a[max(-dy, 0):ph + min(-dy, 0), max(-dx, 0):pw + min(-dx, 0)]; return o
+# a move stays on one surface: the pair it crosses is joined by the rim law (the ratio test, its tolerance scaled by the
+# move's length for a diagonal), so the reach cannot leave the object through a contact with something else
+same = {}
+for dy, dx, c in moves:
+    tt = 1 + (t - 1) * np.hypot(dx, dy); zn = sh(ze, dy, dx, np.nan)
+    same[(dy, dx)] = np.maximum(zn, ze) / np.minimum(zn, ze) <= tt
+while True:
+    ch = 0
+    for dy, dx, c in moves:
+        cb = sh(Bud, dy, dx, -np.inf) - c; cf = sh(Fc, dy, dx, np.inf)
+        ok = (cb > Bud) & same[(dy, dx)] & (dQ > cf + 2 * step); n_ = int(ok.sum())
+        if n_: Bud[ok] = cb[ok]; Fc[ok] = cf[ok]; ch += n_
+    iters += 1
+    if not ch: break
+hole = (Bud >= 0) | (np.isfinite(rampF) & (dQ > rampF + 2 * step)); st['reachIters'] = iters; st['rampInHole'] = int((np.isfinite(rampF) & (dQ > rampF + 2 * step)).sum())
+enc = binary_fill_holes(hole) & ~hole; lab, n = label(enc); joined = 0
+for k in range(1, n + 1):
+    mk = lab == k; ring = binary_dilation(mk) & hole
+    if ring.any() and abs(np.median(dQ[mk]) - np.median(dQ[ring])) <= 2 * step: hole |= mk; joined += 1
+st['hole'] = int(hole.sum()); st['pinholes'] = int(n); st['pinholesJoined'] = joined
+
+# 4-5. membrane depth and wash on the hole, pinned at the background next to it
+NB = ((0, 1), (0, -1), (1, 0), (-1, 0))
+di = np.flatnonzero(hole.ravel()); M = di.size; idx = -np.ones(N, np.int64); idx[di] = np.arange(M); ys, xs = np.divmod(di, pw)
+vals4 = np.stack([dQ, rgb[..., 0], rgb[..., 1], rgb[..., 2]], -1).reshape(N, 4); dq = dQ.ravel(); hv = hole.ravel()
+rows, cols = [], []; deg = np.zeros(M); b = np.zeros((M, 4)); hasPin = np.zeros(M, bool); pinSet = np.zeros(N, bool)
+for dy, dx in NB:
+    y2, x2 = ys + dy, xs + dx; ok = (y2 >= 0) & (y2 < ph) & (x2 >= 0) & (x2 < pw); j = np.where(ok, y2 * pw + x2, 0)
+    inH = ok & hv[j]; pin = ok & ~hv[j] & (dq[j] < dq[di] - 2 * step)
+    rows.append(np.flatnonzero(inH)); cols.append(idx[j[inH]]); deg += inH + pin; b[pin] += vals4[j[pin]]; hasPin |= pin; pinSet[j[pin]] = True
+A = (sparse.diags(deg) - sparse.csr_matrix((np.ones(sum(r.size for r in rows)), (np.concatenate(rows), np.concatenate(cols))), shape=(M, M))).tocsr()
+lab, nc = label(hole); comp = lab.ravel()[di] - 1; pinned = np.zeros(nc, bool); np.logical_or.at(pinned, comp, hasPin)
+live = pinned[comp]; li = np.flatnonzero(live); A2 = A[li][:, li].tocsr(); U = np.zeros((M, 4)); res = []
+ml = pyamg.smoothed_aggregation_solver(A2)
+for ch in range(4):
+    x = ml.solve(b[li, ch], tol=1e-10, accel='cg'); U[li, ch] = x; res.append(float(np.linalg.norm(b[li, ch] - A2 @ x) / max(1e-30, np.linalg.norm(b[li, ch]))))
+for k in np.flatnonzero(~pinned):
+    mk = lab == k + 1; ring = binary_dilation(mk) & ~hole; sel = comp == k
+    U[sel] = vals4[np.flatnonzero(ring.ravel())[np.argmin(dq[ring.ravel()])]] if ring.any() else vals4[di[sel]].min(0)
+st.update({'pins': int(pinSet.sum()), 'components': int(nc), 'componentsNoPin': int((~pinned).sum()), 'texelsNoPin': int((~live).sum()), 'residual': res})
+fill = U[:, 0]; lim = dq[di] - 2 * step; bad = fill > lim; st['notBehind'] = int(bad.sum()); fill = np.where(bad, lim, fill)
+plate = dq.copy(); plate[di] = fill; plate = plate.reshape(ph, pw)      # outside the hole: the source, ramps collapsed (the app with ramps=strong draws the same)
+wash = rgb.reshape(N, 3).copy(); wash[di] = np.clip(U[:, 1:], 0, 255); wash = wash.reshape(ph, pw, 3)
+plate.astype(np.float32).tofile(os.path.join(OUT, 'plateD.f32')); hole.astype(np.uint8).tofile(os.path.join(OUT, 'hole.u8'))
+Image.fromarray(np.round(wash).astype(np.uint8)).save(os.path.join(OUT, 'washD.png'))
+w = 0
+for p1, p2, mm in ((plate[1:], plate[:-1], hole[1:] & hole[:-1]), (plate[:, 1:], plate[:, :-1], hole[:, 1:] & hole[:, :-1])):
+    w += int(((np.abs(p1 - p2) > step) & mm).sum())
+st['wallsInHole'] = w; st['secs'] = round(time.time() - t0, 1)
+json.dump(st, open(os.path.join(OUT, 'stats.json'), 'w'), indent=1); print(json.dumps(st))
