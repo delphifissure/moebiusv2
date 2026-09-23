@@ -1,0 +1,180 @@
+<title>Cleanest Hole</title>
+<!-- S59 blind review page template; sheet_ab_review.py fills DATA and publishes it with the frames. No arm letters here. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#eef0f2; --panel:#ffffff; --ink:#1b1f24; --muted:#5c6570; --line:#d3d8de;
+  --mat:#7a7f86; --chip:#e3e7eb; --chip-on:#1b1f24; --chip-on-ink:#ffffff;
+  --mark:#f2c200; --mark-ink:#1b1f24; --ok:#2f7d4f;
+  --sans:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark; --ground:#15181c; --panel:#1d2126; --ink:#e7eaee; --muted:#9aa3ad; --line:#30363d;
+  --mat:#3b4047; --chip:#262b31; --chip-on:#e7eaee; --chip-on-ink:#15181c; --mark:#ffd21f; --mark-ink:#15181c; --ok:#5cc28a;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark; --ground:#15181c; --panel:#1d2126; --ink:#e7eaee; --muted:#9aa3ad; --line:#30363d;
+  --mat:#3b4047; --chip:#262b31; --chip-on:#e7eaee; --chip-on-ink:#15181c; --mark:#ffd21f; --mark-ink:#15181c; --ok:#5cc28a;
+}
+[hidden]{display:none!important}
+body{background:var(--ground);color:var(--ink);font:15px/1.45 var(--sans);padding:0 16px}
+.wrap{max-width:1840px;margin:0 auto;padding-block:20px 40px;display:grid;gap:16px}
+header{display:grid;gap:4px}
+h1{font-size:22px;margin:0;text-wrap:balance}
+.lede{color:var(--muted);margin:0;max-width:68ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lbl{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:2px}
+button{font:inherit;color:inherit;cursor:pointer;border:1px solid var(--line);background:var(--chip);border-radius:6px;padding:6px 11px;min-height:34px}
+button[aria-pressed="true"]{background:var(--chip-on);color:var(--chip-on-ink);border-color:var(--chip-on)}
+button:focus-visible{outline:2px solid var(--mark);outline-offset:2px}
+.tab{display:inline-flex;gap:7px;align-items:center}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.dot.set{background:var(--ok)}
+.stage{background:var(--mat);border-radius:8px;padding:10px}
+.trio{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+figure{margin:0;position:relative}
+figure img{display:block;width:100%;height:auto;outline:1px solid rgba(0,0,0,.28)}
+.side{position:absolute;left:8px;top:6px;font:600 20px/1 var(--mono);color:var(--mark);text-shadow:0 1px 2px #000,0 0 6px #000}
+.flip{display:grid;gap:8px}
+.flipview{overflow:auto;max-height:78vh;cursor:pointer;-webkit-user-select:none;user-select:none}
+.flipview img{display:block;max-width:none}
+.flipview.fit img{width:100%;height:auto}
+.zoom img{image-rendering:pixelated}
+.hint{color:var(--muted);font-size:13px}
+.verdict{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px;display:grid;gap:10px}
+.verdict .q{font-weight:700}
+.vbtn{min-width:52px;font-family:var(--mono);font-weight:600}
+.vbtn[aria-pressed="true"]{background:var(--mark);color:var(--mark-ink);border-color:var(--mark)}
+.out{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.line{font:13px/1.4 var(--mono);background:var(--ground);border:1px solid var(--line);border-radius:6px;padding:8px 10px;flex:1 1 320px;overflow-x:auto;white-space:nowrap}
+.status{font-size:13px;color:var(--muted)}
+footer{color:var(--muted);font-size:12px;font-family:var(--mono);overflow-wrap:anywhere}
+@media (max-width:760px){.trio{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Which hole is cleanest?</h1>
+    <p class="lede">Three fills of the same holes, shown as L, M and R in an order drawn at random per picture. Judge the atlas for diffusion: plausible, clean depth and a plausible wash, not texture. SD paints the texture later. Pick one per picture, or “no clear difference”.</p>
+  </header>
+
+  <div class="bar">
+    <div class="group" id="tabs" role="tablist" aria-label="Picture"></div>
+  </div>
+  <div class="bar">
+    <div class="group"><span class="lbl">View</span><span id="poses" class="group"></span></div>
+    <div class="group"><span class="lbl">Layout</span>
+      <button id="mSide" aria-pressed="true">Side by side</button>
+      <button id="mFlip" aria-pressed="false">Flip in place</button>
+    </div>
+    <div class="group" id="zoomGroup" hidden><span class="lbl">Zoom</span>
+      <button id="zFit" aria-pressed="true">Fit</button>
+      <button id="z1" aria-pressed="false">1:1</button>
+      <button id="z2" aria-pressed="false">2×</button>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="trio" id="trio"></div>
+    <div class="flip" id="flip" hidden>
+      <div class="group" id="flipSides"></div>
+      <div class="flipview fit" id="flipview"><figure><img id="flipimg" alt=""><span class="side" id="flipside"></span></figure></div>
+    </div>
+  </div>
+  <p class="hint" id="hint">Keys: 1–5 or ← → change the view; F flips layout. In flip mode, tap the image or press space to go L → M → R.</p>
+
+  <section class="verdict" aria-label="Verdict">
+    <div class="q" id="q">Cleanest:</div>
+    <div class="group" id="vbtns"></div>
+    <div class="out">
+      <code class="line" id="line"></code>
+      <button id="copy">Copy</button>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const D = /*DATA*/null || {pics:[{id:'example',w:572,h:322}],poses:[['yawR42','yaw +42°']],sha:'(example)'};
+const SIDES = ['L','M','R'];
+const store = {
+  get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+const SK = 'sheetab:' + D.sha;
+const saved = store.get(SK) || {};
+const st = { pic: saved.pic || D.pics[0].id, pose: D.poses[0][0], mode: 'side', flip: 0, zoom: 'fit', v: saved.v || {} };
+const $ = id => document.getElementById(id);
+const src = (p, s, pose) => `${p}/${s}_${pose}.png`;
+
+function el(tag, attrs, text){ const e = document.createElement(tag); for (const k in attrs||{}) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+function press(btns, on){ btns.forEach(b => b.setAttribute('aria-pressed', String(b === on))); }
+
+// tabs
+const tabBtns = D.pics.map(p => { const b = el('button', {class:'tab', role:'tab'}); b.append(el('span',{class:'dot'}), el('span',{}, p.id)); b.onclick = () => { st.pic = p.id; render(); }; $('tabs').append(b); return b; });
+// poses
+const poseBtns = D.poses.map(([k, lab]) => { const b = el('button', {}, lab); b.onclick = () => { st.pose = k; render(); }; $('poses').append(b); return b; });
+// flip sides
+const flipBtns = SIDES.map((s, i) => { const b = el('button', {class:'vbtn'}, s); b.onclick = () => { st.flip = i; render(); }; $('flipSides').append(b); return b; });
+// verdict buttons
+const VOPTS = [['L','L'],['M','M'],['R','R'],['none','no clear difference']];
+const vBtns = VOPTS.map(([k, lab]) => { const b = el('button', {class:'vbtn'}, lab); b.onclick = () => { st.v[st.pic] = (st.v[st.pic] === k ? undefined : k); if (st.v[st.pic] === undefined) delete st.v[st.pic]; render(); }; $('vbtns').append(b); return [k, b]; });
+
+$('mSide').onclick = () => { st.mode = 'side'; render(); };
+$('mFlip').onclick = () => { st.mode = 'flip'; render(); };
+[['zFit','fit'],['z1','1'],['z2','2']].forEach(([id, z]) => $(id).onclick = () => { st.zoom = z; render(); });
+$('flipview').onclick = () => { st.flip = (st.flip + 1) % 3; render(); };
+
+$('copy').onclick = () => {
+  const t = $('line').textContent;
+  const done = ok => { $('status').textContent = ok ? 'Copied. Paste it back in the chat.' : 'Copy was blocked here: the line is selected, copy it by hand.'; };
+  const sel = () => { const r = document.createRange(); r.selectNodeContents($('line')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); };
+  try { navigator.clipboard.writeText(t).then(() => done(true), () => { sel(); done(false); }); } catch (e) { sel(); done(false); }
+};
+
+document.addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('input,textarea')) return;
+  const i = D.poses.findIndex(p => p[0] === st.pose);
+  if (e.key === 'ArrowRight') { st.pose = D.poses[(i + 1) % D.poses.length][0]; render(); }
+  else if (e.key === 'ArrowLeft') { st.pose = D.poses[(i - 1 + D.poses.length) % D.poses.length][0]; render(); }
+  else if (/^[1-5]$/.test(e.key) && D.poses[+e.key - 1]) { st.pose = D.poses[+e.key - 1][0]; render(); }
+  else if (e.key === 'f' || e.key === 'F') { st.mode = st.mode === 'side' ? 'flip' : 'side'; render(); }
+  else if (e.key === ' ' && st.mode === 'flip') { e.preventDefault(); st.flip = (st.flip + 1) % 3; render(); }
+});
+
+const preloaded = new Set();
+function preload(p){ if (preloaded.has(p)) return; preloaded.add(p); for (const s of SIDES) for (const [k] of D.poses) { const im = new Image(); im.src = src(p, s, k); } }
+
+function render(){
+  const P = D.pics.find(p => p.id === st.pic) || D.pics[0]; st.pic = P.id; preload(P.id);
+  tabBtns.forEach((b, i) => { b.setAttribute('aria-selected', String(D.pics[i].id === st.pic)); b.setAttribute('aria-pressed', String(D.pics[i].id === st.pic)); b.querySelector('.dot').classList.toggle('set', !!st.v[D.pics[i].id]); });
+  press(poseBtns, poseBtns[D.poses.findIndex(p => p[0] === st.pose)]);
+  press([$('mSide'), $('mFlip')], st.mode === 'side' ? $('mSide') : $('mFlip'));
+  $('trio').hidden = st.mode !== 'side'; $('flip').hidden = st.mode !== 'flip'; $('zoomGroup').hidden = st.mode !== 'flip';
+  if (st.mode === 'side') {
+    const t = $('trio'); t.textContent = '';
+    for (const s of SIDES) { const f = el('figure'); const im = el('img', {src: src(P.id, s, st.pose), alt: `${P.id}, ${s}, ${st.pose}`, loading:'eager'}); f.append(im, el('span', {class:'side'}, s)); t.append(f); }
+  } else {
+    const s = SIDES[st.flip]; press(flipBtns, flipBtns[st.flip]);
+    const im = $('flipimg'); im.src = src(P.id, s, st.pose); im.alt = `${P.id}, ${s}, ${st.pose}`; $('flipside').textContent = s;
+    const fv = $('flipview'); fv.classList.toggle('fit', st.zoom === 'fit'); fv.classList.toggle('zoom', st.zoom === '2');
+    im.style.width = st.zoom === '2' ? (2 * im.naturalWidth || 2 * P.w) + 'px' : (st.zoom === '1' ? (im.naturalWidth || P.w) + 'px' : '');
+    im.onload = () => { if (st.zoom !== 'fit') im.style.width = (st.zoom === '2' ? 2 : 1) * im.naturalWidth + 'px'; };
+    press([$('zFit'), $('z1'), $('z2')], st.zoom === 'fit' ? $('zFit') : st.zoom === '1' ? $('z1') : $('z2'));
+  }
+  $('q').textContent = `Cleanest, ${P.id}:`;
+  vBtns.forEach(([k, b]) => b.setAttribute('aria-pressed', String(st.v[P.id] === k)));
+  const parts = D.pics.map(p => `${p.id}=${st.v[p.id] || '?'}`);
+  $('line').textContent = parts.join(' ');
+  const left = D.pics.filter(p => !st.v[p.id]).map(p => p.id);
+  $('status').textContent = left.length ? `Still to judge: ${left.join(', ')}.` : 'All pictures judged. Copy the line and paste it back.';
+  store.set(SK, {pic: st.pic, v: st.v});
+}
+$('foot').textContent = `blind: sides only; key sha256 ${D.sha}`;
+render();
+</script>
