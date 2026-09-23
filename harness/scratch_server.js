@@ -2,7 +2,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const PORT = 8099;
+const PORT = +(process.env.PORT || 8099);   // PORT=... to run beside another tree's server
 const ROOT = __dirname;
 const MIME = { '.html':'text/html', '.js':'text/javascript', '.css':'text/css',
   '.png':'image/png', '.jpg':'image/jpeg', '.mp4':'video/mp4', '.xml':'application/xml',

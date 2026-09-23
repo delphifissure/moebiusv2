@@ -515,7 +515,12 @@ function bgPostBakeFill() {
 // inside), the plate's triangle index (rebuilt on the full grid with the rim law's own rule on the NEW plate, S2b.4), and
 // hides plate 2 (the per-line law's second layer). The captures (_qbPlateF, _qbPlateColor, _qbDisocc) follow, so the SD
 // bundle carries what is on screen.
+// The solve (3-25 s) runs in a Web Worker so the page keeps drawing; the result is applied when it arrives, unless a newer
+// bake has started since. window._qbSourceHoleBusy is the promise while it runs (the export waits on it), and
+// window._qbSourceHole (the stats) is set only once the new plate is on screen. No Worker -> the main thread, as before.
 function bgApplySourceHole() {
+    const seq = window._qbSourceHoleSeq = (window._qbSourceHoleSeq || 0) + 1;   // every bake bumps it: a late result from an older bake is dropped
+    window._qbSourceHole = null;
     if (!window._srcHole) return null;
     if (!(bgFarRuleOn() && window._qbSize && window._qbDQ && typeof bgLayerMesh !== 'undefined' && bgLayerMesh)) { console.warn('[S62] source hole: no plane bake on screen'); return null; }
     const t0 = Date.now(); const { pw, ph } = window._qbSize, N = pw * ph, dQ = window._qbDQ;
@@ -525,7 +530,56 @@ function bgApplySourceHole() {
     const rl = bgRimLawFor(pw, ph), lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
     const D = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
     const layerW = (pw / ph > terrariumWidth / terrariumHeight) ? terrariumWidth : terrariumHeight * pw / ph;
-    const r = bgSourceHole({ dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 });
+    const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 }, mesh = bgLayerMesh;
+    const finish = (r, where, ms) => {
+        if (seq !== window._qbSourceHoleSeq || window._qbDQ !== dQ || bgLayerMesh !== mesh) { console.warn('[S62] a newer bake started while the hole was solving; this result is dropped'); return null; }
+        return bgFinishSourceHole(r, { pw, ph, N, L, rl, t0, where, msSolve: ms });
+    };
+    const tS = Date.now();
+    console.log('[S62] solving the source-anchored hole (' + pw + 'x' + ph + ')...');
+    const p = bgSourceHoleInWorker(o).then((r) => finish(r, 'worker', Date.now() - tS), (e) => {
+        console.warn('[S62] no worker (' + (e && e.message || e) + '); solving on the main thread');
+        const t1 = Date.now(); return finish(bgSourceHole(o), 'main thread', Date.now() - t1);
+    }).catch((e) => { console.warn('[S62] source-anchored hole failed; the bake stands as it was:', e); return null; });
+    window._qbSourceHoleBusy = p; p.then(() => { if (window._qbSourceHoleBusy === p) window._qbSourceHoleBusy = null; });
+    return p;
+}
+
+// the pure solve's own source, run in a worker: bgRimLawFor and bgSourceHole read a few app globals, which the message
+// carries (their values at this bake), so the worker builds the same rim law and the same hole, texel for texel
+let _bgHoleWorker = null, _bgHoleWorkerId = 0;
+function bgSourceHoleInWorker(o) {
+    return new Promise((resolve, reject) => {
+        try {
+            if (!_bgHoleWorker) {
+                if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') throw new Error('Worker unavailable');
+                const fns = [bgRimLawFor, bgRimLawAtStep, bgPinholeFilledMask, bgMGSolve, bgSourceHole, bgEnvAspect].map(f => f.toString()).join('\n');
+                const src = 'let window = {}, currentNormPortalPlane, portalPlaneWorldZ, camera, innerVolumeDepth, outerVolumeDepth, terrariumWidth, terrariumHeight, bgViewFadeEndDeg, bgViewFadeEndDegV, _sky = [false, -1], _bgRimLaw = null;\n' +
+                    'function bgSkyInfOn() { return _sky[0]; }\nfunction bgSkyQ() { return _sky[1]; }\n' + fns + '\n' +
+                    'onmessage = (e) => { const m = e.data, g = m.g; try {\n' +
+                    '  window = g.window; currentNormPortalPlane = g.pn; portalPlaneWorldZ = g.pz; camera = { position: { z: g.cz } }; innerVolumeDepth = g.inner; outerVolumeDepth = g.outer;\n' +
+                    '  terrariumWidth = g.tw; terrariumHeight = g.th; bgViewFadeEndDeg = g.fadeH; bgViewFadeEndDegV = g.fadeV; _sky = g.sky; _bgRimLaw = null;\n' +
+                    '  const rl = bgRimLawFor(m.pw, m.ph); const r = bgSourceHole({ dQ: m.dQ, rgb: m.rgb, pw: m.pw, ph: m.ph, rl, step: m.step, D: m.D, layerW: m.layerW, tol: m.tol });\n' +
+                    '  postMessage({ id: m.id, r }, [r.plate.buffer, r.wash.buffer, r.hole.buffer]);\n' +
+                    '} catch (err) { postMessage({ id: m.id, error: String((err && err.stack) || err) }); } };';
+                _bgHoleWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+            }
+            const w = _bgHoleWorker, id = ++_bgHoleWorkerId;
+            const skyOn = bgSkyInfOn();
+            const g = { window: { _qbSrcQuantum: window._qbSrcQuantum, _qbSrcGrid: window._qbSrcGrid, _rimGrazeDeg: window._rimGrazeDeg },
+                        pn: currentNormPortalPlane, pz: (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0,
+                        cz: (typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2,
+                        inner: innerVolumeDepth, outer: outerVolumeDepth, tw: terrariumWidth, th: terrariumHeight,
+                        fadeH: (typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45, fadeV: (typeof bgViewFadeEndDegV === 'number') ? bgViewFadeEndDegV : 30, sky: [skyOn, skyOn ? bgSkyQ() : -1] };
+            w.onmessage = (e) => { if (e.data.id !== id) return; if (e.data.error) reject(new Error(e.data.error)); else resolve(e.data.r); };
+            w.onerror = (e) => { _bgHoleWorker = null; try { w.terminate(); } catch (e2) {} reject(new Error((e && e.message) || 'worker error')); };
+            w.postMessage({ id, g, dQ: Float32Array.from(o.dQ), rgb: o.rgb, pw: o.pw, ph: o.ph, step: o.step, D: o.D, layerW: o.layerW, tol: o.tol });
+        } catch (e) { reject(e); }
+    });
+}
+
+function bgFinishSourceHole(r, c) {
+    const { pw, ph, N, L, rl, t0, where, msSolve } = c;
     const tex = bgLayerMesh.material.uniforms.displacementMap.value, data = tex.image.data, pF = window._qbPlateF;
     for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const v = r.plate[y * pw + x], k = (ph - 1 - y) * pw + x; data[k] = v; if (pF && pF !== data && pF.length === N) pF[k] = v; }
     tex.needsUpdate = true;
@@ -547,9 +601,17 @@ function bgApplySourceHole() {
     // the SD bundle's captures, from the new hole (they held the per-line bake's): every hole texel is a placeholder to
     // paint (class 1: no tier), the carriers are the hole, and the per-line captures with no meaning here are cleared
     window._qbDisocc = r.hole; window._qbSrcHole = r.hole; window._qbCarrier = r.hole;
-    { const paint = new Uint8Array(N); for (let i = 0; i < N; i++) paint[i] = r.hole[i] ? 1 : 0; window._qbPlatePaint = paint; }
+    { const paint = new Uint8Array(N); for (let i = 0; i < N; i++) paint[i] = r.hole[i] ? 1 : 0; window._qbPlatePaint = paint;
+      // the live SD-regions tint reads the same classes (the plate, its margin strips, and the foreground's dimming), so
+      // what is tinted on screen is the bundle's inpaint mask; it held the per-line bake's classes
+      const pf = new Float32Array(N); for (let y = 0; y < ph; y++) { const s0 = y * pw, d0 = (ph - 1 - y) * pw; for (let x = 0; x < pw; x++) pf[d0 + x] = paint[s0 + x]; }
+      const dt = new THREE.DataTexture(pf, pw, ph, THREE.RedFormat, THREE.FloatType); dt.needsUpdate = true; dt.flipY = false; dt.minFilter = THREE.NearestFilter; dt.magFilter = THREE.NearestFilter; dt.generateMipmaps = false;
+      const uQ = bgLayerMesh.material.uniforms, uF = L.mesh.material.uniforms;
+      if (uQ.u_sdPaint) uQ.u_sdPaint.value = dt;
+      if (uF && uF.u_sdPaint) uF.u_sdPaint.value = dt;
+      if (window._objHL) { window._objHL.platePaint = dt; window._objHL.fgPaint = dt; } }
     window._qbBandTier = null; window._qbBandPose = null; window._qbPlateTorn = null; window._qbPlateF2 = null; window._qbPlate2Has = null; window._qbPlateColor2 = null;
-    const st = Object.assign({}, r.stats, { plateTriangles: tri, edges: window._qbEdgeSharpen || null, msTotal: Date.now() - t0 });
+    const st = Object.assign({}, r.stats, { plateTriangles: tri, edges: window._qbEdgeSharpen || null, solvedOn: where, msSolve, msTotal: Date.now() - t0 });
     window._qbSourceHole = st; console.log('[S62] source-anchored hole ' + JSON.stringify(st));
     if (typeof render === 'function') { try { render(); } catch (e) {} }
     return st;
@@ -11787,6 +11849,7 @@ window._objectView = function (opts) {
 };
 
 function exportSDBundle() {
+    if (window._qbSourceHoleBusy) { console.log('[S62] the export waits for the source-anchored hole'); window._qbSourceHoleBusy.then(() => exportSDBundle()); return; }   // else it would write the per-line bake's plate
     try {
         if (!renderer || !postProcessScene || !postProcessCamera) { alert('Renderer not ready'); return; }
         const postProcessQuad = postProcessScene.children[0];
