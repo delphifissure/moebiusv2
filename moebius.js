@@ -9315,9 +9315,9 @@ window._plugGeoBand = function (opts) {
         // foreshortened limb turned out). The fill rule for surfaces never photographed is a plausible wash, not a
         // clone (the user's rule; the A242 membrane is the same statement for the plug): the back's colour is the
         // membrane of the source colour over the back texels, Dirichlet on every texel without a back — the object's
-        // own silhouette colours and its interior, no texture to magnify. window._plugBackTex = 1 keeps the raw texels.
+        // own silhouette colours and its interior, no texture to magnify. (The raw-texel hatch _plugBackTex was removed, S60 rule 5; REVIEW 14202.)
         window._geoBackColor = null;
-        if (nBack > 0 && !window._plugBackTex) { try {
+        if (nBack > 0) { try {
             const Lc = mediaLayers[0]; const cImgW = (Lc.elements && Lc.elements.color) || Lc.textures.color.image;
             const cvW = document.createElement('canvas'); cvW.width = pw; cvW.height = ph; const cxW = cvW.getContext('2d', { willReadFrequently: true });
             cxW.drawImage(cImgW, 0, 0, pw, ph); const srcW = cxW.getImageData(0, 0, pw, ph).data;
@@ -14480,57 +14480,9 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // path-independent: only different seeds' planes compete.
     const carAx = new Int32Array(PN2), carAy = new Int32Array(PN2), carAv = new Float32Array(PN2);
     const claimedF = new Uint8Array(PN2);   // px has a plate-lowering claim (nearest-anchor conflict rule)
-    // A100 BAND-LIMIT THE FIELD THE FILL MEASURES. The gradient estimator below
-    // samples over a window R (0.25% of frame, scaled), but it reads a field
-    // carrying relief FINER than R. Sub-window relief cannot survive into the
-    // fill's output — the cone can only express sCone per texel — yet it
-    // perturbs which anchor wins, so the crease skeleton (and with it the fold
-    // population) moves with resolution. Until now that relief was being
-    // removed by accident: the 8-bit quantiser flattened it, and a86's
-    // dequantiser rebuilt smooth ramps from the terraces. With true 16-bit
-    // depth (a99) neither happens and the sensitivity is exposed (crease drift
-    // 12.8% -> 26.3%, Addendum 106).
-    // TRIED AND REVERTED: measured on the 16-bit analytic pair, crease drift
-    // 4.0% -> 4.7% under the correct pw^1.5 normalisation — very slightly
-    // WORSE, and unnecessary: the float ingest (a99) had already made the
-    // crease population invariant. The premise that the fill needed its own
-    // smoothing was wrong; it needed an unquantised INPUT. Kept behind
-    // window._fillBandLimit for future work, default off.
-    // The idea was to band-limit ON PURPOSE, at the scale the estimator itself
-    // resolves: a box average of the SAME radius R. Cliffs must survive, so a
-    // neighbour is included only if it lies within what a legitimate surface
-    // can change over that distance at the grazing limit — R * sCone — which
-    // is the same cone law the fill and the tear already obey, not a new
-    // constant. Separable (x then y) to stay O(N*R). Seeds, barriers, budgets
-    // and claims all continue to read the RAW field; only the gradient
-    // estimator sees the band-limited one. window._noFillBandLimit reverts.
-    // A100 TRIED AND REVERTED (see below): default OFF.
-    let dSm = dQ;
-    if (window._fillBandLimit === true) {
-        const RB = Math.max(1, Math.round(3 * pw / 1200));
-        const amp = RB * sCone;
-        const t1 = new Float32Array(PN2);
-        for (let y = 0; y < ph; y++) { const row = y*pw;
-            for (let x = 0; x < pw; x++) { const i = row+x; const c = dQ[i];
-                let sum = c, n = 1;
-                for (let k = 1; k <= RB; k++) {
-                    const xl = x-k, xr = x+k;
-                    if (xl >= 0)  { const v = dQ[row+xl]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                    if (xr < pw)  { const v = dQ[row+xr]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                }
-                t1[i] = sum / n; } }
-        const t2 = new Float32Array(PN2);
-        for (let y = 0; y < ph; y++) { const row = y*pw;
-            for (let x = 0; x < pw; x++) { const i = row+x; const c = t1[i];
-                let sum = c, n = 1;
-                for (let k = 1; k <= RB; k++) {
-                    const yu = y-k, yd = y+k;
-                    if (yu >= 0)  { const v = t1[yu*pw+x]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                    if (yd < ph)  { const v = t1[yd*pw+x]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                }
-                t2[i] = sum / n; } }
-        dSm = t2;
-    }
+    // A100 (band-limiting the field the fill's gradient estimator reads) was falsified and removed (S60, rule 5):
+    // the premise that the fill needed its own smoothing was wrong; it needed an unquantised input (a99). REVIEW 5401.
+    const dSm = dQ;
     const gradAt = (p2) => {
         // far-side local gradient, windowed; zeroed across structure (a
         // sample pair spanning a cliff is not a surface gradient)
@@ -14748,18 +14700,9 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // flip: troll near-plate claims 34.7 -> 15.4%, gloop gone at
             // both probe cams; star renders pixel-comparable, SD 13.8 ->
             // 15.2% (in range). Distance breaks ~equal-value ties.
-            // window._nearestAnchorWins restores the a63b law for A/B.
+            // (The a63b nearest-anchor law's hatch was removed, S60 rule 5: "nearest-anchor Voronoi steps ARE the gloop", REVIEW 3972.)
             const takes = (jj) => {
                 if (!claimedF[jj]) return true;
-                if (window._nearestAnchorWins === true) {
-                    const dxo = xj - carAx[jj], dyo = yj - carAy[jj];
-                    const d2o = dxo*dxo + dyo*dyo;
-                    const dxn = xj - ax, dyn = yj - ay;
-                    const d2n = dxn*dxn + dyn*dyn;
-                    if (d2n < d2o - 1) return true;
-                    if (d2n <= d2o + 1 && v2 < P[jj] - QUANT) return true;
-                    return false;
-                }
                 if (v2 < P[jj] - QUANT) return true;
                 if (v2 <= P[jj] + QUANT) {
                     const dxo2 = xj - carAx[jj], dyo2 = yj - carAy[jj];
@@ -18227,7 +18170,7 @@ function bgBuildBackgroundLayerCore() {
                     const cImgB = (L.elements && L.elements.color) || L.textures.color.image;
                     const cvB = document.createElement('canvas'); cvB.width = pw; cvB.height = ph; const cxB = cvB.getContext('2d', { willReadFrequently: true });
                     cxB.drawImage(cImgB, 0, 0, pw, ph); const pxB = cxB.getImageData(0, 0, pw, ph);
-                    const washB = window._geoBackColor && window._geoBackColor.length === PNq * 4 ? window._geoBackColor : null;   // A257d: the wash, else the raw texels (_plugBackTex)
+                    const washB = window._geoBackColor && window._geoBackColor.length === PNq * 4 ? window._geoBackColor : null;   // A257d: the wash (else, if the wash failed, the raw texels)
                     for (let i = 0; i < PNq; i++) { if (bd[i] >= 0) { if (washB) { pxB.data[i * 4] = washB[i * 4]; pxB.data[i * 4 + 1] = washB[i * 4 + 1]; pxB.data[i * 4 + 2] = washB[i * 4 + 2]; } pxB.data[i * 4 + 3] = 255; } else pxB.data[i * 4 + 3] = 0; }
                     cxB.putImageData(pxB, 0, 0);
                     const backTex = new THREE.CanvasTexture(cvB); backTex.minFilter = THREE.LinearFilter; backTex.magFilter = THREE.LinearFilter;
