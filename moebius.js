@@ -668,6 +668,23 @@ function bgMGSolve(nN, adjStart, adjList, adjW, fixMask, fixVals, xyB, TOL, x0s)
     return { outs, iters, levels: levels.length };
 }
 
+// S62: the rim law measured at the VISIBLE STEP. On a clean 16-bit map the app's effective quantum is the 16-bit grid
+// (S10: no noise, so the grid is the precision), which makes rl.tolAt ~170x finer than one visible step: every DA3 slope
+// is "steep" and every straight-slope join fails. The S62 construction is stated in visible steps (srcfill.py), so it
+// takes the rim law's ratio test and its straight-slope join with the tolerance at one visible step.
+function bgRimLawAtStep(rl, step) {
+    const tolV = (d) => Math.abs(rl.dispAt(Math.min(1, d + step)) - rl.dispAt(Math.max(0, d - step))) + 1e-9;
+    const joinedIdx = (i, j, dQ, pw) => {
+        const dA = dQ[i], dB = dQ[j]; if (rl.joined(dA, dB)) return true;
+        const N2 = dQ.length, xi = i % pw, yi = (i - xi) / pw, xj = j % pw, yj = (j - xj) / pw, dx = xj - xi, dy = yj - yi;
+        const a = rl.dispAt(dA), b = rl.dispAt(dB), tol = Math.max(tolV(dA), tolV(dB));
+        const xp = xi - dx, yp = yi - dy; if (xp >= 0 && xp < pw && yp >= 0 && (yp * pw + xp) < N2) { const pr = 2 * a - rl.dispAt(dQ[yp * pw + xp]); if (Math.abs(b - pr) <= tol) return true; }
+        const xn = xj + dx, yn = yj + dy; if (xn >= 0 && xn < pw && yn >= 0 && (yn * pw + xn) < N2) { const pr = 2 * b - rl.dispAt(dQ[yn * pw + xn]); if (Math.abs(a - pr) <= tol) return true; }
+        return false;
+    };
+    return Object.assign({}, rl, { tolAt: tolV, joinedIdx });
+}
+
 // S62: DA3'S BLURRED OCCLUSION EDGES, SHARPENED WHERE THEY OCCLUDE (research/S62 §3, §5; harness/srcfill.py step 1).
 // Per line (columns, then rows), a candidate stretch grows from each steepest step (larger first) through steps of the
 // same sign that are steep (over the rim law's tolerance tolAt) and still CURVING (each step outward smaller than the last
@@ -676,8 +693,9 @@ function bgMGSolve(nN, adjStart, adjList, adjW, fixMask, fixVals, xyB, TOL, x0s)
 // taken stretch becomes a one-texel cliff at the centre of the colour change across it: texels on the near side take the
 // near end's depth, the rest the far end's; a texel taken both ways keeps the steeper stretch. A surface with no occlusion
 // on its contour (a faceted mountain, a receding ground) is left as DA3 drew it. Pure: src (Float32, source rows), rgb
-// (RGB bytes, 3N), the rim law rl.
-function bgEdgeSharpen(src, rgb, pw, ph, rl) {
+// (RGB bytes, 3N), the rim law rl, the visible step (the law is taken at that step, bgRimLawAtStep).
+function bgEdgeSharpen(src, rgb, pw, ph, rl0, step) {
+    const rl = bgRimLawAtStep(rl0, step);
     const N = pw * ph, out = Float32Array.from(src), score = new Float64Array(N).fill(-1);
     const disp = new Float64Array(N), tol = new Float64Array(N);
     for (let i = 0; i < N; i++) { disp[i] = rl.dispAt(src[i]); tol[i] = rl.tolAt(src[i]); }
@@ -746,7 +764,7 @@ function bgEdgeSharpen(src, rgb, pw, ph, rl) {
 //   wash   the same membrane per RGB channel, pinned at the same texels to their own source colour
 // Pure: dQ (Float32, source rows, already edge-sharpened), rgb (RGB bytes), rl, step (the visible step 1/k), D, layerW.
 function bgSourceHole(o) {
-    const { dQ, rgb, pw, ph, rl, step } = o, N = pw * ph, t0 = Date.now(), st = { step };
+    const { dQ, rgb, pw, ph, step } = o, rl = bgRimLawAtStep(o.rl, step), N = pw * ph, t0 = Date.now(), st = { step };
     const fadeH = (typeof bgViewFadeEndDeg === 'number' ? bgViewFadeEndDeg : 45) * Math.PI / 180, env = (typeof bgEnvAspect === 'function') ? bgEnvAspect() : Math.tan(Math.PI / 6);
     const ex = o.D * Math.tan(fadeH), ppm = pw / o.layerW;
     const s = new Float64Array(N); for (let i = 0; i < N; i++) { const ze = rl.zeAt(dQ[i]); s[i] = ex * (o.D - ze) / ze * ppm; }
@@ -15615,7 +15633,8 @@ function bgBuildBackgroundLayerCore() {
                     const cvE = document.createElement('canvas'); cvE.width = pw; cvE.height = ph; const cxE = cvE.getContext('2d', { willReadFrequently: true });
                     cxE.drawImage(cImgE, 0, 0, pw, ph); const rgbaE = cxE.getImageData(0, 0, pw, ph).data, rgbE = new Uint8ClampedArray(3 * PNq);
                     for (let i = 0; i < PNq; i++) { rgbE[3 * i] = rgbaE[4 * i]; rgbE[3 * i + 1] = rgbaE[4 * i + 1]; rgbE[3 * i + 2] = rgbaE[4 * i + 2]; }
-                    const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph)); dQ.set(es.out);
+                    const lutE = bgShiftLUTFor(pw, ph), stepE = 1 / Math.max(1e-6, Math.max(Math.abs(lutE.m0), Math.abs(lutE.m1)));
+                    const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE); dQ.set(es.out);
                     window._qbEdgeSharpen = Object.assign({ ms: Date.now() - t0e }, es.stats);
                     console.log('[S62] occlusion edges sharpened: ' + JSON.stringify(window._qbEdgeSharpen));
                 } catch (eE) { console.warn('[S62] edge sharpening failed, the depth stands as loaded:', eE); }

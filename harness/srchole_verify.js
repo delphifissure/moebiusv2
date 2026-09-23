@@ -13,14 +13,16 @@ const step = 1 / (meta.D * Math.max(meta.outer / (meta.D + meta.outer), meta.inn
 const G = { window: { _qbSrcQuantum: step, _qbSrcGrid: 1 / 65535 }, currentNormPortalPlane: meta.pn, portalPlaneWorldZ: 0, camera: { position: { z: meta.D } },
             innerVolumeDepth: meta.inner, outerVolumeDepth: meta.outer, terrariumWidth: TW, terrariumHeight: TH, bgViewFadeEndDeg: 45, bgViewFadeEndDegV: 30,
             bgSkyInfOn: () => false, bgSkyQ: () => 0, _bgRimLaw: null, console: { log: () => {}, warn: console.warn } };
-const body = ['bgRimLawFor', 'bgPinholeFilledMask', 'bgMGSolve', 'bgEdgeSharpen', 'bgSourceHole', 'bgEnvAspect'].map(grab).join('\n');
+const body = ['bgRimLawFor', 'bgRimLawAtStep', 'bgPinholeFilledMask', 'bgMGSolve', 'bgEdgeSharpen', 'bgSourceHole', 'bgEnvAspect'].map(grab).join('\n');
 const lib = new Function(...Object.keys(G), 'let _bgRimLawL = null;\n' + body.replace(/_bgRimLaw\b/g, '_bgRimLawL') + '\nreturn { bgRimLawFor, bgEdgeSharpen, bgSourceHole };')(...Object.values(G));
+// the app's effective quantum as the bake sets it (QEFF=grid for a clean 16-bit map, S10); the S62 functions take the visible step themselves
+if (process.env.QEFF === 'grid') G.window._qbSrcQuantum = 1 / 65535;
 const f32 = (p) => { const x = fs.readFileSync(p); return new Float32Array(x.buffer, x.byteOffset, x.byteLength / 4); };
 const dQ0 = f32(path.join(DUMP, 'dQ.f32'));
 const rgb = execSync(`python3 -c "import sys,numpy as np;from PIL import Image;sys.stdout.buffer.write(np.asarray(Image.open('${DUMP}/color.png').convert('RGB'),np.uint8).tobytes())"`, { maxBuffer: 64 << 20 });
 const py = (expr) => execSync(`python3 -c "import sys,numpy as np;from PIL import Image;sys.stdout.buffer.write(${expr})"`, { maxBuffer: 256 << 20 });
 const rl = lib.bgRimLawFor(pw, ph);
-let t0 = Date.now(); const es = lib.bgEdgeSharpen(dQ0, rgb, pw, ph, rl); const msE = Date.now() - t0;
+let t0 = Date.now(); const es = lib.bgEdgeSharpen(dQ0, rgb, pw, ph, rl, step); const msE = Date.now() - t0;
 const pyD = new Float64Array(N); { const b = py(`(np.asarray(Image.open('${FILL}/depthD16.png')).astype(np.float64)/65535).tobytes()`); pyD.set(new Float64Array(b.buffer, b.byteOffset, N)); }
 let eDiff = 0; for (let i = 0; i < N; i++) if (Math.abs(es.out[i] - pyD[i]) > step) eDiff++;
 t0 = Date.now(); const r = lib.bgSourceHole({ dQ: es.out, rgb, pw, ph, rl, step, D: meta.D, layerW }); const msH = Date.now() - t0;
