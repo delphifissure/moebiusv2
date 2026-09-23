@@ -27,7 +27,17 @@ OUT = os.path.join(H, 'shots', 'sheet_ab', 'sd_' + P); os.makedirs(OUT, exist_ok
 torch.set_num_threads(4)
 sz = json.load(open(os.path.join(D, 'size.json'))); pw, ph = sz['pw'], sz['ph']
 band = (np.fromfile(os.path.join(D, 'disocc.u8'), np.uint8).reshape(ph, pw) > 0)
-wash = Image.open(os.path.join(D, 'ab_fields', 'wash.png')).convert('RGB')
+# the contract S52 found best (PACO arm A): the app's own occluder-removed harmonic continuation as the image, the band
+# as the mask -- from the bundle bake_today.js captured; falls back to the S59 wash only if the bundle is missing
+import zipfile
+BZ = os.path.join(H, 'shots', 'sheet_ab', 'today_' + P, 'bundle.zip'); SRC = 'wash'
+if os.path.exists(BZ):
+    z = zipfile.ZipFile(BZ); names = z.namelist()
+    if 'plane_color_occluder_removed.png' in names:
+        import io; wash = Image.open(io.BytesIO(z.read('plane_color_occluder_removed.png'))).convert('RGB'); SRC = 'occluder_removed'
+        if wash.size != (pw, ph): wash = wash.resize((pw, ph), Image.LANCZOS)
+if SRC == 'wash': wash = Image.open(os.path.join(D, 'ab_fields', 'wash.png')).convert('RGB')
+print('image source:', SRC, flush=True)
 # working size: long side 640, multiples of 8 (CPU budget)
 s = 640 / max(pw, ph); W, Hh = int(round(pw * s / 8) * 8), int(round(ph * s / 8) * 8)
 img = wash.resize((W, Hh), Image.LANCZOS)
@@ -41,7 +51,7 @@ def streak(rgb):
     y = np.asarray(rgb, np.float64).mean(-1); dv = np.abs(np.diff(y, axis=0)); dh = np.abs(np.diff(y, axis=1))
     mv = m[1:, :] & m[:-1, :]; mh = m[:, 1:] & m[:, :-1]
     return float(dv[mv].mean() - dh[mh].mean())
-res = {'picture': P, 'size': [W, Hh], 'steps': STEPS, 'washStreak': streak(img), 'arms': {}}
+res = {'picture': P, 'imageSource': SRC, 'size': [W, Hh], 'steps': STEPS, 'washStreak': streak(img), 'arms': {}}
 for arm in 'ABC':
     z = np.fromfile(os.path.join(R, 'plate_%s.f32' % arm), np.float32).reshape(ph, pw)
     ctl = Image.fromarray(np.round(np.clip(z, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, Hh), Image.BILINEAR)

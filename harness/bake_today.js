@@ -30,6 +30,16 @@ const POSES = [['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['yaw22', T(
         const top = [...self].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([k, us]) => ({ fn: k, ms: Math.round(us / 1000) }));
         fs.writeFileSync(path.join(OUT, 'profile_top.json'), JSON.stringify({ bakeMs, top }, null, 1)); console.log(JSON.stringify(top.slice(0, 12)));
     }
+    // the SD bundle as the app exports it (captured, not downloaded), for the SD premise test (task #66): S52 found the
+    // Sprint 25 plane_color_occluder_removed.png + the band mask the best contract (PACO arm A)
+    const zb = await page.evaluate(() => {
+        const realAlert = window.alert; window.alert = () => {}; let href = null; const realClick = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () { href = this.href; };
+        let threw = null; try { exportSDBundle(); } catch (e) { threw = String(e); }
+        HTMLAnchorElement.prototype.click = realClick; window.alert = realAlert; return { threw, b64: href ? href.split(',')[1] : null };
+    });
+    if (zb.b64) { fs.writeFileSync(path.join(OUT, 'bundle.zip'), Buffer.from(zb.b64, 'base64')); console.log('bundle ' + Math.round(zb.b64.length * 0.75 / 1024) + ' KB'); }
+    else console.log('bundle NONE ' + zb.threw);
     const shot = async (name) => { const b64 = await page.evaluate(() => { updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }); fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, 'base64')); };
     for (const [n, x, y] of POSES) { await page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); }, [x, y]); await shot('today_' + n + '.png'); }
     await browser.close(); srv.kill(); console.log('done ' + OUT);
