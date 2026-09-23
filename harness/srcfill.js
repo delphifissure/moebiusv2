@@ -19,8 +19,8 @@ const POSES = [['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['yaw22', T(
     page.on('pageerror', e => console.log('  [PAGEERR] ' + e.message.slice(0, 200)));
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
-    // the panel options for this render (default: ramps strong, so the foreground tears at the same collapsed cliffs the fill used)
-    const SEL = JSON.parse(process.env.SEL || '{"bgPlateRampSel":"strong"}');
+    // the panel options for this render (default: ramps safe, so the foreground tears at the same collapsed cliffs the fill used)
+    const SEL = JSON.parse(process.env.SEL || '{"bgPlateRampSel":"safe"}');
     await page.evaluate((SEL) => { try { localStorage.clear(); } catch (e) {} for (const id in SEL) { const el = document.getElementById(id); if (el) { el.value = SEL[id]; el.dispatchEvent(new Event('change')); } } }, SEL);
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 320; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 1000)); }

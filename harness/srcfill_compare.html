@@ -42,7 +42,7 @@ figure img{display:block;width:100%;height:auto;outline:1px solid rgba(0,0,0,.28
 <div class="wrap">
   <header>
     <h1>Today's hole next to the smooth one</h1>
-    <p class="lede">Left: the app as it ships (the per-line law). Right: the new hole, built in 2-D from DA3's own map only: the outline follows what each object slides over, the depth is a smooth surface pinned to the flat background around it, and the colour is a smooth wash of that background. The foreground tears at DA3's collapsed edges (ramps: strong).</p>
+    <p class="lede">Left: the app as it ships (the per-line law). Right: the new hole, built in 2-D from DA3's own map only: the outline follows what each object slides over, the depth is a smooth surface pinned to the flat background around it, and the colour is a smooth wash of that background. The foreground tears at DA3's collapsed edges (ramps: safe).</p>
   </header>
   <div class="bar"><div class="group" id="tabs"></div></div>
   <div class="bar">
@@ -87,7 +87,7 @@ function render(){
     w.onclick = () => { st.flip++; render(); }; o.append(w);
   }
   const s = (D.pics.find(p => p.id === st.pic) || {}).stats || {};
-  $('facts').textContent = `${st.pic}: hole ${s.hole ?? '?'} texels in ${s.components ?? '?'} pieces · ${s.pins ?? '?'} background pins · ${s.notBehind ?? '?'} texels clamped behind their object · reach up to ${s.reachMaxPx ?? '?'} px`;
+  $('facts').textContent = `${st.pic}: hole ${s.hole ?? '?'} texels in ${s.components ?? '?'} pieces · ${s.pins ?? '?'} background pins · ${s.notBehindLeftHole ?? '?'} texels left out (fill not behind their object) · ${s.kinksInHole ?? '?'} kinks inside the hole · reach up to ${s.reachMaxPx ?? '?'} px`;
   try { localStorage.setItem('srcfill-compare', JSON.stringify({ pic: st.pic })); } catch (e) {}
   D.pics.forEach(p => VIEWS.forEach(x => x.panels.forEach(([, n]) => { const im = new Image(); im.src = `${p.id}/${n}.png`; })));
 }

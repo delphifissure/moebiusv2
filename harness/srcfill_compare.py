@@ -12,8 +12,8 @@ H = os.path.dirname(os.path.abspath(__file__)); FILL, OUT = sys.argv[1], sys.arg
 PICS = ['troll', 'vermeer', 'sunflowers', 'starwatcher']
 POSES = [('yawR42', 'yaw +42°'), ('yawL42', 'yaw −42°'), ('yaw22', 'yaw 22.5°'), ('pitch30', 'pitch +30°')]
 
-def relief(z, step):                                  # the S59 review page's shading, over the whole frame
-    gy, gx = np.gradient(z / step); return Image.fromarray((np.clip(0.5 + 0.08 * (-gx - gy), 0, 1) * 255).astype(np.uint8))
+def relief(z, step, gain):                            # oblique light, one gain per picture (all its panels alike)
+    gy, gx = np.gradient(z / step); return Image.fromarray((np.clip(0.5 + gain * (-gx - gy), 0, 1) * 255).astype(np.uint8))
 
 pics = []
 for p in PICS:
@@ -25,9 +25,13 @@ for p in PICS:
         shutil.copyfile(os.path.join(old, 'A_%s.png' % pose), os.path.join(OUT, p, 'today_%s.png' % pose))
         shutil.copyfile(os.path.join(new, 'D_%s.png' % pose), os.path.join(OUT, p, 'new_%s.png' % pose))
     f32 = lambda q: np.fromfile(q, np.float32).reshape(ph, pw).astype(np.float64)
-    relief(f32(os.path.join(Dd, 'dQ.f32')), st).save(os.path.join(OUT, p, 'da3_relief.png'), optimize=True)
-    relief(f32(os.path.join(old, 'plate_A.f32')), st).save(os.path.join(OUT, p, 'today_relief.png'), optimize=True)
-    relief(f32(os.path.join(FILL, p, 'plateD.f32')), st).save(os.path.join(OUT, p, 'new_relief.png'), optimize=True)
+    src = f32(os.path.join(Dd, 'dQ.f32')); gy, gx = np.gradient(src / st)
+    # the S59 page's gain (0.08 per step) saturates on steep receding ground (sunflowers, starwatcher); here the gain puts
+    # DA3's own 95th-percentile slope at a quarter of the grey range, so every picture's ground reads
+    gain = 0.25 / max(1e-9, float(np.percentile(np.abs(gx + gy), 95)))
+    relief(src, st, gain).save(os.path.join(OUT, p, 'da3_relief.png'), optimize=True)
+    relief(f32(os.path.join(old, 'plate_A.f32')), st, gain).save(os.path.join(OUT, p, 'today_relief.png'), optimize=True)
+    relief(f32(os.path.join(FILL, p, 'plateD.f32')), st, gain).save(os.path.join(OUT, p, 'new_relief.png'), optimize=True)
     shutil.copyfile(os.path.join(FILL, p, 'washD.png'), os.path.join(OUT, p, 'new_wash.png'))
     pics.append({'id': p, 'stats': json.load(open(os.path.join(FILL, p, 'stats.json')))})
 
