@@ -7,6 +7,8 @@ srcfill at the S59 poses, and the plate depth as a shaded relief next to DA3's o
 import sys, os, json, shutil
 import numpy as np
 from PIL import Image
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ramp_collapse import visible_step
 
 H = os.path.dirname(os.path.abspath(__file__)); FILL, OUT = sys.argv[1], sys.argv[2]; os.makedirs(OUT, exist_ok=True)
 PICS = ['troll', 'vermeer', 'sunflowers', 'starwatcher']
@@ -17,7 +19,7 @@ def relief(z, step, gain):                            # oblique light, one gain 
 
 pics = []
 for p in PICS:
-    Dd = os.path.join(H, 'shots', 'streakclass', 'ab_' + p); m = json.load(open(os.path.join(Dd, 'meta.json'))); pw, ph, st = m['pw'], m['ph'], m['quantum']
+    Dd = os.path.join(H, 'shots', 'streakclass', 'ab_' + p); m = json.load(open(os.path.join(Dd, 'meta.json'))); pw, ph = m['pw'], m['ph']; st = visible_step(pw, ph, m['outer'], m['inner'], m['D'])
     new = os.path.join(H, 'shots', 'srcfill', p); old = os.path.join(H, 'shots', 'sheet_ab', p)
     if not os.path.exists(os.path.join(new, 'render.json')): print('missing', p); continue
     os.makedirs(os.path.join(OUT, p), exist_ok=True)

@@ -35,11 +35,14 @@ from scipy import sparse
 from scipy.ndimage import label, binary_fill_holes, binary_dilation
 import pyamg
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ramp_collapse import rim_t, law, joined_lines, TW, TH
+from ramp_collapse import rim_t, law, joined_lines, visible_step, TW, TH
 
 D0, OUT = sys.argv[1], sys.argv[2]; os.makedirs(OUT, exist_ok=True); t0 = time.time()
-m = json.load(open(os.path.join(D0, 'meta.json'))); pw, ph = m['pw'], m['ph']; N = pw * ph; step = m['quantum']
+m = json.load(open(os.path.join(D0, 'meta.json'))); pw, ph = m['pw'], m['ph']; N = pw * ph
 outer, inner, pn, D = m['outer'], m['inner'], m['pn'], m['D']
+# the visible step 1/k (bgShiftLUTFor at the fade end). NOT meta.quantum: on a 16-bit map that field is the grid
+# (1/65535), which made every two-step test ~170x too strict on sunflowers and starwatcher
+step = visible_step(pw, ph, outer, inner, D)
 src = np.fromfile(os.path.join(D0, 'dQ.f32'), np.float32).astype(np.float64).reshape(ph, pw)
 rgb = np.asarray(Image.open(os.path.join(D0, 'color.png')).convert('RGB')).astype(np.float64)
 st = {'pw': pw, 'ph': ph, 'step': step}
