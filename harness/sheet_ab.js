@@ -28,13 +28,16 @@ const POSES = [['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['yaw22', T(
         const dec = (s) => { const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
         const dis0 = dec(a), ff0 = new Float32Array(dec(b).buffer); const { pw, ph } = window._qbSize; const N = pw * ph; const dis = window._qbDisocc;
         const tex = bgLayerMesh.material.uniforms.displacementMap.value.image.data;
-        let mis = 0, nb = 0, mx = 0; for (let i = 0; i < N; i++) { if ((dis[i] ? 1 : 0) !== (dis0[i] ? 1 : 0)) mis++; if (dis[i]) { nb++; const x = i % pw, y = (i - x) / pw; mx = Math.max(mx, Math.abs(tex[(ph - 1 - y) * pw + x] - ff0[i])); } }
+        // the dump's band (streak_class.js) is the app's band where the law's fill lies behind the source depth; the rest of
+        // _qbDisocc keeps its own depth (nothing is revealed there) and is left as baked on every arm
+        let mis = 0, extra = 0, nb = 0, mx = 0; for (let i = 0; i < N; i++) { if (dis0[i] && !dis[i]) mis++; if (dis[i] && !dis0[i]) extra++; if (dis0[i]) { nb++; const x = i % pw, y = (i - x) / pw; mx = Math.max(mx, Math.abs(tex[(ph - 1 - y) * pw + x] - ff0[i])); } }
+        window._abBand = dis0;
         window._abOrig = new Float32Array(tex);   // arm A, as baked
         const p2 = bgLayerMesh.userData && bgLayerMesh.userData.plate2; if (p2) p2.visible = false;
-        return { pw, ph, band: nb, bandMismatch: mis, plateVsDumpFarFieldMax: mx, plate2: !!p2, colourCanvas: !!(bgLayerMesh.material.uniforms.map.value.image && bgLayerMesh.material.uniforms.map.value.image.getContext) };
+        return { pw, ph, band: nb, bandMismatch: mis, appBandOutsideDump: extra, plateVsDumpFarFieldMax: mx, plate2: !!p2, colourCanvas: !!(bgLayerMesh.material.uniforms.map.value.image && bgLayerMesh.material.uniforms.map.value.image.getContext) };
     }, [disD, ffD]);
     console.log('guard ' + JSON.stringify(g));
-    if (g.bandMismatch) { console.log('ABORT: the bake band differs from the dump band'); process.exit(2); }
+    if (g.bandMismatch) { console.log('ABORT: the dump band is not inside the bake band'); process.exit(2); }
     if (!g.colourCanvas) { console.log('ABORT: no plate colour canvas'); process.exit(2); }
     // PHASE=rims: dump the per-line law's own far rims (two candidates per texel and their weights) for sheet_ab_fields.py
     if (process.env.PHASE === 'rims') {
@@ -55,7 +58,7 @@ const POSES = [['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['yaw22', T(
         const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
         const { pw, ph } = window._qbSize; if (img.width !== pw || img.height !== ph) return { error: 'wash size' };
         const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const c2 = cv.getContext('2d'); c2.drawImage(img, 0, 0); const w = c2.getImageData(0, 0, pw, ph).data;
-        const mp = bgLayerMesh.material.uniforms.map; const cx = mp.value.image.getContext('2d'); const id = cx.getImageData(0, 0, pw, ph); const d = id.data; const dis = window._qbDisocc;
+        const mp = bgLayerMesh.material.uniforms.map; const cx = mp.value.image.getContext('2d'); const id = cx.getImageData(0, 0, pw, ph); const d = id.data; const dis = window._abBand;
         let n = 0; for (let i = 0; i < pw * ph; i++) if (dis[i]) { d[4 * i] = w[4 * i]; d[4 * i + 1] = w[4 * i + 1]; d[4 * i + 2] = w[4 * i + 2]; d[4 * i + 3] = 255; n++; }
         cx.putImageData(id, 0, 0); mp.value.needsUpdate = true; return { washTexels: n };
     }, wash);
@@ -65,7 +68,7 @@ const POSES = [['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.008], ['yaw22', T(
     for (const arm of ['A', 'B', 'C']) {
         const b64 = arm === 'A' ? null : fs.readFileSync(path.join(process.env.FIELDS, 'field' + arm + '.f32')).toString('base64');
         const info = await page.evaluate((b64) => {
-            const { pw, ph } = window._qbSize; const N = pw * ph; const dis = window._qbDisocc; const tex = bgLayerMesh.material.uniforms.displacementMap.value; const data = tex.image.data;
+            const { pw, ph } = window._qbSize; const N = pw * ph; const dis = window._abBand; const tex = bgLayerMesh.material.uniforms.displacementMap.value; const data = tex.image.data;
             data.set(window._abOrig);
             let ff = null; if (b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); ff = new Float32Array(u.buffer); if (ff.length !== N) return { error: 'size' }; }
             let n = 0; if (ff) for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; if (!dis[i]) continue; data[(ph - 1 - y) * pw + x] = ff[i]; n++; }
