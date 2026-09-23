@@ -15,9 +15,10 @@ Reads a streak_class dump (dQ.f32 source depth, color.png, meta.json) -- NOT its
                (S35 s47) -- in the envelope's box norm, plus the same-depth pinholes it encloses (S61 s10). Its outline
                is the silhouette swept by the envelope, clipped to the object: no scanline anywhere.
   4. depth     a membrane on the hole, pinned at every neighbour outside it that lies behind the adjacent hole texel by
-               more than two steps (the background), free elsewhere (the occluder side); a hole texel not behind its
-               own source depth by two steps is clamped there and counted; a component with no pin is flat at its
-               farthest border depth (counted)
+               more than two steps (the background), free elsewhere (the occluder side); a pin more than two steps from
+               the consensus of a first solve with every pin soft (one edge's weight) is the blur's leftover and is
+               dropped; a hole texel not behind its own source depth by two steps is clamped there and counted; a
+               component with no pin is flat at its farthest border depth (counted)
   5. wash      the same membrane per RGB channel, pinned at the same texels to their own source colour
   Outside the hole the plate is the source depth (ramps collapsed, as the app draws it with ramps = strong) and the
   source colour.
@@ -109,12 +110,31 @@ st['hole'] = int(hole.sum()); st['pinholes'] = int(n); st['pinholesJoined'] = jo
 NB = ((0, 1), (0, -1), (1, 0), (-1, 0))
 di = np.flatnonzero(hole.ravel()); M = di.size; idx = -np.ones(N, np.int64); idx[di] = np.arange(M); ys, xs = np.divmod(di, pw)
 vals4 = np.stack([dQ, rgb[..., 0], rgb[..., 1], rgb[..., 2]], -1).reshape(N, 4); dq = dQ.ravel(); hv = hole.ravel()
-rows, cols = [], []; deg = np.zeros(M); b = np.zeros((M, 4)); hasPin = np.zeros(M, bool); pinSet = np.zeros(N, bool)
+def build(pinOK):
+    rows, cols = [], []; deg = np.zeros(M); b = np.zeros((M, 4)); hasPin = np.zeros(M, bool); pinSet = np.zeros(N, bool)
+    for dy, dx in NB:
+        y2, x2 = ys + dy, xs + dx; ok = (y2 >= 0) & (y2 < ph) & (x2 >= 0) & (x2 < pw); j = np.where(ok, y2 * pw + x2, 0)
+        inH = ok & hv[j]; pin = ok & ~hv[j] & pinOK[j] & (dq[j] < dq[di] - 2 * step)
+        rows.append(np.flatnonzero(inH)); cols.append(idx[j[inH]]); deg += inH + pin; b[pin] += vals4[j[pin]]; hasPin |= pin; pinSet[j[pin]] = True
+    A = (sparse.diags(deg) - sparse.csr_matrix((np.ones(sum(r.size for r in rows)), (np.concatenate(rows), np.concatenate(cols))), shape=(M, M))).tocsr()
+    return A, b, hasPin, pinSet
+A, b, hasPin, pinSet = build(np.ones(N, bool))
+# pins that disagree with the background around them are the blur's leftovers, not the background (each makes a cone in a
+# membrane). A first solve with every pin SOFT (tied to its value with the weight of one edge, so one pin cannot pull the
+# surface on its own) gives the consensus; a pin more than two visible steps from it (S35 s47's margin) is dropped, and the
+# final solve pins hard on the rest.
+pi = np.flatnonzero(pinSet); P = pi.size; pidx = -np.ones(N, np.int64); pidx[pi] = M + np.arange(P)
+er, ec = [], []
 for dy, dx in NB:
     y2, x2 = ys + dy, xs + dx; ok = (y2 >= 0) & (y2 < ph) & (x2 >= 0) & (x2 < pw); j = np.where(ok, y2 * pw + x2, 0)
-    inH = ok & hv[j]; pin = ok & ~hv[j] & (dq[j] < dq[di] - 2 * step)
-    rows.append(np.flatnonzero(inH)); cols.append(idx[j[inH]]); deg += inH + pin; b[pin] += vals4[j[pin]]; hasPin |= pin; pinSet[j[pin]] = True
-A = (sparse.diags(deg) - sparse.csr_matrix((np.ones(sum(r.size for r in rows)), (np.concatenate(rows), np.concatenate(cols))), shape=(M, M))).tocsr()
+    e = ok & (hv[j] | pinSet[j]); jj = np.where(hv[j], idx[j], pidx[j]); er.append(np.flatnonzero(e)); ec.append(jj[e])
+er = np.concatenate(er); ec = np.concatenate(ec)
+W = sparse.csr_matrix((np.ones(er.size), (er, ec)), shape=(M + P, M + P)); W = ((W + W.T) > 0).astype(np.float64)
+Ls = (sparse.diags(np.asarray(W.sum(1)).ravel() + np.r_[np.zeros(M), np.ones(P)]) - W).tocsr(); rhs = np.zeros(M + P); rhs[M:] = dq[pi]
+xs_ = pyamg.smoothed_aggregation_solver(Ls.tocsr()).solve(rhs, tol=1e-10, accel='cg')
+keep = np.ones(N, bool); keep[pi[np.abs(xs_[M:] - dq[pi]) > 2 * step]] = False
+st['pinsDropped'] = int((~keep).sum())
+A, b, hasPin, pinSet = build(keep)
 lab, nc = label(hole); comp = lab.ravel()[di] - 1; pinned = np.zeros(nc, bool); np.logical_or.at(pinned, comp, hasPin)
 live = pinned[comp]; li = np.flatnonzero(live); A2 = A[li][:, li].tocsr(); U = np.zeros((M, 4)); res = []
 ml = pyamg.smoothed_aggregation_solver(A2)

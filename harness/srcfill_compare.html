@@ -1,0 +1,95 @@
+<title>Smooth Hole</title>
+<!-- S62 before/after page template; srcfill_compare.py fills DATA. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#eef0f2; --panel:#ffffff; --ink:#1b1f24; --muted:#5c6570; --line:#d3d8de;
+  --mat:#7a7f86; --chip:#e3e7eb; --chip-on:#1b1f24; --chip-on-ink:#ffffff; --mark:#f2c200;
+  --sans:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark; --ground:#15181c; --panel:#1d2126; --ink:#e7eaee; --muted:#9aa3ad; --line:#30363d;
+  --mat:#3b4047; --chip:#262b31; --chip-on:#e7eaee; --chip-on-ink:#15181c; --mark:#ffd21f;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark; --ground:#15181c; --panel:#1d2126; --ink:#e7eaee; --muted:#9aa3ad; --line:#30363d;
+  --mat:#3b4047; --chip:#262b31; --chip-on:#e7eaee; --chip-on-ink:#15181c; --mark:#ffd21f;
+}
+[hidden]{display:none!important}
+body{background:var(--ground);color:var(--ink);font:15px/1.45 var(--sans);padding:0 16px}
+.wrap{max-width:1840px;margin:0 auto;padding-block:20px 40px;display:grid;gap:16px}
+h1{font-size:22px;margin:0;text-wrap:balance}
+.lede{color:var(--muted);margin:0;max-width:72ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+.group{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lbl{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:2px}
+button{font:inherit;color:inherit;cursor:pointer;border:1px solid var(--line);background:var(--chip);border-radius:6px;padding:6px 11px;min-height:34px}
+button[aria-pressed="true"]{background:var(--chip-on);color:var(--chip-on-ink);border-color:var(--chip-on)}
+button:focus-visible{outline:2px solid var(--mark);outline-offset:2px}
+.stage{background:var(--mat);border-radius:8px;padding:10px}
+.row{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:10px}
+figure{margin:0;position:relative}
+figure img{display:block;width:100%;height:auto;outline:1px solid rgba(0,0,0,.28)}
+.tag{position:absolute;left:8px;top:6px;font:600 15px/1 var(--mono);color:var(--mark);text-shadow:0 1px 2px #000,0 0 6px #000}
+.flipview{cursor:pointer;-webkit-user-select:none;user-select:none}
+.hint{color:var(--muted);font-size:13px;margin:0}
+.facts{font:13px/1.5 var(--mono);color:var(--muted);overflow-x:auto;white-space:nowrap}
+@media (max-width:760px){.row{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Today's hole next to the smooth one</h1>
+    <p class="lede">Left: the app as it ships (the per-line law). Right: the new hole, built in 2-D from DA3's own map only: the outline follows what each object slides over, the depth is a smooth surface pinned to the flat background around it, and the colour is a smooth wash of that background. The foreground tears at DA3's collapsed edges (ramps: strong).</p>
+  </header>
+  <div class="bar"><div class="group" id="tabs"></div></div>
+  <div class="bar">
+    <div class="group"><span class="lbl">View</span><span id="views" class="group"></span></div>
+    <div class="group"><span class="lbl">Layout</span>
+      <button id="mSide" aria-pressed="true">Side by side</button>
+      <button id="mFlip" aria-pressed="false">Flip in place</button>
+    </div>
+  </div>
+  <div class="stage"><div id="out"></div></div>
+  <p class="hint">Flip in place: tap the picture or press space to switch between today and new. Keys 1–6 change the view.</p>
+  <div class="facts" id="facts"></div>
+</div>
+
+<script>
+const D = /*DATA*/null || {pics:[{id:'example',stats:{}}],poses:[['yawR42','yaw +42°']]};
+const VIEWS = D.poses.map(([k, l]) => ({ id: k, label: l, panels: [['today', 'today_' + k], ['new', 'new_' + k]] }))
+  .concat([{ id: 'relief', label: 'hole depth', panels: [['DA3 map', 'da3_relief'], ['today', 'today_relief'], ['new', 'new_relief']] },
+           { id: 'wash', label: 'new wash', panels: [['new wash', 'new_wash']] }]);
+const $ = id => document.getElementById(id);
+const st = { pic: D.pics[0].id, view: VIEWS[0].id, mode: 'side', flip: 0 };
+try { const s = JSON.parse(localStorage.getItem('srcfill-compare') || 'null'); if (s && D.pics.some(p => p.id === s.pic)) st.pic = s.pic; } catch (e) {}
+function el(t, a, x){ const e = document.createElement(t); for (const k in a||{}) e.setAttribute(k, a[k]); if (x != null) e.textContent = x; return e; }
+const tabB = D.pics.map(p => { const b = el('button', {}, p.id); b.onclick = () => { st.pic = p.id; st.flip = 0; render(); }; $('tabs').append(b); return b; });
+const viewB = VIEWS.map(v => { const b = el('button', {}, v.label); b.onclick = () => { st.view = v.id; st.flip = 0; render(); }; $('views').append(b); return b; });
+$('mSide').onclick = () => { st.mode = 'side'; render(); }; $('mFlip').onclick = () => { st.mode = 'flip'; render(); };
+document.addEventListener('keydown', e => {
+  if (/^[1-6]$/.test(e.key) && VIEWS[+e.key - 1]) { st.view = VIEWS[+e.key - 1].id; st.flip = 0; render(); }
+  else if (e.key === ' ' && st.mode === 'flip') { e.preventDefault(); st.flip++; render(); }
+});
+function fig(p, tag, name){ const f = el('figure'); f.append(el('img', { src: `${p}/${name}.png`, alt: `${p} ${tag}` }), el('span', { class: 'tag' }, tag)); return f; }
+function render(){
+  const v = VIEWS.find(x => x.id === st.view); const o = $('out'); o.textContent = '';
+  tabB.forEach((b, i) => b.setAttribute('aria-pressed', String(D.pics[i].id === st.pic)));
+  viewB.forEach((b, i) => b.setAttribute('aria-pressed', String(VIEWS[i].id === st.view)));
+  $('mSide').setAttribute('aria-pressed', String(st.mode === 'side')); $('mFlip').setAttribute('aria-pressed', String(st.mode === 'flip'));
+  if (st.mode === 'side' || v.panels.length === 1) {
+    const r = el('div', { class: 'row' }); r.style.setProperty('--n', v.panels.length);
+    v.panels.forEach(([t, n]) => r.append(fig(st.pic, t, n))); o.append(r);
+  } else {
+    const [t, n] = v.panels[st.flip % v.panels.length]; const w = el('div', { class: 'flipview' }); w.append(fig(st.pic, t, n));
+    w.onclick = () => { st.flip++; render(); }; o.append(w);
+  }
+  const s = (D.pics.find(p => p.id === st.pic) || {}).stats || {};
+  $('facts').textContent = `${st.pic}: hole ${s.hole ?? '?'} texels in ${s.components ?? '?'} pieces · ${s.pins ?? '?'} background pins · ${s.notBehind ?? '?'} texels clamped behind their object · reach up to ${s.reachMaxPx ?? '?'} px`;
+  try { localStorage.setItem('srcfill-compare', JSON.stringify({ pic: st.pic })); } catch (e) {}
+  D.pics.forEach(p => VIEWS.forEach(x => x.panels.forEach(([, n]) => { const im = new Image(); im.src = `${p.id}/${n}.png`; })));
+}
+render();
+</script>
