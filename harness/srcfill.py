@@ -53,36 +53,52 @@ st = {'pw': pw, 'ph': ph, 'step': step}
 #    than that tolerance; a straight slope, however steep, stops the tail (a receding ground is not a blur). The whole stretch, torn core plus blurry tails, is one edge; it becomes a
 #    one-texel cliff at the centre of the colour change inside it (the painting's own edge; the centre, not the peak,
 #    so neighbouring lines agree): texels on the near side of that
-#    change take the near end's depth, the rest the far end's. Only stretches anchored on a torn step are touched, so a
-#    surface with no occlusion (a faceted mountain, a steep ground) is left as DA3 drew it (the 'strong' ramp collapse
+#    change take the near end's depth, the rest the far end's. A stretch is taken if it holds a torn step or continues,
+#    on the next line, a stretch that was taken (one contour); a surface with no occlusion on its contour (a faceted
+#    mountain, a steep ground) is left as DA3 drew it (the 'strong' ramp collapse
 #    striped the crystal mountain because it had no such anchor, S62 s4). Rows and columns; a texel collapsed both ways
 #    takes the steeper stretch.
 disp0, _ = law(outer, inner, pn, D); Dq = disp0(src); tolq = np.abs(disp0(np.minimum(1, src + step)) - disp0(np.maximum(0, src - step))) + 1e-12
-t0_ = rim_t(pw, ph, D); newD = src.copy(); score = np.full((ph, pw), -1.0); ncol = 0
+t0_ = rim_t(pw, ph, D); newD = src.copy(); score = np.full((ph, pw), -1.0); ncol = 0; nprop = 0
 for ax in (0, 1):
     V = src if ax == 1 else src.T; Dl = Dq if ax == 1 else Dq.T; Tl = tolq if ax == 1 else tolq.T; C = rgb if ax == 1 else rgb.transpose(1, 0, 2)
-    Zl = 1.0 / Dl; torn = ~joined_lines(Zl, Dl, Tl, t0_); dD = Dl[:, 1:] - Dl[:, :-1]; steep = np.abs(dD) > np.maximum(Tl[:, 1:], Tl[:, :-1])
+    Zl = 1.0 / Dl; torn = ~joined_lines(Zl, Dl, Tl, t0_); dD = Dl[:, 1:] - Dl[:, :-1]; TE = np.maximum(Tl[:, 1:], Tl[:, :-1])
     dC = np.abs(np.diff(C, axis=1)).sum(-1); nr, nc_ = V.shape; ND = newD if ax == 1 else newD.T; SC = score if ax == 1 else score.T
-    for sign in (1, -1):                                   # disparity falling (+1) or rising (-1) toward higher index
-        core = torn & (sign * dD < 0); tail = steep & (sign * dD < 0)
-        ys_, xs_ = np.nonzero(core)
-        for y, x in zip(ys_, xs_):
-            if x > 0 and core[y, x - 1]: continue            # start of a torn run only
-            a_ = x; b_ = x
-            while b_ + 1 < nc_ - 1 and core[y, b_ + 1]: b_ += 1
-            # the tails: steep steps of the same sign that are still CURVING -- each step outward smaller than the one before
-            # it by more than the tolerance -- so a blur's sigmoid tail is taken and a straight slope (a receding ground)
-            # stops it at once
-            ad = np.abs(dD[y])
-            while a_ - 2 >= 0 and tail[y, a_ - 1] and ad[a_ - 1] - ad[a_ - 2] > Tl[y, a_ - 1]: a_ -= 1
-            while b_ + 2 < nc_ - 1 and tail[y, b_ + 1] and ad[b_ + 1] - ad[b_ + 2] > Tl[y, b_ + 2]: b_ += 1
-            wC = dC[y, a_:b_ + 1]                            # the colour change across the stretch; its CENTRE is the cut
-            e = a_ + int(np.round((wC * np.arange(wC.size)).sum() / max(1e-9, wC.sum())))   # (a peak jumps between neighbouring lines)
-            L_ = b_ + 1 - a_; sc = abs(V[y, b_ + 1] - V[y, a_]) / max(1, L_)
-            if L_ < 2: continue                              # already a one-texel cliff
-            seg = np.r_[np.full(e + 1 - a_, V[y, a_]), np.full(b_ + 1 - e, V[y, b_ + 1])]
-            idx_ = np.arange(a_, b_ + 2); w = sc > SC[y, idx_]
-            ND[y, idx_[w]] = seg[w]; SC[y, idx_[w]] = sc; ncol += 1
+    # candidate stretches, per line: from each steepest step outward (largest first), the curving tails of the same sign
+    cands = []                                         # (line, a, b, sign, anchored)
+    for y in range(nr):
+        ad = np.abs(dD[y]); sg = np.sign(dD[y]); used = np.zeros(nc_ - 1, bool)
+        for x in np.argsort(-ad):
+            if ad[x] <= TE[y, x]: break                # not steep: nothing further on this line
+            if used[x]: continue
+            a_ = b_ = x; s_ = sg[x]
+            while a_ - 2 >= 0 and not used[a_ - 1] and sg[a_ - 1] == s_ and ad[a_ - 1] > TE[y, a_ - 1] and ad[a_ - 1] - ad[a_ - 2] > Tl[y, a_ - 1]: a_ -= 1
+            while b_ + 2 < nc_ - 1 and not used[b_ + 1] and sg[b_ + 1] == s_ and ad[b_ + 1] > TE[y, b_ + 1] and ad[b_ + 1] - ad[b_ + 2] > Tl[y, b_ + 2]: b_ += 1
+            used[a_:b_ + 1] = True
+            if b_ + 1 - a_ >= 2: cands.append((y, a_, b_, s_, bool(torn[y, a_:b_ + 1].any())))
+    # an edge is one contour: a stretch is taken if it holds a torn step (an occlusion by the rim law) or if the stretch
+    # of the same sign on the next line over, overlapping it, was taken -- so a soft edge is sharpened along its whole
+    # length, not only where DA3 happened to make it steep enough to tear; a surface with no occlusion on its contour
+    # (a faceted mountain, a receding ground) has nothing to start from
+    byline = {}
+    for k, c in enumerate(cands): byline.setdefault(c[0], []).append(k)
+    acc = np.array([c[4] for c in cands], bool); stack = list(np.flatnonzero(acc))
+    while stack:
+        k = stack.pop(); y, a_, b_, s_, _ = cands[k]
+        for yy in (y - 1, y + 1):
+            for k2 in byline.get(yy, ()):
+                if acc[k2]: continue
+                _, a2, b2, s2, _ = cands[k2]
+                if s2 == s_ and a2 <= b_ + 1 and b2 >= a_ - 1: acc[k2] = True; stack.append(k2); nprop += 1
+    for k in np.flatnonzero(acc):
+        y, a_, b_, s_, _ = cands[k]
+        wC = dC[y, a_:b_ + 1]                            # the colour change across the stretch; its CENTRE is the cut
+        e = a_ + int(np.round((wC * np.arange(wC.size)).sum() / max(1e-9, wC.sum())))   # (a peak jumps between neighbouring lines)
+        L_ = b_ + 1 - a_; sc = abs(V[y, b_ + 1] - V[y, a_]) / max(1, L_)
+        seg = np.r_[np.full(e + 1 - a_, V[y, a_]), np.full(b_ + 1 - e, V[y, b_ + 1])]
+        idx_ = np.arange(a_, b_ + 2); w = sc > SC[y, idx_]
+        ND[y, idx_[w]] = seg[w]; SC[y, idx_[w]] = sc; ncol += 1
+st['edgesPropagated'] = nprop
 dQ = newD; st['edgesCollapsed'] = ncol; st['texelsChanged'] = int((np.abs(dQ - src) > 0).sum())
 # the corrected depth, for the app to bake from (16-bit, value / 65535 = the app's normalised depth)
 Image.fromarray(np.round(np.clip(dQ, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(OUT, 'depthD16.png'))
