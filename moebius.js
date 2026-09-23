@@ -15740,84 +15740,9 @@ function bgBuildBackgroundLayerCore() {
             // is not a troll-only accident.
             // The requirement is a near-instant preview; a stage costing 28%
             // of the bake that removes nothing does not earn a place in it.
-            // window._vpScan = true re-enables it; window._noVpScan still
-            // forces it off for older harnesses.
-            const _vpScanOn = (window._vpScan === true) && (window._noVpScan !== true);
-            if (_vpScanOn) {
-                const t0s = Date.now();
-                const scanVis = new Uint8Array(PNq);
-                const zbuf = new Float32Array(PNq);
-                const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[0.7071,0.7071],[0.7071,-0.7071],[-0.7071,0.7071],[-0.7071,-0.7071]];
-                // RANGE: t = 1 is the sCone-encoded maximum (~2x the fade
-                // cone's supported offset — measured against the device
-                // sheets). window._scanRange rescales the sweep so the SD
-                // mask serves exactly the pose range the fade cone keeps
-                // visible; calibration pins the default (Addendum 83).
-                const tMaxS = (typeof window._scanRange === 'number') ? window._scanRange : 1.0;
-                const TS = [0.3, 0.55, 0.8, 1.0].map(t => t * tMaxS);
-                const invS = 1 / sCone;
-                // Anchor shifts at the scene's dominant plane (median depth
-                // ~ the portal-stationary plane). Occlusion is invariant to
-                // a constant shift of every pixel EXCEPT at the frame
-                // boundary — anchored at 0, the whole frame translates by
-                // hundreds of px, the z-buffer empties, and everything
-                // tests visible (measured: scan dropped ~0 on star).
-                const dSrt = dQ.slice().sort();
-                const dRefS = dSrt[dSrt.length >> 1];
-                // A106 EXACT SCAN WARP. Was xx = x + ux*t*(1/sCone)*(d - dRef),
-                // linear in depth against a scalar k — the same error a101/a102
-                // removed from the fill and the tear, and the one place where it
-                // is SILENT: an over-short warp drops reveals that do open, and
-                // those texels are then never inpainted. The displacement is
-                // shift(d) - shift(dRef), exactly; t is then a pure fraction of
-                // the fade-end offset, so t = 1 IS the fade end by construction
-                // and window._scanRange stops being a calibrated constant.
-                // _legacyScanWarp isolates THIS change from a102's fill/tear, which
-                // share _noExactCone — without a separate hatch a mask move cannot
-                // be attributed to the scan rather than to the fill.
-                const _scanL = (window._noExactCone === true || window._legacyScanWarp === true)
-                               ? null : bgShiftLUTFor(pw, ph);
-                const _sRefS = _scanL ? bgShiftPxAt(_scanL, dRefS) : 0;
-                // hoisted: the displacement of each texel is the same in all 32
-                // sweeps, so evaluate the envelope once per texel instead of
-                // once per (direction, magnitude, texel) — 32x fewer lookups.
-                let _spAll = null;
-                if (_scanL) { _spAll = new Float32Array(PNq);
-                    for (let i = 0; i < PNq; i++) _spAll[i] = bgShiftPxAt(_scanL, dQ[i]) - _sRefS; }
-                for (const [ux, uy] of DIRS) for (const t of TS) {
-                    zbuf.fill(-1);
-                    const kx = ux * t * invS, ky = uy * t * invS;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        const d = dQ[i] - dRefS;
-                        const _sp = _spAll ? _spAll[i] : 0;
-                        const xx = _scanL ? (x + ux * t * _sp) : (x + kx * d);
-                        const yy = _scanL ? (y + uy * t * _sp) : (y + ky * d);
-                        const x0 = xx | 0, y0 = yy | 0;
-                        for (let dy2 = 0; dy2 <= 1; dy2++) for (let dx2 = 0; dx2 <= 1; dx2++) {
-                            const xq = x0 + dx2, yq = y0 + dy2;
-                            if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
-                            const q = yq*pw + xq;
-                            if (d > zbuf[q]) zbuf[q] = d;
-                        }
-                    }
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        if (!disocc[i] || scanVis[i]) continue;
-                        const p = plateQ[i];
-                        const xq = Math.round(x + kx * (p - dRefS)), yq = Math.round(y + ky * (p - dRefS));
-                        if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
-                        if (zbuf[yq*pw + xq] <= p + 0.02) scanVis[i] = 1;
-                    }
-                }
-                let nScan = 0;
-                for (let i = 0; i < PNq; i++) if (disocc[i] && !scanVis[i]) { disocc[i] = 0; nScan++; }
-                nD -= nScan;
-                console.log('[QUICK-BAKE] viewpoint scan: ' + nScan + 'px of claim-mask never exposed by any head pose in range — dropped (' +
-                            (Date.now() - t0s) + 'ms, ' + DIRS.length * TS.length + ' poses)');
-            } else {
-                // A121: say so. A stage that silently stops running reads in
-                // the log as "covered everything" when it covered nothing.
-                console.log('[QUICK-BAKE] viewpoint scan: SKIPPED (a121 default; it pruned 0px in every measured bake and cost ~2.7s of ~10s). window._vpScan = true re-enables.');
-            }
+            // The scan and its switches (_vpScan, _noVpScan, _scanRange, _legacyScanWarp) were removed (S60, rule 5):
+            // measured inert, 0 px pruned on all four suite assets (REVIEW 6527, 11142).
+            console.log('[QUICK-BAKE] viewpoint scan: SKIPPED (removed, S60 rule 5: it pruned 0px in every measured bake).');
             // A62b INK-ADJACENCY CLOSURE. Silhouette ink whose estimator depth
             // dipped to (or past) the far level is invisible to a depth-
             // trusting mask: plate == its own depth, so it never flags — the
