@@ -4,8 +4,8 @@ arms noisy: "drop per-line, and also the stopping law. This needs to work no mat
 
 Reads a streak_class dump (dQ.f32 source depth, color.png, meta.json) -- NOT its band -- and writes a full-frame plate.
 
-  1. ramps     the colour-guided ramp collapse (S61, v2 'safe': v1 striped the crystal mountain) turns DA3's blurred silhouettes into one-texel cliffs
-               at the image's own edge, so a silhouette is one rim, not a staircase of small ones
+  1. edges     DA3's blurred occlusion edges -- a torn run (the rim law) plus its steep blurry tails -- collapse to one-texel
+               cliffs at the centre of the painting's own colour change; surfaces with no occlusion are left alone
   2. rims      every 4-neighbour pair, rows AND columns, torn by the rim law as the app has it (bgRimLawFor): the ratio
                test on eye distance (t = 1 + (hfov/pw)/tan 2 deg), unless the pair continues the straight slope of the
                texels beside it; a run of torn steps across an edge is one rim, top texel to bottom texel
@@ -26,7 +26,7 @@ Reads a streak_class dump (dQ.f32 source depth, color.png, meta.json) -- NOT its
   source colour.
 
   python3 srcfill.py <dump dir> <out dir>
-Writes plateD.f32 (source rows), washD.png, hole.u8, stats.json.
+Writes plateD.f32 (source rows), washD.png, hole.u8, depthD16.png (the corrected depth, for the bake), stats.json.
 """
 import sys, os, json, time
 import numpy as np
@@ -35,7 +35,6 @@ from scipy import sparse
 from scipy.ndimage import label, binary_fill_holes, binary_dilation
 import pyamg
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ramp_colour import collapse_colour
 from ramp_collapse import rim_t, law, joined_lines, TW, TH
 
 D0, OUT = sys.argv[1], sys.argv[2]; os.makedirs(OUT, exist_ok=True); t0 = time.time()
@@ -45,8 +44,45 @@ src = np.fromfile(os.path.join(D0, 'dQ.f32'), np.float32).astype(np.float64).res
 rgb = np.asarray(Image.open(os.path.join(D0, 'color.png')).convert('RGB')).astype(np.float64)
 st = {'pw': pw, 'ph': ph, 'step': step}
 
-# 1. ramps
-dQ, nch, _ = collapse_colour(src, rgb, outer, inner, pn, D, step, single_edge=True); st['rampTexelsCollapsed'] = int(nch)
+# 1. blurred occlusion edges, collapsed where they occlude. A run of torn steps across an edge (the rim law) is an occlusion
+#    edge; DA3 blurs it, so the run continues on both sides in steep steps the rim law joins (each more than one visible
+#    step: the law's own tolerance tolAt, S10) that are still curving -- each step outward smaller than the last by more
+#    than that tolerance; a straight slope, however steep, stops the tail (a receding ground is not a blur). The whole stretch, torn core plus blurry tails, is one edge; it becomes a
+#    one-texel cliff at the centre of the colour change inside it (the painting's own edge; the centre, not the peak,
+#    so neighbouring lines agree): texels on the near side of that
+#    change take the near end's depth, the rest the far end's. Only stretches anchored on a torn step are touched, so a
+#    surface with no occlusion (a faceted mountain, a steep ground) is left as DA3 drew it (the 'strong' ramp collapse
+#    striped the crystal mountain because it had no such anchor, S62 s4). Rows and columns; a texel collapsed both ways
+#    takes the steeper stretch.
+disp0, _ = law(outer, inner, pn, D); Dq = disp0(src); tolq = np.abs(disp0(np.minimum(1, src + step)) - disp0(np.maximum(0, src - step))) + 1e-12
+t0_ = rim_t(pw, ph, D); newD = src.copy(); score = np.full((ph, pw), -1.0); ncol = 0
+for ax in (0, 1):
+    V = src if ax == 1 else src.T; Dl = Dq if ax == 1 else Dq.T; Tl = tolq if ax == 1 else tolq.T; C = rgb if ax == 1 else rgb.transpose(1, 0, 2)
+    Zl = 1.0 / Dl; torn = ~joined_lines(Zl, Dl, Tl, t0_); dD = Dl[:, 1:] - Dl[:, :-1]; steep = np.abs(dD) > np.maximum(Tl[:, 1:], Tl[:, :-1])
+    dC = np.abs(np.diff(C, axis=1)).sum(-1); nr, nc_ = V.shape; ND = newD if ax == 1 else newD.T; SC = score if ax == 1 else score.T
+    for sign in (1, -1):                                   # disparity falling (+1) or rising (-1) toward higher index
+        core = torn & (sign * dD < 0); tail = steep & (sign * dD < 0)
+        ys_, xs_ = np.nonzero(core)
+        for y, x in zip(ys_, xs_):
+            if x > 0 and core[y, x - 1]: continue            # start of a torn run only
+            a_ = x; b_ = x
+            while b_ + 1 < nc_ - 1 and core[y, b_ + 1]: b_ += 1
+            # the tails: steep steps of the same sign that are still CURVING -- each step outward smaller than the one before
+            # it by more than the tolerance -- so a blur's sigmoid tail is taken and a straight slope (a receding ground)
+            # stops it at once
+            ad = np.abs(dD[y])
+            while a_ - 2 >= 0 and tail[y, a_ - 1] and ad[a_ - 1] - ad[a_ - 2] > Tl[y, a_ - 1]: a_ -= 1
+            while b_ + 2 < nc_ - 1 and tail[y, b_ + 1] and ad[b_ + 1] - ad[b_ + 2] > Tl[y, b_ + 2]: b_ += 1
+            wC = dC[y, a_:b_ + 1]                            # the colour change across the stretch; its CENTRE is the cut
+            e = a_ + int(np.round((wC * np.arange(wC.size)).sum() / max(1e-9, wC.sum())))   # (a peak jumps between neighbouring lines)
+            L_ = b_ + 1 - a_; sc = abs(V[y, b_ + 1] - V[y, a_]) / max(1, L_)
+            if L_ < 2: continue                              # already a one-texel cliff
+            seg = np.r_[np.full(e + 1 - a_, V[y, a_]), np.full(b_ + 1 - e, V[y, b_ + 1])]
+            idx_ = np.arange(a_, b_ + 2); w = sc > SC[y, idx_]
+            ND[y, idx_[w]] = seg[w]; SC[y, idx_[w]] = sc; ncol += 1
+dQ = newD; st['edgesCollapsed'] = ncol; st['texelsChanged'] = int((np.abs(dQ - src) > 0).sum())
+# the corrected depth, for the app to bake from (16-bit, value / 65535 = the app's normalised depth)
+Image.fromarray(np.round(np.clip(dQ, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(OUT, 'depthD16.png'))
 
 # the app's depth law and shift at the envelope's edge
 def z_of_d(d):
@@ -85,10 +121,13 @@ for ax in (0, 1):
 rim = R > 0; st['rimTexels'] = int(rim.sum()); st['reachMaxPx'] = round(float(R.max()), 1)
 
 # 3. the hole: what the occluder slides over. From each rim the reach spreads THROUGH the occluder only (texels in front of
-#    the background that rim reveals by more than two visible steps, S35 s47), in the envelope's box norm (a step costs
-#    1 across, 1/env down, max of the two diagonally: the rectangle |dx| <= R, |dy| <= R env, clipped to the occluder)
+#    the background that rim reveals by more than two visible steps, S35 s47). The envelope is a rectangle, |dx| <= R,
+#    |dy| <= R env; its reach is measured in the ELLIPSE through the rectangle's corners (x^2 + (y/env)^2 <= 2 R^2), with
+#    16 move directions (the 8 neighbours and the knight moves), so an outline is a smooth curve following the silhouette,
+#    never a box or an octagon; it covers the rectangle, so nothing the envelope uncovers is left out
 Bud = np.where(rim, R, -np.inf); Fc = F.copy(); iters = 0
-moves = [(dy, dx, max(abs(dx), abs(dy) / env)) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+moves = [(dy, dx, np.hypot(dx, dy / env) / np.sqrt(2)) for dy in (-2, -1, 0, 1, 2) for dx in (-2, -1, 0, 1, 2)
+         if (dy or dx) and max(abs(dy), abs(dx)) <= 2 and not (abs(dy) == 2 and abs(dx) != 1) and not (abs(dx) == 2 and abs(dy) != 1)]
 def sh(a, dy, dx, fill):
     o = np.full_like(a, fill); o[max(dy, 0):ph + min(dy, 0), max(dx, 0):pw + min(dx, 0)] = a[max(-dy, 0):ph + min(-dy, 0), max(-dx, 0):pw + min(-dx, 0)]; return o
 # a move stays on one surface: the pair it crosses is joined by the rim law (both axes, as the rims above); a diagonal move
@@ -99,9 +138,15 @@ def ax_ok(dy, dx):                                    # the pair (i - (dy, dx), 
     if dy == 0: return sh(JH, 0, 1, False) if dx == 1 else JH
     return sh(JV, 1, 0, False) if dy == 1 else JV
 same = {}
-for dy, dx, c in moves:
-    if dy == 0 or dx == 0: same[(dy, dx)] = ax_ok(dy, dx)
-    else: same[(dy, dx)] = (ax_ok(dy, 0) & sh(ax_ok(0, dx), dy, 0, False)) | (ax_ok(0, dx) & sh(ax_ok(dy, 0), 0, dx, False))
+for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)): same[(dy, dx)] = ax_ok(dy, dx)
+def compose(a, b):                                   # move a then move b, at the receiving texel
+    return same[b] & sh(same[a], b[0], b[1], False)
+for dy in (-1, 1):
+    for dx in (-1, 1): same[(dy, dx)] = compose((dy, 0), (0, dx)) | compose((0, dx), (dy, 0))
+for dy, dx, c in moves:                              # knight moves: an axis step and a diagonal step, either order
+    if max(abs(dy), abs(dx)) == 2:
+        ax_ = (0, int(np.sign(dx))) if abs(dx) == 2 else (int(np.sign(dy)), 0); dg = (dy - ax_[0], dx - ax_[1])
+        same[(dy, dx)] = compose(ax_, dg) | compose(dg, ax_)
 while True:
     ch = 0
     for dy, dx, c in moves:
