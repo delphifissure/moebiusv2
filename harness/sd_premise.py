@@ -32,8 +32,8 @@ wash = Image.open(os.path.join(D, 'ab_fields', 'wash.png')).convert('RGB')
 s = 640 / max(pw, ph); W, Hh = int(round(pw * s / 8) * 8), int(round(ph * s / 8) * 8)
 img = wash.resize((W, Hh), Image.LANCZOS)
 mask = Image.fromarray((band * 255).astype(np.uint8)).resize((W, Hh), Image.NEAREST)
-cn = ControlNetModel.from_pretrained('lllyasviel/control_v11f1p_sd15_depth', torch_dtype=torch.float32)
-pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained('stable-diffusion-v1-5/stable-diffusion-inpainting', controlnet=cn,
+cn = ControlNetModel.from_pretrained('lllyasviel/control_v11f1p_sd15_depth', variant='fp16', torch_dtype=torch.float32)
+pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained('stable-diffusion-v1-5/stable-diffusion-inpainting', controlnet=cn, variant='fp16',
                                                                 torch_dtype=torch.float32, safety_checker=None, requires_safety_checker=False)
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config); pipe.set_progress_bar_config(disable=True)
 m = np.asarray(mask) > 127
