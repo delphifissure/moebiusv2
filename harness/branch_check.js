@@ -12,15 +12,16 @@ const POSES = [['rest', 0, 0], ['yawR42', 0.180, 0.008], ['yawL42', -0.180, 0.00
     { const r = await fetch('http://localhost:8099/__root').then(x => x.text()).catch(() => ''); if (r !== H) { console.error('ABORT: port 8099 is served from ' + (r.slice(0, 80) || 'nothing') + ', not this tree (' + H + ')'); srv.kill(); process.exit(4); } }
     const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell', headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-dev-shm-usage'] });
     const page = await browser.newPage({ viewport: { width: 912, height: 513 } }); const logs = [];
-    page.on('console', m => { const t = m.text(); if (/\[S61\]|\[S6\] plate bake/.test(t)) logs.push(t.slice(0, 400)); });
+    page.on('console', m => { const t = m.text(); if (/\[S61\]|\[S6\] plate bake/.test(t)) logs.push(t.slice(0, 600)); });
     page.on('pageerror', e => logs.push('PAGEERR ' + e.message.slice(0, 200)));
     await page.goto('http://localhost:8099/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
     const R = process.env.RAMPS || 'off';
-    await page.evaluate((R) => { try { localStorage.clear(); } catch (e) {} const el = document.getElementById('bgPlateRampSel'); if (el) { el.value = R; el.dispatchEvent(new Event('change')); } return !!el; }, R);
+    const SEL = { bgPlateRampSel: R, bgPlateHoleSel: process.env.HOLE || 'perline', bgPlatePinSel: process.env.PIN || 'asbaked', bgPlateFillSel: process.env.WASH || 'wash' };
+    await page.evaluate((SEL) => { try { localStorage.clear(); } catch (e) {} for (const id in SEL) { const el = document.getElementById(id); if (el) { el.value = SEL[id]; el.dispatchEvent(new Event('change')); } } }, SEL);
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 640; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 500)); }
-    const info = await page.evaluate(() => ({ ramp: window._qbRampColour || null, dq: (() => { const d = window._qbDQ; let s = 0; for (let i = 0; i < d.length; i += 97) s += d[i]; return s; })() }));
+    const info = await page.evaluate(() => ({ ramp: window._qbRampColour || null, postFill: window._qbPostFill || null, dq: (() => { const d = window._qbDQ; let s = 0; for (let i = 0; i < d.length; i += 97) s += d[i]; return s; })() }));
     const shot = async (name) => { const b64 = await page.evaluate(() => { updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }); fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, 'base64')); };
     for (const [n, x, y] of POSES) { await page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); }, [x, y]); await shot(n + '.png'); }
     fs.writeFileSync(path.join(OUT, 'info.json'), JSON.stringify({ ramps: R, info, logs }, null, 1)); console.log(JSON.stringify({ ramps: R, info, logs: logs.slice(0, 4) }));

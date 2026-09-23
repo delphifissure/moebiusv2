@@ -395,6 +395,281 @@ function bgDepthAtShift(L, m) {
 // invariant to resolution (dtheta scales) and to the depth volume (a ratio). A crease
 // (S16's two walls) is continuous in distance and stays joined; a jump is not.
 let _bgRimLaw = null;
+// S59 ARM C, THE PLAIN FILL, AND THE MEMBRANE WASH, as panel options (S61 §12; default off). Copied verbatim from
+// harness/plainfill.js (verified against harness/sheet_ab_fields.py): per band component a membrane pinned at the
+// background edge to the per-line law's own value there, free elsewhere; texels not behind their occluder by two
+// visible steps, and pin-less components, keep the law's value. The wash: the same membrane per channel pinned to the
+// colour of the law's own far rim (farRimJ / farRimW). Solved by aggregation-multigrid-preconditioned CG.
+function bgPlainFill(o) {
+    const TOL = (typeof o.tol === "number") ? o.tol : 1e-8;   // relative residual; 1e-8 = 0.0004 visible steps from exact on the troll (S61 §12)
+    const { pw, ph, band, dQ, law, step, rimJ, rimW, rgb } = o; const N = pw * ph;
+    const bi = []; const idx = new Int32Array(N).fill(-1);
+    for (let i = 0; i < N; i++) if (band[i]) { idx[i] = bi.length; bi.push(i); }
+    const n = bi.length;
+    // neighbours (band-band edges only: a non-band neighbour is a free boundary unless it pins)
+    const nbStart = new Int32Array(n + 1), nbList = new Int32Array(4 * n); let e = 0;
+    const edge = new Uint8Array(n), ringC = new Float64Array(3 * n), ringN = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+        nbStart[k] = e; const i = bi[k], x = i % pw;
+        const cand = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1];
+        for (const j of cand) {
+            if (j < 0) continue;
+            if (band[j]) nbList[e++] = idx[j];
+            else {
+                if (dQ[j] < dQ[i] - 2 * step) edge[k] = 1;
+                ringC[3 * k] += rgb[3 * j]; ringC[3 * k + 1] += rgb[3 * j + 1]; ringC[3 * k + 2] += rgb[3 * j + 2]; ringN[k]++;
+            }
+        }
+    }
+    nbStart[n] = e;
+    // components (band-band connectivity)
+    const comp = new Int32Array(n).fill(-1); let nc = 0; const stack = [];
+    for (let s = 0; s < n; s++) { if (comp[s] >= 0) continue; comp[s] = nc; stack.push(s);
+        while (stack.length) { const k = stack.pop(); for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const m = nbList[q]; if (comp[m] < 0) { comp[m] = nc; stack.push(m); } } } nc++; }
+
+    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0.
+    // The solve is a weighted-graph Laplacian with a COARSE-TO-FINE WARM START (a cascade): the graph is coarsened by
+    // merging 4x4 texel blocks (a fine edge adds weight 1 to the link between its two blocks; a block holding a fixed
+    // texel is fixed at their mean), the coarse problem is solved first (recursively, down to a few thousand nodes) and
+    // its answer is the fine CG's starting point. The fine CG still runs to the same relative tolerance, so the answer is
+    // the same to that tolerance; only the iteration count changes.
+    // AGGREGATION MULTIGRID-PRECONDITIONED CG on the eliminated system A u = b over the free nodes (A = D - W: D the
+    // weighted degree including links to fixed nodes, W the free-free links). Levels merge 2x2 blocks of the node
+    // coordinates (piecewise-constant prolongation P, Galerkin coarse operator P^T A P); a V-cycle with one forward and
+    // one backward Gauss-Seidel sweep per level is a symmetric preconditioner, so CG stays valid. The coarsest level
+    // (< 500 nodes) is solved by Gauss-Seidel to convergence. Stops on the relative residual TOL.
+    function buildLevel(m, rowStart, cols, vals, diag, xy) {    // CSR of the off-diagonal part (negative weights) + diag
+        return { m, rowStart, cols, vals, diag, xy };
+    }
+    function coarsen(L) {
+        const { m, rowStart, cols, vals, diag, xy } = L; const agg = new Int32Array(m), key2 = new Map(); let nc = 0; const cxy = [];
+        for (let i = 0; i < m; i++) { const X = xy[2 * i] >> 1, Y = xy[2 * i + 1] >> 1, key = Y * 1048576 + X; let c = key2.get(key); if (c === undefined) { c = nc++; key2.set(key, c); cxy.push(X, Y); } agg[i] = c; }
+        const cdiag = new Float64Array(nc); const links = new Map();
+        for (let i = 0; i < m; i++) { const a = agg[i]; cdiag[a] += diag[i];
+            for (let q = rowStart[i]; q < rowStart[i + 1]; q++) { const j = cols[q], bb = agg[j], v = vals[q]; if (a === bb) cdiag[a] += v; else { const k = a * nc + bb; links.set(k, (links.get(k) || 0) + v); } } }
+        const cStart = new Int32Array(nc + 1); for (const k of links.keys()) cStart[Math.floor(k / nc) + 1]++; for (let c = 0; c < nc; c++) cStart[c + 1] += cStart[c];
+        const cCols = new Int32Array(cStart[nc]), cVals = new Float64Array(cStart[nc]), fp = Int32Array.from(cStart.subarray(0, nc));
+        for (const [k, v] of links) { const aa = Math.floor(k / nc), bb = k - aa * nc; cCols[fp[aa]] = bb; cVals[fp[aa]] = v; fp[aa]++; }
+        return { agg, C: buildLevel(nc, cStart, cCols, cVals, cdiag, Int32Array.from(cxy)) };
+    }
+    function gs(L, x, rhs, backward) {
+        const { m, rowStart, cols, vals, diag } = L;
+        if (!backward) { for (let i = 0; i < m; i++) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+        else { for (let i = m - 1; i >= 0; i--) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+    }
+    function residual(L, x, rhs, out) { const { m, rowStart, cols, vals, diag } = L; for (let i = 0; i < m; i++) { let sum = diag[i] * x[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum += vals[q] * x[cols[q]]; out[i] = rhs[i] - sum; } }
+    function vcycle(levels, li, rhs) {     // returns x ~ A^-1 rhs from zero start
+        const L = levels[li].L; const x = new Float64Array(L.m);
+        if (li === levels.length - 1) { for (let s = 0; s < 60; s++) { gs(L, x, rhs, false); gs(L, x, rhs, true); } return x; }
+        gs(L, x, rhs, false);
+        const r = new Float64Array(L.m); residual(L, x, rhs, r);
+        const { agg } = levels[li]; const C = levels[li + 1].L; const rc = new Float64Array(C.m); for (let i = 0; i < L.m; i++) rc[agg[i]] += r[i];
+        const ec = vcycle(levels, li + 1, rc); for (let i = 0; i < L.m; i++) x[i] += ec[agg[i]];
+        gs(L, x, rhs, true);
+        return x;
+    }
+    function solveGraph(nN, adjStart, adjList, adjW, fixMask, fixVal) {
+        const free = []; for (let k = 0; k < nN; k++) if (!fixMask[k]) free.push(k);
+        const m = free.length, fidx = new Int32Array(nN).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
+        const out = Float64Array.from(fixVal); if (!m) return { out, iters: 0 };
+        // fine level: diag = weighted degree (all links), off-diagonal = -w for free-free links; rhs = sum w * fixed
+        const rowStart = new Int32Array(m + 1), diag = new Float64Array(m), b = new Float64Array(m);
+        for (let t = 0; t < m; t++) { const k = free[t]; let cnt = 0; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { diag[t] += adjW[q]; const j = adjList[q]; if (fidx[j] >= 0) cnt++; else b[t] += adjW[q] * fixVal[j]; } rowStart[t + 1] = rowStart[t] + cnt; }
+        const cols = new Int32Array(rowStart[m]), vals = new Float64Array(rowStart[m]);
+        for (let t = 0; t < m; t++) { const k = free[t]; let p0 = rowStart[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const f = fidx[adjList[q]]; if (f >= 0) { cols[p0] = f; vals[p0] = -adjW[q]; p0++; } } }
+        const xy = new Int32Array(2 * m); for (let t = 0; t < m; t++) { xy[2 * t] = xyB[2 * free[t]]; xy[2 * t + 1] = xyB[2 * free[t] + 1]; }
+        const levels = [{ L: buildLevel(m, rowStart, cols, vals, diag, xy) }];
+        while (levels[levels.length - 1].L.m > 500) { const c = coarsen(levels[levels.length - 1].L); if (c.C.m >= levels[levels.length - 1].L.m) break; levels[levels.length - 1].agg = c.agg; levels.push({ L: c.C }); }
+        const L0 = levels[0].L; const u = new Float64Array(m), r = Float64Array.from(b); let z = vcycle(levels, 0, r); const pv = Float64Array.from(z), Apv = new Float64Array(m);
+        let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
+        let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
+        const Ap = (x, o) => { for (let i = 0; i < m; i++) { let sum = L0.diag[i] * x[i]; for (let q = L0.rowStart[i]; q < L0.rowStart[i + 1]; q++) sum += L0.vals[q] * x[L0.cols[q]]; o[i] = sum; } };
+        let it = 0;
+        for (; it < 2000; it++) {
+            let rn = 0; for (let t = 0; t < m; t++) rn += r[t] * r[t]; if (Math.sqrt(rn) / bn < TOL) break;
+            Ap(pv, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += pv[t] * Apv[t];
+            const al = rz / pAp; for (let t = 0; t < m; t++) { u[t] += al * pv[t]; r[t] -= al * Apv[t]; }
+            z = vcycle(levels, 0, r); let rz2 = 0; for (let t = 0; t < m; t++) rz2 += r[t] * z[t];
+            const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) pv[t] = z[t] + beta * pv[t];
+        }
+        for (let t = 0; t < m; t++) out[free[t]] = u[t];
+        return { out, iters: it, levels: levels.length };
+    }
+    // the band texels as a graph (unit weights on band-band edges), shared by every channel
+    const adjStart = nbStart, adjList = nbList.subarray(0, e), adjW = new Float64Array(e).fill(1);
+    const xyB = new Int32Array(2 * n); for (let k = 0; k < n; k++) { xyB[2 * k] = bi[k] % pw; xyB[2 * k + 1] = (bi[k] / pw) | 0; }
+    function membrane(fix, vals, nch) {
+        const has = new Uint8Array(nc); for (let k = 0; k < n; k++) if (fix[k]) has[comp[k]] = 1;
+        const out = new Float64Array(n * nch); let iters = 0, worst = 0;
+        const fm = new Uint8Array(n); for (let k = 0; k < n; k++) fm[k] = (fix[k] || !has[comp[k]]) ? 1 : 0;
+        for (let c = 0; c < nch; c++) {
+            const fv = new Float64Array(n); for (let k = 0; k < n; k++) if (fm[k]) fv[k] = vals[k * nch + c];
+            const r = solveGraph(n, adjStart, adjList, adjW, fm, fv); iters = Math.max(iters, r.iters);
+            for (let k = 0; k < n; k++) out[k * nch + c] = r.out[k];
+            // residual on the free texels (the Laplace equation)
+            for (let k = 0; k < n; k++) { if (fm[k]) continue; let sum = (adjStart[k + 1] - adjStart[k]) * r.out[k]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) sum -= r.out[adjList[q]]; worst = Math.max(worst, Math.abs(sum)); }
+        }
+        return { out, has, iters, residual: worst };
+    }
+    // depth
+    const dv = new Float64Array(n); for (let k = 0; k < n; k++) dv[k] = law[bi[k]];
+    const D = membrane(edge, dv, 1);
+    const depth = Float32Array.from(dQ); let notBehind = 0, noPin = 0;
+    for (let k = 0; k < n; k++) { let v = D.out[k]; if (!D.has[comp[k]]) noPin++; else if (v >= dQ[bi[k]] - 2 * step) { v = law[bi[k]]; notBehind++; } depth[bi[k]] = v; }
+    // wash
+    const cfix = new Uint8Array(n), cv = new Float64Array(3 * n); let rimPins = 0, ringPins = 0;
+    for (let k = 0; k < n; k++) {
+        if (!edge[k]) continue; const i = bi[k]; let w = 0, r = 0, g = 0, bl = 0;
+        for (let s = 0; s < 2; s++) { const j = rimJ[2 * i + s]; if (j >= 0 && j < N) { const ww = rimW[2 * i + s] > 0 ? rimW[2 * i + s] : 0; w += ww; r += ww * rgb[3 * j]; g += ww * rgb[3 * j + 1]; bl += ww * rgb[3 * j + 2]; } }
+        if (w === 0) { let c = 0; for (let s = 0; s < 2; s++) { const j = rimJ[2 * i + s]; if (j >= 0 && j < N) { c++; r += rgb[3 * j]; g += rgb[3 * j + 1]; bl += rgb[3 * j + 2]; } } w = c; }
+        if (w > 0) { cfix[k] = 1; cv[3 * k] = r / w; cv[3 * k + 1] = g / w; cv[3 * k + 2] = bl / w; rimPins++; }
+    }
+    const hasC = new Uint8Array(nc); for (let k = 0; k < n; k++) if (cfix[k]) hasC[comp[k]] = 1;
+    for (let k = 0; k < n; k++) if (!hasC[comp[k]] && ringN[k] > 0) { cfix[k] = 1; for (let c = 0; c < 3; c++) cv[3 * k + c] = ringC[3 * k + c] / ringN[k]; ringPins++; }
+    const W = membrane(cfix, cv, 3);
+    const colour = Uint8ClampedArray.from(rgb);
+    for (let k = 0; k < n; k++) if (W.has[comp[k]]) for (let c = 0; c < 3; c++) colour[3 * bi[k] + c] = Math.round(Math.min(255, Math.max(0, W.out[3 * k + c])));
+    return { depth, colour, stats: { band: n, components: nc, edgePins: edge.reduce((a, v) => a + v, 0), noPin, notBehind, rimPins, ringPins, itersDepth: D.iters, itersWash: W.iters, residualDepth: D.residual, residualWash: W.residual } };
+}
+
+// S61 §12: THE POST-BAKE FILL OPTIONS (default off), applied to the finished plane bake exactly as the S59 A/B injected its
+// arms, so each option shows what was judged. hole depth 'plain' = arm C; wash 'membrane' = the S59 wash (LIVE_PASS §10 D);
+// pinholes 'filled' = the S61 §10 rule on the bake's own band (the depth spikes the per-line law leaves at the occluder's
+// depth inside a hole take the fill, and the wash). The band is the A/B's: _qbDisocc where the plate lies behind the
+// source by the grid (streak_class.js's definition). The plate depth and colour captures (_qbPlateF, _qbPlateColor) are
+// updated too, so the SD bundle carries what is on screen.
+function bgPostBakeFill() {
+    const hole = window._farFillMode === 'plain', washM = window._washMode === 'membrane', pin = window._pinholeDepth === 1;
+    if (!(hole || washM || pin)) return null;
+    if (!(bgFarRuleOn() && window._qbSize && window._qbDQ && window._qbDisocc && window._geoFarRimJ && window._geoFarRimW && typeof bgLayerMesh !== 'undefined' && bgLayerMesh)) { console.warn('[S61] post-bake fill: no plane bake on screen'); return null; }
+    const t0 = Date.now(); const { pw, ph } = window._qbSize, N = pw * ph, dQ = window._qbDQ, dis = window._qbDisocc;
+    const tex = bgLayerMesh.material.uniforms.displacementMap.value, data = tex.image.data;
+    const flip = (i) => { const x = i % pw, y = (i - x) / pw; return (ph - 1 - y) * pw + x; };
+    const law = new Float32Array(N); for (let i = 0; i < N; i++) law[i] = data[flip(i)];
+    const qg = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : 1 / 65535;
+    let band = new Uint8Array(N); for (let i = 0; i < N; i++) band[i] = (dis[i] && law[i] < dQ[i] - qg) ? 1 : 0;
+    const lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
+    const band0 = band; let pinSt = null;
+    if (pin) { const r = bgPinholeFilledMask(band0, dQ, pw, ph, step); band = r.mask; pinSt = { holes: r.holes, joined: r.joined, texels: r.filled }; }
+    const L = mediaLayers[0]; const cImg = (L.elements && L.elements.color) || L.textures.color.image;
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(cImg, 0, 0, pw, ph);
+    const rgba = cx.getImageData(0, 0, pw, ph).data, rgb = new Uint8ClampedArray(3 * N); for (let i = 0; i < N; i++) { rgb[3 * i] = rgba[4 * i]; rgb[3 * i + 1] = rgba[4 * i + 1]; rgb[3 * i + 2] = rgba[4 * i + 2]; }
+    const r = bgPlainFill({ pw, ph, band, dQ, law, step, rimJ: window._geoFarRimJ, rimW: window._geoFarRimW, rgb });
+    const pF = window._qbPlateF; let nD = 0, nC = 0;
+    for (let i = 0; i < N; i++) {
+        if (!band[i]) continue; const isPin = !band0[i];
+        if (hole || isPin) { const v = r.depth[i]; data[flip(i)] = v; if (pF && pF !== data) pF[flip(i)] = v; nD++; }
+    }
+    tex.needsUpdate = true;
+    if (washM || pin) {
+        const mp = bgLayerMesh.material.uniforms.map, img = mp && mp.value && mp.value.image;
+        if (img && img.getContext) {
+            const cc = img.getContext('2d'), id = cc.getImageData(0, 0, pw, ph), d = id.data, pc = window._qbPlateColor;
+            for (let i = 0; i < N; i++) { if (!band[i] || !(washM || !band0[i])) continue; for (let c = 0; c < 3; c++) { d[4 * i + c] = r.colour[3 * i + c]; if (pc && pc.length === 4 * N) pc[4 * i + c] = r.colour[3 * i + c]; } d[4 * i + 3] = 255; nC++; }
+            cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
+        } else console.warn('[S61] post-bake fill: the plate has no colour canvas; the wash is not applied');
+    }
+    const st = { hole: hole ? 'plain' : 'per-line', wash: washM ? 'membrane' : 'as baked', pinholes: pinSt, depthTexels: nD, colourTexels: nC, stats: r.stats, ms: Date.now() - t0 };
+    window._qbPostFill = st; console.log('[S61] post-bake fill ' + JSON.stringify(st));
+    if (typeof render === 'function') { try { render(); } catch (e) {} }
+    return st;
+}
+
+// S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
+// where the per-line law returned the occluder's own depth (troll 928 of 962, vermeer 588 of 606, sunflowers 352 of 373,
+// starwatcher 432 of 449): not content, and in an SD inpaint each is an island of source pixels left unpainted inside a
+// hole. Rule, no size constant: an enclosed hole (a 4-connected component of the complement that does not touch the frame)
+// joins the mask when its median source depth is within two visible steps (S35 §47's lip criterion) of the median source
+// depth of the mask texels bordering it; holes nearer or farther than their surroundings are real content and stay out.
+// Pure (no app globals): used by the bundle export AND the return path, so what SD paints is what comes back.
+function bgPinholeFilledMask(src, dQ, pw, ph, step) {
+    const N = pw * ph, mask = new Uint8Array(N), seen = new Uint8Array(N), ringMark = new Int32Array(N).fill(-1); let filled = 0, holes = 0, joined = 0, kept = 0;
+    for (let i = 0; i < N; i++) if (src[i]) mask[i] = 1;
+    const q = new Int32Array(N);
+    for (let s0 = 0; s0 < N; s0++) {
+        if (mask[s0] || seen[s0]) continue;
+        let h = 0, t = 0, border = false; q[t++] = s0; seen[s0] = 1; const comp = []; const ring = [];
+        while (h < t) {
+            const i = q[h++]; comp.push(i); const x = i % pw, y = (i - x) / pw;
+            if (x === 0 || y === 0 || x === pw - 1 || y === ph - 1) border = true;
+            const nb = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+            for (const j of nb) { if (j < 0) continue; if (mask[j]) { if (ringMark[j] !== s0) { ringMark[j] = s0; ring.push(j); } } else if (!seen[j]) { seen[j] = 1; q[t++] = j; } }   // each bordering texel once
+        }
+        if (border) continue;
+        holes++;
+        const med = (arr) => { const v = arr.map((k) => dQ[k]).sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) >> 1] : 0.5 * (v[n / 2 - 1] + v[n / 2]); };
+        if (ring.length && Math.abs(med(comp) - med(ring)) <= 2 * step) { for (const k of comp) mask[k] = 1; filled += comp.length; joined++; } else kept++;
+    }
+    return { mask, holes, joined, kept, filled };
+}
+
+// S61 §7-§8: THE COLOUR-GUIDED RAMP COLLAPSE on the 16-bit path. The estimator blurs a depth edge over several texels
+// (DA3 silhouette ramps: 3.5 texels median on the troll against 0.8 for an exact edge); the old ramp collapse (a52-a61b)
+// fixed that on the 8-bit live-bake path only, with the unit-bound gate fgTearStep = 0.06 (a107). This test takes no
+// constant: along each row and column a run of same-sign STEEP edges (disparity step > the rim law's tolerance at one
+// visible step 1/k) with a FLAT edge on both ends is a candidate; the image says where the true edge is (the run edge with
+// the largest colour change, counted only when it exceeds the flank edges' colour change -- and, in the 'safe' form, when
+// no other run edge does); the blur signature is texels strictly between the two surfaces on BOTH sides of that edge
+// (real geometry beside a cliff deviates on one side only). Each such texel takes its own side's flank extrapolation.
+// Held-out kit test (15 unseen scenes, S61 §8): 'safe' leaves exact geometry untouched on 13 of 15 (4 texels in 5.4 M);
+// 'strong' sharpens about 3x as much with small misfires on 8 of 15 (worst 0.08 % of a map). Pure: no app globals, so the
+// harness verifies THIS source against harness/ramp_colour.py texel for texel.
+function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
+    const outer = lp.outer, inner = lp.inner, pn = lp.pn, D = lp.D, N = pw * ph;
+    const zOf = (x) => { x = Math.min(1, Math.max(0, x)); if (x < pn) { const t = x / pn; return -outer + outer * (t * t * (3 - 2 * t)); } const t = (x - pn) / (1 - pn); return inner * (t * t * (3 - 2 * t)); };
+    const disp = (x) => 1 / Math.max(1e-4, D - zOf(x));
+    const G = 65536, gridD = new Float64Array(G); for (let i = 0; i < G; i++) gridD[i] = disp(i / (G - 1));
+    const inv = (v) => {   // np.interp(v, gridD, grid): gridD is non-decreasing
+        if (v <= gridD[0]) return 0; if (v >= gridD[G - 1]) return 1;
+        let lo = 0, hi = G - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (gridD[m] <= v) lo = m; else hi = m; }
+        const a = gridD[lo], b = gridD[hi]; return (lo + (b > a ? (v - a) / (b - a) : 0)) / (G - 1);
+    };
+    const Dsp = new Float64Array(N), tol = new Float64Array(N);
+    for (let i = 0; i < N; i++) { const x = d[i]; Dsp[i] = disp(x); tol[i] = Math.abs(disp(Math.min(1, x + step)) - disp(Math.max(0, x - step))) + 1e-12; }
+    const best = new Float64Array(N).fill(-1), newD = Float64Array.from(Dsp);
+    const stats = { candidates: 0, noColourEdge: 0, manyColourEdges: 0, oneSided: 0, collapsed: 0 };
+    for (const axis of [0, 1]) {
+        const nL = axis === 1 ? ph : pw, len = axis === 1 ? pw : ph;
+        const at = axis === 1 ? (li, k) => li * pw + k : (li, k) => k * pw + li;
+        const nE = len - 1, dCl = new Float64Array(nE), sg = new Int8Array(nE), fl = new Uint8Array(nE), row = new Float64Array(len), tl = new Float64Array(len);
+        for (let li = 0; li < nL; li++) {
+            for (let k = 0; k < len; k++) { const i = at(li, k); row[k] = Dsp[i]; tl[k] = tol[i]; }
+            for (let k = 0; k < nE; k++) {
+                const dd = row[k + 1] - row[k], tE = Math.max(tl[k], tl[k + 1]); const st = Math.abs(dd) > tE;
+                sg[k] = st ? (dd > 0 ? 1 : -1) : 0; fl[k] = Math.abs(dd) <= tE ? 1 : 0;
+                const i0 = at(li, k) * 4, i1 = at(li, k + 1) * 4; const r = rgba[i1] - rgba[i0], g = rgba[i1 + 1] - rgba[i0 + 1], b = rgba[i1 + 2] - rgba[i0 + 2];
+                dCl[k] = Math.sqrt(r * r + g * g + b * b);
+            }
+            let i = 0;
+            while (i < nE) {
+                if (sg[i] === 0) { i++; continue; }
+                let j = i; while (j + 1 < nE && sg[j + 1] === sg[i]) j++;
+                const a = i, b = j + 1;
+                if (b - a >= 2 && a - 1 >= 0 && b < nE && fl[a - 1] && fl[b]) {
+                    stats.candidates++;
+                    const sA = row[a] - row[a - 1], sB = row[b + 1] - row[b];
+                    let ce = a; for (let k = a + 1; k < b; k++) if (dCl[k] > dCl[ce]) ce = k;
+                    const flk = Math.max(dCl[a - 1], dCl[b]);
+                    if (!(dCl[ce] > flk)) { stats.noColourEdge++; i = j + 1; continue; }
+                    if (singleEdge) { let many = false; for (let k = a; k < b; k++) if (k !== ce && dCl[k] > flk) { many = true; break; } if (many) { stats.manyColourEdges++; i = j + 1; continue; } }
+                    const L = b - a, mid = 0.5 * (a + b), steep = Math.abs((row[a] + sA * (mid - a)) - (row[b] - sB * (b - mid))) / L;
+                    const inter = []; let left = 0, right = 0;
+                    for (let k = a; k <= b; k++) {
+                        const ea = row[a] + sA * (k - a), eb = row[b] - sB * (b - k), lo = Math.min(ea, eb), hi = Math.max(ea, eb);
+                        if (lo + tl[k] < row[k] && row[k] < hi - tl[k]) { inter.push([k, ea, eb]); if (k <= ce) left++; else right++; }
+                    }
+                    if (!left || !right) { stats.oneSided++; i = j + 1; continue; }
+                    stats.collapsed++;
+                    for (const [k, ea, eb] of inter) { const idx = at(li, k); if (steep > best[idx]) { best[idx] = steep; newD[idx] = k <= ce ? ea : eb; } }
+                }
+                i = j + 1;
+            }
+        }
+    }
+    const out = Float32Array.from(d); let changed = 0;
+    for (let i = 0; i < N; i++) if (best[i] >= 0) { out[i] = inv(newD[i]); changed++; }
+    return { out, changed, stats };
+}
 function bgRimLawFor(pwArg, phArg) {
     const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
     const pn = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
@@ -4568,7 +4843,7 @@ async function applyLayersFromModal() {
             // A99: try the float ingest alongside the 8-bit element. Non-blocking
             // for the render path; the bake picks it up if it arrived and the
             // dimensions match, otherwise nothing changes.
-            if (depthEl && depthEl.tagName !== 'VIDEO' && depthEl.src && window._noFloatDepth !== true) {
+            if (depthEl && depthEl.tagName !== 'VIDEO' && depthEl.src) {   // (hatch _noFloatDepth removed, S60: a99 float ingest shipped)
                 // AWAITED, not fire-and-forget: the bake is synchronous, so a
                 // dangling promise means the first bake silently uses the 8-bit
                 // path and the float ingest only takes effect on a later
@@ -9315,9 +9590,9 @@ window._plugGeoBand = function (opts) {
         // foreshortened limb turned out). The fill rule for surfaces never photographed is a plausible wash, not a
         // clone (the user's rule; the A242 membrane is the same statement for the plug): the back's colour is the
         // membrane of the source colour over the back texels, Dirichlet on every texel without a back — the object's
-        // own silhouette colours and its interior, no texture to magnify. window._plugBackTex = 1 keeps the raw texels.
+        // own silhouette colours and its interior, no texture to magnify. (The raw-texel hatch _plugBackTex was removed, S60 rule 5; REVIEW 14202.)
         window._geoBackColor = null;
-        if (nBack > 0 && !window._plugBackTex) { try {
+        if (nBack > 0) { try {
             const Lc = mediaLayers[0]; const cImgW = (Lc.elements && Lc.elements.color) || Lc.textures.color.image;
             const cvW = document.createElement('canvas'); cvW.width = pw; cvW.height = ph; const cxW = cvW.getContext('2d', { willReadFrequently: true });
             cxW.drawImage(cImgW, 0, 0, pw, ph); const srcW = cxW.getImageData(0, 0, pw, ph).data;
@@ -10942,11 +11217,13 @@ window._importPlaneReturn = function (d) {
     const pF = window._qbPlateF, paint = window._qbPlatePaint, dis = window._qbDisocc;
     const flip = (i) => { const x = i % pw; return (ph - 1 - ((i - x) / pw)) * pw + x; };
     const band = new Uint8Array(N); let nB = 0;
-    const src = (d.mask && d.mask.length === N) ? d.mask : (paint || dis);
+    let src = (d.mask && d.mask.length === N) ? d.mask : (paint || dis);
+    // S61 §10: the same pinhole rule the bundle export applied, so colour painted into a pinhole comes back
+    if (!(d.mask && d.mask.length === N) && paint && window._qbDQ) { const lutI = bgShiftLUTFor(pw, ph); src = bgPinholeFilledMask(paint, window._qbDQ, pw, ph, 1 / Math.max(1e-6, Math.max(Math.abs(lutI.m0), Math.abs(lutI.m1)))).mask; }
     if (!src) { console.warn('[Sprint 25] no inpaint mask on this bake'); return null; }
     for (let i = 0; i < N; i++) if (src[i]) { band[i] = 1; nB++; }
     if (!nB) { console.warn('[Sprint 25] the inpaint mask is empty'); return null; }
-    const st = { pw, ph, band: nB, maskSource: (d.mask && d.mask.length === N) ? 'caller' : (paint ? 'plane_mask_inpaint (placeholder classes)' : 'the texture band') };
+    const st = { pw, ph, band: nB, maskSource: (d.mask && d.mask.length === N) ? 'caller' : (paint ? 'plane_mask_inpaint (placeholder classes + S61 pinhole rule)' : 'the texture band') };
 
     // ---- depth ----
     if (d.depth || d.gx || d.gy) {
@@ -11256,7 +11533,11 @@ function exportSDBundle() {
                 gray16('plane_plate_depth16.png', (i) => pF[flipIdx(i)], 'plate 1 depth: the plane far field on the carriers, the source depth elsewhere — the depth conditioning for plane_plate_color');
                 if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) rgba8('plane_plate_color.png', window._qbPlateColor, 'plate 1 colour: the source outside the placeholder set, the wash (rim-window means, harmonic membrane) on it — the image to inpaint where plane_mask_inpaint is white');
                 if (paint) {
-                    mask8('plane_mask_inpaint.png', (i) => paint[i] ? 255 : 0, 'white = every plate-1 texel whose colour is a placeholder (classes 1-3): the inpaint region');
+                    // S61 §10: the pinhole rule (same-depth enclosed holes join the mask); the raw set is kept beside it
+                    const lutP = bgShiftLUTFor(pw, ph), stepP = 1 / Math.max(1e-6, Math.max(Math.abs(lutP.m0), Math.abs(lutP.m1)));
+                    const ph_ = bgPinholeFilledMask(paint, dQ, pw, ph, stepP); window._qbPinholes = { holes: ph_.holes, joined: ph_.joined, kept: ph_.kept, filled: ph_.filled, step: stepP };
+                    mask8('plane_mask_inpaint.png', (i) => ph_.mask[i] ? 255 : 0, 'white = every plate-1 texel whose colour is a placeholder (classes 1-3), plus the enclosed pinholes at the depth of the band around them (S61 §10: ' + ph_.joined + ' of ' + ph_.holes + ' holes, ' + ph_.filled + ' texels): the inpaint region');
+                    mask8('plane_mask_inpaint_raw.png', (i) => paint[i] ? 255 : 0, 'the placeholder classes alone, before the S61 §10 pinhole rule (for comparison)');
                     mask8('plane_mask_class.png', (i) => paint[i] * 60, '0 = source colour; 60 = class 1 paint (uncovered inside the tier, or no tier set); 120 = class 2 band outside the tier (the wash may stay); 180 = class 3 carrier-only (coloured for continuity, never demanded)');
                     if (tier) mask8('plane_mask_inpaint_tier.png', (i) => paint[i] === 1 ? 255 : 0, 'white = class 1 only: paint this, the wash covers the rest (tier ' + window._bandTierDeg + ' deg of head angle)');
                 }
@@ -12266,14 +12547,9 @@ function bgDirectionalPlug(depth, W, H, opts) {
     // the same quantity a102 computes exactly (only ever read as
     // |pxAt(a) - pxAt(b)|, so the sign convention is irrelevant); DELTA stays
     // as this caller's own head offset.
-    const _plugLegacy = (window._legacyPlugLUT === true);
-    const _plugLut = _plugLegacy ? (() => { const l = new Float32Array(1024);
-        for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
-            const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s2=nd<0.5?slo:shi; l[i]=DELTA*s2/(0.20+s2)*(W/0.16); }
-        return l; })() : null;
-    const _plugL = _plugLegacy ? null : bgShiftLUTFor(W, H, DELTA);
-    const pxAt = dv => _plugLegacy ? _plugLut[Math.min(1023,Math.max(0,(dv*1023)|0))]
-                                   : bgShiftPxAt(_plugL, dv);
+    // (the private-LUT hatch _legacyPlugLUT was removed, S60 rule 5: a104 retired the three private copies, REVIEW 5901)
+    const _plugL = bgShiftLUTFor(W, H, DELTA);
+    const pxAt = dv => bgShiftPxAt(_plugL, dv);
     const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1);
     const q = new Int32Array(N); let qt = 0;   // [PERF] typed queue (each pixel enqueued at most once)
     const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
@@ -13053,8 +13329,7 @@ function applyLiveBake(L) {
             //      content (> 4 tear steps) and adopts THAT depth — the physics
             //      is "this ink is attached to that occluder". No anchor (mesa
             //      lines, horizon strokes, bird flocks) -> untouched.
-            // window._noThinLift disables for A/B.
-            if (!window._noThinLift && nStroke) {
+            if (nStroke) {   // (A/B hatch _noThinLift removed, S60: the ribbon class solved, REVIEW 3439)
                 const N3 = w * h;
                 const D3 = out.sharpened;
                 const FARC = 0.06;                        // far-limit flush (tear-step scale)
@@ -13144,148 +13419,9 @@ function applyLiveBake(L) {
                 }
             }
         }
-        // ===== A55 SEAT-ON-FLOOR: the mis-estimated-figure fix =====
-        // Monocular depth estimators read a small, detailed figure as NEAR
-        // (detail is a proximity cue), so a cluster of mid-ground people
-        // standing on ground at depth ~0.12 arrives at ~0.27 with pixels
-        // smeared 0.09..0.61 (measured on the star party). Baked, that
-        // near-spike-over-far-ground shears into the absurd deep fan the
-        // user flagged; realtime hides it only because its connected mesh
-        // is a spatial low-pass. A standing figure's TRUE depth is the
-        // GROUND it stands on — which we measure reliably. So: seat every
-        // SMALL standing component on its local ground floor, discarding
-        // the hallucinated near value. Runs at the SHARED source, so v1,
-        // quick and v2 all consume corrected depth (v2 then bins the party
-        // into its ground plane; v1's tear sees no cliff). Big genuinely-
-        // near content (the astronaut, mountains) exceeds the area cap and
-        // keeps its native 3D. window._noSeatFloor disables for A/B.
-        // ===== A56 INK-ISLAND SEAT — DEFAULT OFF as of A61 =====
-        // WHY OFF: the founding premise ("the estimator floats the party to
-        // a near-spike, 0.27 over 0.12 ground, spread 0.52") does not hold on
-        // the shipped depth map. Measured on starwatcher_depth.png the party
-        // is a coherent mid-depth blob (raw 80..111 over ground ~180, bright=
-        // near) — sensible on the dune, not a hallucinated spike. So the seat
-        // was correcting a NON-error: it took good depth and flattened every
-        // party figure to ONE card (S[i]=cardDepth), which under ray-
-        // reprojection (A60, now default) has no relief to rotate and so
-        // BILLBOARDS in the bake, while realtime — which consumes the depth
-        // faithfully — shows the party from a true angle. Removing the seat
-        // makes the bake consume the raw depth like realtime: the party keeps
-        // its native relief and rotates, with no shear/deep-fan (there was no
-        // spike to shear). The whole mechanism was also a per-image hack —
-        // it ASSUMES ink line-art, ASSUMES the two largest non-ink regions are
-        // the background, and uses hand-tuned size/lift/compactness constants
-        // calibrated to this one composition — which violates the zero-per-
-        // image-tuning contract. Kept behind an explicit opt-in for A/B and
-        // regression archaeology; the estimator's depth is the source of truth.
-        const _inkSeatOn = (typeof window._inkSeat === 'boolean') ? window._inkSeat : false;
-        if (_inkSeatOn && L._strokeMask && L._strokeMaskW === w && L._strokeMaskH === h) {
-            const S = out.sharpened, N = w * h;
-            // slope-tolerant cone-erosion floor (ground beneath content)
-            const sCone = bgConeSlopePerPx(w);   // A104: was 0.0015*1920/w, a third private slope
-            const floor = S.slice();
-            for (let y = 0; y < h; y++) { const row = y*w;
-                for (let x = 0; x < w; x++) { const i = row+x; let v = floor[i];
-                    if (x > 0 && floor[i-1] + sCone < v) v = floor[i-1] + sCone;
-                    if (y > 0 && floor[i-w] + sCone < v) v = floor[i-w] + sCone;
-                    floor[i] = v; } }
-            for (let y = h-1; y >= 0; y--) { const row = y*w;
-                for (let x = w-1; x >= 0; x--) { const i = row+x; let v = floor[i];
-                    if (x < w-1 && floor[i+1] + sCone < v) v = floor[i+1] + sCone;
-                    if (y < h-1 && floor[i+w] + sCone < v) v = floor[i+w] + sCone;
-                    floor[i] = v; } }
-            // INK = classifier strokes ∪ near-black luma, dilated 1px to
-            // seal hairline gaps in the outline so a figure stays enclosed.
-            let ink = new Uint8Array(N);
-            for (let i = 0; i < N; i++) {
-                if (L._strokeMask[i]) { ink[i] = 1; continue; }
-                const lum = 0.299*cpx[i*4] + 0.587*cpx[i*4+1] + 0.114*cpx[i*4+2];
-                if (lum < 55) ink[i] = 1;
-            }
-            { const nb = ink.slice();
-              for (let y = 1; y < h-1; y++) for (let x = 1; x < w-1; x++) { const i = y*w+x;
-                  if (!ink[i] && (ink[i-1]||ink[i+1]||ink[i-w]||ink[i+w])) nb[i] = 1; }
-              ink = nb; }
-            // label non-ink cells; the two largest are desert + sky
-            const lab = new Int32Array(N).fill(-1);
-            const q = new Int32Array(N); const csz = [];
-            let nl = 0;
-            for (let s = 0; s < N; s++) { if (ink[s] || lab[s] >= 0) continue;
-                let qt = 0, qh = 0; q[qt++] = s; lab[s] = nl; let n = 0;
-                while (qh < qt) { const i = q[qh++]; n++; const x = i % w, y = (i/w)|0;
-                    if (x > 0   && !ink[i-1] && lab[i-1] < 0) { lab[i-1]=nl; q[qt++]=i-1; }
-                    if (x < w-1 && !ink[i+1] && lab[i+1] < 0) { lab[i+1]=nl; q[qt++]=i+1; }
-                    if (y > 0   && !ink[i-w] && lab[i-w] < 0) { lab[i-w]=nl; q[qt++]=i-w; }
-                    if (y < h-1 && !ink[i+w] && lab[i+w] < 0) { lab[i+w]=nl; q[qt++]=i+w; } }
-                csz.push(n); nl++; }
-            let g0 = -1, g1 = -1, s0v = -1, s1v = -1;
-            for (let c = 0; c < nl; c++) { if (csz[c] > s0v) { s1v = s0v; g1 = g0; s0v = csz[c]; g0 = c; }
-                else if (csz[c] > s1v) { s1v = csz[c]; g1 = c; } }
-            // figureMask = ink ∪ (a cell that is NOT one of the two big ones)
-            const fig = new Uint8Array(N);
-            for (let i = 0; i < N; i++) { if (ink[i]) fig[i] = 1;
-                else { const l = lab[i]; if (l !== g0 && l !== g1) fig[i] = 1; } }
-            // islands = 8-connected components of figureMask (a figure's
-            // interior detail-cells + its outline fuse into one island)
-            const isl = new Int32Array(N).fill(-1);
-            const CAP = Math.round(N * 0.02);   // >> a party figure, << the astronaut/mountain island
-            const MIN = 64;
-            let nSeat = 0, nIsl = 0, nKeep = 0, biggest = 0;
-            const mem = new Int32Array(N);
-            for (let s = 0; s < N; s++) { if (!fig[s] || isl[s] >= 0) continue;
-                let qt = 0, qh = 0; q[qt++] = s; isl[s] = nIsl; let n = 0, liftSum = 0;
-                let x0 = w, x1 = 0, y0 = h, y1 = 0;
-                while (qh < qt) { const i = q[qh++]; mem[n++] = i; liftSum += (S[i] - floor[i]);
-                    const x = i % w, y = (i/w)|0;
-                    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
-                    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue;
-                        const xx = x+dx, yy = y+dy; if (xx<0||yy<0||xx>=w||yy>=h) continue;
-                        const j = yy*w+xx; if (fig[j] && isl[j] < 0) { isl[j] = nIsl; q[qt++] = j; } } }
-                nIsl++;
-                if (n > biggest) biggest = n;
-                const meanLift = liftSum / n;
-                if (n < MIN) continue;
-                if (n > CAP) { nKeep++; continue; }             // astronaut, mountain, crystals: keep native
-                // GATE 1 — genuinely proud: a real mislocated figure floats
-                // FAR above its ground (party 0.25); thin scenery ink lying
-                // ON a surface (a horizon line) is only ~0.06 proud and must
-                // stay put. GATE 2 — compact: a figure fills a fair fraction
-                // of its bbox; a thin LINE/wisp (horizon, a wire) fills
-                // almost none, so area/bbox rejects it. Both needed: the
-                // party passes (proud AND compact), scenery lines fail.
-                if (meanLift <= 0.10) continue;
-                const bboxA = (x1 - x0 + 1) * (y1 - y0 + 1);
-                if (n < 0.12 * bboxA) continue;                  // thin line / wisp, not a filled figure
-                // A57b: seat as a STANDING card, not a floor decal. a56
-                // flattened every pixel to floor[i] — glued to the ground
-                // plane behind it, zero relief, so it could no longer
-                // parallax or disocclude (the user: the party is "plastered
-                // to the background, no inpainting behind it"). Instead seat
-                // the whole figure at ONE flat depth lifted proud of its
-                // ground: a fronto-parallel card that parallaxes as a rigid
-                // unit (coherent, kills the shatter, keeps the ink) and tears
-                // at its silhouette to reveal ground behind it. The lift is
-                // the figure's OWN mean proud (meanLift, already measured and
-                // gated > 0.10) — estimator-honest and self-calibrated per
-                // figure, no constant. A pure feet-to-head geometric
-                // billboard over-lifted (star protrusion 6→12) because a tall
-                // island's head relief = height × floor-slope can exceed the
-                // FG depth there; meanLift is bounded by what the estimator
-                // itself assigned, so the card never protrudes past the FG.
-                let mFloor = 0; for (let m = 0; m < n; m++) mFloor += floor[mem[m]];
-                mFloor /= n;
-                const cardDepth = mFloor + meanLift;
-                const flatToFloor = !!window._seatFloorFlat;   // A/B opt-in: a56 floor decal
-                for (let m = 0; m < n; m++) { const i = mem[m]; S[i] = flatToFloor ? floor[i] : cardDepth; }
-                if (window._seatDbg) console.log('[SEAT-DBG] n=' + n + ' bbox=' + (x1-x0+1) + 'x' + (y1-y0+1) +
-                    ' cardDepth=' + cardDepth.toFixed(3) + ' meanFloor=' + mFloor.toFixed(3) +
-                    ' lift=' + meanLift.toFixed(3));
-                nSeat += n;
-            }
-            if (nSeat || nKeep) console.log('[INK-SEAT] ' + nSeat + 'px of small ink-bounded figure islands seated on ground floor; ' +
-                nKeep + ' large islands kept native (biggest ' + biggest + 'px, cap ' + CAP + ')');
-            L._seatedFloor = true;
-        }
+        // A55/A56 seat-on-floor / ink-island seat (opt-in since A61: window._inkSeat, with _seatFloorFlat and _seatDbg) was
+        // falsified and removed (S60, rule 5): its founding premise does not hold on the shipped map, and it was a
+        // per-image hack (REVIEW 3292-3298). The estimator's depth is the source of truth.
         // REVIEW (depth-space fix): upload the sharpened depth as a FLOAT
         // DataTexture, NOT a canvas. Browsers gamma-convert canvas uploads
         // (UNPACK colorspace), so a canvas displacementMap arrives ~v^2.2 in
@@ -13515,10 +13651,8 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         // a88/a90/a101 corrected, used as reach = depthStep/sConeV = depthStep*k.
         // That product IS the screen displacement, which a102's envelope gives
         // exactly, so the budget no longer needs a slope at all.
-        const _budLegacy = (window._legacyV2Budget === true), _sConeV = 0.0015 * 1920 / pw;
-        const _budL = _budLegacy ? null : bgShiftLUTFor(pw, ph);
-        const _pxOf = (a, b) => _budLegacy ? (Math.abs(a - b) / _sConeV)
-                                           : Math.abs(bgShiftPxAt(_budL, a) - bgShiftPxAt(_budL, b));
+        const _budL = bgShiftLUTFor(pw, ph);   // (hatch _legacyV2Budget removed, S60 rule 5: a104, REVIEW 5904)
+        const _pxOf = (a, b) => Math.abs(bgShiftPxAt(_budL, a) - bgShiftPxAt(_budL, b));
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
             const i = y*pw+x; let s2 = 0, bpx = 0;
             // the cliff GATE stays on the depth step; the BUDGET is the largest
@@ -14480,57 +14614,9 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
     // path-independent: only different seeds' planes compete.
     const carAx = new Int32Array(PN2), carAy = new Int32Array(PN2), carAv = new Float32Array(PN2);
     const claimedF = new Uint8Array(PN2);   // px has a plate-lowering claim (nearest-anchor conflict rule)
-    // A100 BAND-LIMIT THE FIELD THE FILL MEASURES. The gradient estimator below
-    // samples over a window R (0.25% of frame, scaled), but it reads a field
-    // carrying relief FINER than R. Sub-window relief cannot survive into the
-    // fill's output — the cone can only express sCone per texel — yet it
-    // perturbs which anchor wins, so the crease skeleton (and with it the fold
-    // population) moves with resolution. Until now that relief was being
-    // removed by accident: the 8-bit quantiser flattened it, and a86's
-    // dequantiser rebuilt smooth ramps from the terraces. With true 16-bit
-    // depth (a99) neither happens and the sensitivity is exposed (crease drift
-    // 12.8% -> 26.3%, Addendum 106).
-    // TRIED AND REVERTED: measured on the 16-bit analytic pair, crease drift
-    // 4.0% -> 4.7% under the correct pw^1.5 normalisation — very slightly
-    // WORSE, and unnecessary: the float ingest (a99) had already made the
-    // crease population invariant. The premise that the fill needed its own
-    // smoothing was wrong; it needed an unquantised INPUT. Kept behind
-    // window._fillBandLimit for future work, default off.
-    // The idea was to band-limit ON PURPOSE, at the scale the estimator itself
-    // resolves: a box average of the SAME radius R. Cliffs must survive, so a
-    // neighbour is included only if it lies within what a legitimate surface
-    // can change over that distance at the grazing limit — R * sCone — which
-    // is the same cone law the fill and the tear already obey, not a new
-    // constant. Separable (x then y) to stay O(N*R). Seeds, barriers, budgets
-    // and claims all continue to read the RAW field; only the gradient
-    // estimator sees the band-limited one. window._noFillBandLimit reverts.
-    // A100 TRIED AND REVERTED (see below): default OFF.
-    let dSm = dQ;
-    if (window._fillBandLimit === true) {
-        const RB = Math.max(1, Math.round(3 * pw / 1200));
-        const amp = RB * sCone;
-        const t1 = new Float32Array(PN2);
-        for (let y = 0; y < ph; y++) { const row = y*pw;
-            for (let x = 0; x < pw; x++) { const i = row+x; const c = dQ[i];
-                let sum = c, n = 1;
-                for (let k = 1; k <= RB; k++) {
-                    const xl = x-k, xr = x+k;
-                    if (xl >= 0)  { const v = dQ[row+xl]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                    if (xr < pw)  { const v = dQ[row+xr]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                }
-                t1[i] = sum / n; } }
-        const t2 = new Float32Array(PN2);
-        for (let y = 0; y < ph; y++) { const row = y*pw;
-            for (let x = 0; x < pw; x++) { const i = row+x; const c = t1[i];
-                let sum = c, n = 1;
-                for (let k = 1; k <= RB; k++) {
-                    const yu = y-k, yd = y+k;
-                    if (yu >= 0)  { const v = t1[yu*pw+x]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                    if (yd < ph)  { const v = t1[yd*pw+x]; if (Math.abs(v-c) <= amp) { sum += v; n++; } }
-                }
-                t2[i] = sum / n; } }
-        dSm = t2;
-    }
+    // A100 (band-limiting the field the fill's gradient estimator reads) was falsified and removed (S60, rule 5):
+    // the premise that the fill needed its own smoothing was wrong; it needed an unquantised input (a99). REVIEW 5401.
+    const dSm = dQ;
     const gradAt = (p2) => {
         // far-side local gradient, windowed; zeroed across structure (a
         // sample pair spanning a cliff is not a surface gradient)
@@ -14576,8 +14662,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // rejected this using a RESAMPLED input and an area-normalised fold
         // metric, both since shown faulty (Addenda 101/102), so the rejection
         // is being re-examined rather than assumed.
-        const _seedThr = (window._noSeedReveal === true) ? tearStep
-                       : ((typeof window._seedRevealPx === 'number') ? window._seedRevealPx : 24) * sCone;
+        const _seedThr = ((typeof window._seedRevealPx === 'number') ? window._seedRevealPx : 24) * sCone;   // (hatch _noSeedReveal removed, S60: a95, REVIEW 5148)
         if (s <= _seedThr) continue;
         // A93: this budget window was a FIXED +-3 texels — not scaled at all,
         // so the lip's measured prominence spanned 1.4% of the frame at 425 px
@@ -14707,8 +14792,8 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // ground legitimately descends; the cone rise is wrong for it.
             // carry[] accumulates the path term per hop (passRem traversal
             // included: distance crossed over near content still costs —
-            // the head must clear it). window._noConeFill restores a84.
-            const coneF = (foldF[i] === 0) && (window._noConeFill !== true);
+            // the head must clear it). (Hatch _noConeFill removed, S60: A92 landed, REVIEW 4515.)
+            const coneF = (foldF[i] === 0);
             // A89 METRIC FIX. a85 accumulated the cone rise PER HOP over a
             // 4-connected flood — that is a MANHATTAN metric, while both the
             // prominence bound (dxp*dxp + dyp*dyp, line ~9343) and the
@@ -14728,8 +14813,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             const _dist = Math.sqrt(_dxc * _dxc + _dyc * _dyc);
             const v2 = coneF ? (_coneL ? bgDepthAtShift(_coneL, bgShiftPxAt(_coneL, av) + _dist)
                                        : av + bgConeSlopeAtDepth(pw, ph, av, tearStep) * _dist)
-                             : ((window._noDescFloor === true) ? Math.max(0, planeV)
-                                                               : Math.max(0, Math.max(av - tearStep, planeV)));
+                             : Math.max(0, Math.max(av - tearStep, planeV));   // descent floor (a63b; hatch _noDescFloor removed, S60)
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
             // partitioned each reveal into a Voronoi of anchor planes — and
             // the plate renders SOLID (backstop contract), so every step
@@ -14748,18 +14832,9 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // flip: troll near-plate claims 34.7 -> 15.4%, gloop gone at
             // both probe cams; star renders pixel-comparable, SD 13.8 ->
             // 15.2% (in range). Distance breaks ~equal-value ties.
-            // window._nearestAnchorWins restores the a63b law for A/B.
+            // (The a63b nearest-anchor law's hatch was removed, S60 rule 5: "nearest-anchor Voronoi steps ARE the gloop", REVIEW 3972.)
             const takes = (jj) => {
                 if (!claimedF[jj]) return true;
-                if (window._nearestAnchorWins === true) {
-                    const dxo = xj - carAx[jj], dyo = yj - carAy[jj];
-                    const d2o = dxo*dxo + dyo*dyo;
-                    const dxn = xj - ax, dyn = yj - ay;
-                    const d2n = dxn*dxn + dyn*dyn;
-                    if (d2n < d2o - 1) return true;
-                    if (d2n <= d2o + 1 && v2 < P[jj] - QUANT) return true;
-                    return false;
-                }
                 if (v2 < P[jj] - QUANT) return true;
                 if (v2 <= P[jj] + QUANT) {
                     const dxo2 = xj - carAx[jj], dyo2 = yj - carAy[jj];
@@ -14779,13 +14854,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // prominence over the fill is what a head move must overcome
             // to uncover it. Minimum reach tearStep/sCone (~24px) keeps
             // small figures' bands; a 0.35-prominent figure keeps its
-            // full band by construction. window._noPromBound reverts.
+            // full band by construction. (Revert hatch _noPromBound removed, S60: A81 landed, REVIEW 4098.)
             const promOK = (jj) => {
                 // A85: for cone fronts the bound is subsumed — the bid
                 // rises at sCone per px, so "d*sCone <= prominence" is
                 // exactly "v2 < dQ", the claim condition itself.
                 if (coneF) return true;
-                if (window._noPromBound === true) return true;
                 const pr = dQ[jj] - v2;
                 if (pr <= 0) return false;
                 const dxp = (jj % pw) - ax, dyp = ((jj / pw) | 0) - ay;
@@ -14822,64 +14896,8 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             }
         }
     }
-    // A69 ROW-FLANK MEMBRANE. Measured on the warrior (3000px): the flood
-    // left the plate at SKY depth (0.00-0.03) under figure regions whose
-    // surroundings sit at 0.35-0.75 — a far-plane pit rendering as a
-    // staircase of parallax bands. Mechanism: hop budgets scale with the
-    // boundary's depth step, so the huge figure-vs-sky boundary at the top
-    // funds fronts that outlive the small-step mountain/field flank fronts;
-    // "nearest LIVING anchor" becomes the sky. The taxonomy answer is the
-    // membrane's both-sided rule (and the user's city-roof case): each row
-    // of a reveal continues its FLANKING surfaces — sky rows stay sky,
-    // mountain rows carry mountain, the skyline behind a figure emerges row
-    // by row. For every flood-claimed pixel with real ground on both row
-    // sides, the plate takes the lerp of the two flank surfaces (== the
-    // membrane's inverse-distance blend of continuation endpoints), clamped
-    // to never sit proud of the occluder's own surface. Rows only (columns
-    // would drag roof texture down — the exact failure the taxonomy names);
-    // one-sided pixels keep the flood value; unclaimed interior pixels keep
-    // plate == surface so the SD mask cannot grow into unreachable depths.
-    // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateMembrane = true).
-    // The membrane (with its same-class gate) measured well on the warrior
-    // pits, but the user reported net regressions on device against the
-    // pre-a69 build ("steps back"), and deepened plates widen reveals — at
-    // offset that reads as tunneling through the figure, the A33/A57
-    // contract. Off until re-landed with a tunneling invariant in the suite.
-    if (window._plateMembrane === true && ground) {
-        const gL = new Int32Array(pw);
-        let fixed = 0;
-        for (let y = 0; y < ph; y++) {
-            const row = y * pw;
-            let last = -1;
-            for (let x = 0; x < pw; x++) { gL[x] = (ground[row + x] ? (last = x) : last); }
-            let nextG = -1;
-            for (let x = pw - 1; x >= 0; x--) {
-                const i = row + x;
-                if (ground[i]) { nextG = x; continue; }
-                if (!claimedF[i]) continue;
-                const l = gL[x];
-                if (l < 0 || nextG < 0) continue;
-                const vL = dQ[row + l], vR = dQ[row + nextG];
-                // SAME-CLASS GATE (the part of the membrane rule the first cut
-                // dropped, and the user's device caught): the lerp is only the
-                // continuation of A surface when both flanks ARE one surface.
-                // Sky-left/plain-right across the astronaut lerped into a
-                // mid-depth shelf that glued the horizon to the figure and
-                // deepened the plate (wider reveal, exposed wash ghost). When
-                // the flanks disagree by more than a tear step, keep the
-                // flood's directional value — that case is the fold/skyline
-                // territory the flood already owns.
-                if (Math.abs(vL - vR) > tearStep) continue;
-                const dl = x - l, dr = nextG - x;
-                let v = (vL * dr + vR * dl) / (dl + dr);
-                if (v > dQ[i]) v = dQ[i];
-                if (v < 0) v = 0;
-                if (Math.abs(v - P[i]) > 0.005) fixed++;
-                P[i] = v;
-            }
-        }
-        if (fixed) console.log('[DIR-PLATE] row-flank membrane: ' + fixed + 'px re-based to flanking-surface continuation');
-    }
+    // A69 row-flank membrane (opt-in since A72b, window._plateMembrane) was falsified and removed (S60, rule 5):
+    // "MEMBRANE: NOT the cure", re-landing cancelled (REVIEW 4141-4144, 4270).
     if (window._foldProbe) {
         window._fpData = { pw, ph, P: P.slice(), dQ: dQ.slice(), ground: ground ? ground.slice() : null,
                            claimedF: claimedF.slice(), foldF: foldF.slice(), carAv: carAv.slice(),
@@ -15217,6 +15235,21 @@ function bgBuildBackgroundLayerCore() {
             if (L._depth16 && L._depth16.w === pw && L._depth16.h === ph) {
                 dQ.set(L._depth16.data);                        // A99: float ingest, 65535 levels
                 console.log('[QUICK-BAKE] a99: depth read at 16-bit precision (quantum 1/65535)');
+                // S61: the colour-guided ramp collapse, on the 16-bit path the old collapse never reached (panel 'ramps';
+                // window._rampColour 1 = strong / v1, 2 = safe / v2; off by default until the live pass)
+                if (window._rampColour === 1 || window._rampColour === 2) {
+                    try {
+                        const t0r = Date.now(); const cImgR = (L.elements && L.elements.color) || L.textures.color.image;
+                        const cvR = document.createElement('canvas'); cvR.width = pw; cvR.height = ph; const cxR = cvR.getContext('2d', { willReadFrequently: true });
+                        cxR.drawImage(cImgR, 0, 0, pw, ph); const rgbaR = cxR.getImageData(0, 0, pw, ph).data;
+                        const lutR = bgShiftLUTFor(pw, ph), stepR = 1 / Math.max(1e-6, Math.max(Math.abs(lutR.m0), Math.abs(lutR.m1)));
+                        const pnR = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
+                        const DR = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
+                        const rc = bgRampColourCollapse(dQ, rgbaR, pw, ph, { outer: outerVolumeDepth, inner: innerVolumeDepth, pn: pnR, D: DR }, stepR, window._rampColour === 2);
+                        dQ.set(rc.out); window._qbRampColour = { mode: window._rampColour === 2 ? 'safe' : 'strong', changed: rc.changed, stats: rc.stats, step: stepR };
+                        console.log('[S61] colour-guided ramp collapse (' + (window._rampColour === 2 ? 'safe' : 'strong') + '): ' + rc.changed + ' texels, ' + JSON.stringify(rc.stats) + ' (' + (Date.now() - t0r) + ' ms)');
+                    } catch (eR) { console.warn('[S61] ramp collapse failed, raw depth kept:', eR); }
+                }
             } else {
                 for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
             }
@@ -15532,8 +15565,8 @@ function bgBuildBackgroundLayerCore() {
             // 0.44x, safe but under-reaching. The law is geometric, not
             // tuned: the fill may rise at most one grazing limit per pixel,
             // k = 396 * (pw/1920) px per depth unit at the fade-end, so
-            // sCone = 1/k = 0.0025 * 1920/pw. window._sConeFixed reverts.
-            const sCone = (window._sConeFixed === true) ? 0.0025 : bgConeSlopePerPx(pw);
+            // sCone = 1/k = 0.0025 * 1920/pw. (Hatch _sConeFixed removed, S60: A95 landed, REVIEW 4672.)
+            const sCone = bgConeSlopePerPx(pw);
             // A91: the PER-CELL tear threshold is the fold limit (derived above);
             // fgTearStep stays the CLIFF-SCALE constant used by the windowed
             // barrier/seed/membrane tests, whose windows already scale with pw.
@@ -15602,8 +15635,7 @@ function bgBuildBackgroundLayerCore() {
             // ship as cap cards at REAL depths and colours — snapping
             // first is what makes tearing safe (tearing raw smear quads
             // would splat fringe colours at fringe depths).
-            // window._noSmearSnap reverts for A/B.
-            if (_dirPlateOn && window._noSmearSnap !== true) {
+            if (_dirPlateOn) {   // (the _noSmearSnap revert hatch was removed, S60 rule 5: A79 landed, REVIEW 4021)
                 const RS = 2 * Math.max(3, Math.round(4 * pw / 1200));   // full smear width = 2x the barrier half-window
                 const wmaxS = bgSlide2D(dQ, pw, ph, RS, false);
                 const stpS = new Float32Array(PNq);
@@ -15853,84 +15885,9 @@ function bgBuildBackgroundLayerCore() {
             // is not a troll-only accident.
             // The requirement is a near-instant preview; a stage costing 28%
             // of the bake that removes nothing does not earn a place in it.
-            // window._vpScan = true re-enables it; window._noVpScan still
-            // forces it off for older harnesses.
-            const _vpScanOn = (window._vpScan === true) && (window._noVpScan !== true);
-            if (_vpScanOn) {
-                const t0s = Date.now();
-                const scanVis = new Uint8Array(PNq);
-                const zbuf = new Float32Array(PNq);
-                const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[0.7071,0.7071],[0.7071,-0.7071],[-0.7071,0.7071],[-0.7071,-0.7071]];
-                // RANGE: t = 1 is the sCone-encoded maximum (~2x the fade
-                // cone's supported offset — measured against the device
-                // sheets). window._scanRange rescales the sweep so the SD
-                // mask serves exactly the pose range the fade cone keeps
-                // visible; calibration pins the default (Addendum 83).
-                const tMaxS = (typeof window._scanRange === 'number') ? window._scanRange : 1.0;
-                const TS = [0.3, 0.55, 0.8, 1.0].map(t => t * tMaxS);
-                const invS = 1 / sCone;
-                // Anchor shifts at the scene's dominant plane (median depth
-                // ~ the portal-stationary plane). Occlusion is invariant to
-                // a constant shift of every pixel EXCEPT at the frame
-                // boundary — anchored at 0, the whole frame translates by
-                // hundreds of px, the z-buffer empties, and everything
-                // tests visible (measured: scan dropped ~0 on star).
-                const dSrt = dQ.slice().sort();
-                const dRefS = dSrt[dSrt.length >> 1];
-                // A106 EXACT SCAN WARP. Was xx = x + ux*t*(1/sCone)*(d - dRef),
-                // linear in depth against a scalar k — the same error a101/a102
-                // removed from the fill and the tear, and the one place where it
-                // is SILENT: an over-short warp drops reveals that do open, and
-                // those texels are then never inpainted. The displacement is
-                // shift(d) - shift(dRef), exactly; t is then a pure fraction of
-                // the fade-end offset, so t = 1 IS the fade end by construction
-                // and window._scanRange stops being a calibrated constant.
-                // _legacyScanWarp isolates THIS change from a102's fill/tear, which
-                // share _noExactCone — without a separate hatch a mask move cannot
-                // be attributed to the scan rather than to the fill.
-                const _scanL = (window._noExactCone === true || window._legacyScanWarp === true)
-                               ? null : bgShiftLUTFor(pw, ph);
-                const _sRefS = _scanL ? bgShiftPxAt(_scanL, dRefS) : 0;
-                // hoisted: the displacement of each texel is the same in all 32
-                // sweeps, so evaluate the envelope once per texel instead of
-                // once per (direction, magnitude, texel) — 32x fewer lookups.
-                let _spAll = null;
-                if (_scanL) { _spAll = new Float32Array(PNq);
-                    for (let i = 0; i < PNq; i++) _spAll[i] = bgShiftPxAt(_scanL, dQ[i]) - _sRefS; }
-                for (const [ux, uy] of DIRS) for (const t of TS) {
-                    zbuf.fill(-1);
-                    const kx = ux * t * invS, ky = uy * t * invS;
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        const d = dQ[i] - dRefS;
-                        const _sp = _spAll ? _spAll[i] : 0;
-                        const xx = _scanL ? (x + ux * t * _sp) : (x + kx * d);
-                        const yy = _scanL ? (y + uy * t * _sp) : (y + ky * d);
-                        const x0 = xx | 0, y0 = yy | 0;
-                        for (let dy2 = 0; dy2 <= 1; dy2++) for (let dx2 = 0; dx2 <= 1; dx2++) {
-                            const xq = x0 + dx2, yq = y0 + dy2;
-                            if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
-                            const q = yq*pw + xq;
-                            if (d > zbuf[q]) zbuf[q] = d;
-                        }
-                    }
-                    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y*pw+x;
-                        if (!disocc[i] || scanVis[i]) continue;
-                        const p = plateQ[i];
-                        const xq = Math.round(x + kx * (p - dRefS)), yq = Math.round(y + ky * (p - dRefS));
-                        if (xq < 0 || yq < 0 || xq >= pw || yq >= ph) continue;
-                        if (zbuf[yq*pw + xq] <= p + 0.02) scanVis[i] = 1;
-                    }
-                }
-                let nScan = 0;
-                for (let i = 0; i < PNq; i++) if (disocc[i] && !scanVis[i]) { disocc[i] = 0; nScan++; }
-                nD -= nScan;
-                console.log('[QUICK-BAKE] viewpoint scan: ' + nScan + 'px of claim-mask never exposed by any head pose in range — dropped (' +
-                            (Date.now() - t0s) + 'ms, ' + DIRS.length * TS.length + ' poses)');
-            } else {
-                // A121: say so. A stage that silently stops running reads in
-                // the log as "covered everything" when it covered nothing.
-                console.log('[QUICK-BAKE] viewpoint scan: SKIPPED (a121 default; it pruned 0px in every measured bake and cost ~2.7s of ~10s). window._vpScan = true re-enables.');
-            }
+            // The scan and its switches (_vpScan, _noVpScan, _scanRange, _legacyScanWarp) were removed (S60, rule 5):
+            // measured inert, 0 px pruned on all four suite assets (REVIEW 6527, 11142).
+            console.log('[QUICK-BAKE] viewpoint scan: SKIPPED (removed, S60 rule 5: it pruned 0px in every measured bake).');
             // A62b INK-ADJACENCY CLOSURE. Silhouette ink whose estimator depth
             // dipped to (or past) the far level is invisible to a depth-
             // trusting mask: plate == its own depth, so it never flags — the
@@ -16584,135 +16541,9 @@ function bgBuildBackgroundLayerCore() {
                     }
                 }
             }
-            // A70 DEPTH-CONSISTENT PLATE COLOURS. The GPU wash ghosted: its
-            // seed gate is a fixed-radius dilation, and figure-fringe texels
-            // reading as plate depth seeded figure tones that pull-push spread
-            // into a figure-shaped doppelganger across the reveal (measured:
-            // the plate-only render carries a blue astronaut copy — the same
-            // class v1 killed with depth-consistent continuation). The rule,
-            // ported to the quick plate: every disocc px's colour comes from
-            // REAL BACKGROUND at the px's OWN plate depth, found along its row
-            // (columns as fallback) within a resolution-scaled bound;
-            // inverse-distance blend when two-sided. Pixels with no
-            // depth-compatible background in reach take the nearest RESOLVED
-            // reveal colour in their row (never the figure). The GPU wash
-            // remains the base texture only where nothing resolves.
-            // A72b CONSERVATIVE DEFAULT: OPT-IN (window._plateRowColor = true).
-            // Depth-true reveal colours paint SKY behind tall figures where
-            // the plate is legitimately at sky depth — and a sky-coloured
-            // reveal inside a figure silhouette READS as tunneling (the
-            // doppelganger, wrong as content, read as solid). The right
-            // reveal content for a figure against sky is a taxonomy call
-            // (user's court), so the wash stays the default and this pass
-            // (plus its consensus) is opt-in until that call is made.
+            // A70 depth-consistent per-row plate colours (opt-in since A72b, window._plateRowColor) were falsified and removed
+            // (S60, rule 5): "refuted, measured ... ghost streak +92.7% ... a hard clone" (REVIEW 10078-10087).
             let plateColorTex = null;
-            if (window._plateRowColor === true) {
-                try {
-                    const tCR0 = Date.now();
-                    const cImgP = (L.elements && L.elements.color) || L.textures.color.image;
-                    const cvP = document.createElement('canvas'); cvP.width = pw; cvP.height = ph;
-                    const cxP = cvP.getContext('2d', { willReadFrequently: true });
-                    cxP.drawImage(cImgP, 0, 0, pw, ph);
-                    const pxP = cxP.getImageData(0, 0, pw, ph);
-                    const cd = pxP.data;
-                    const BOUNDR = Math.max(200, Math.round(400 * pw / 1920));
-                    const TOLD = 0.06;
-                    const resolved = new Uint8Array(PNq);
-                    let nRow = 0, nCol = 0, nMiss = 0;
-                    for (let y = 0; y < ph; y++) {
-                        const row = y * pw;
-                        for (let x = 0; x < pw; x++) {
-                            const i = row + x;
-                            if (!disocc[i]) continue;
-                            const tgt = plateQ[i];
-                            let lj = -1, rj = -1;
-                            for (let s = 1; s <= BOUNDR; s++) { const xx = x - s; if (xx < 0) break;
-                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
-                            for (let s = 1; s <= BOUNDR; s++) { const xx = x + s; if (xx >= pw) break;
-                                const j = row + xx; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
-                            if (lj < 0 && rj < 0) {
-                                for (let s = 1; s <= BOUNDR; s++) { const yy = y - s; if (yy < 0) break;
-                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { lj = j; break; } }
-                                for (let s = 1; s <= BOUNDR; s++) { const yy = y + s; if (yy >= ph) break;
-                                    const j = yy * pw + x; if (!disocc[j] && Math.abs(dQ[j] - tgt) <= TOLD) { rj = j; break; } }
-                                if (lj >= 0 || rj >= 0) nCol++; else { nMiss++; continue; }
-                            } else nRow++;
-                            let r2, g2, b2;
-                            if (lj >= 0 && rj >= 0) {
-                                const dl = Math.abs((lj % pw) - x) + Math.abs(((lj / pw) | 0) - y);
-                                const dr = Math.abs((rj % pw) - x) + Math.abs(((rj / pw) | 0) - y);
-                                const wl = dr / (dl + dr), wr = dl / (dl + dr);
-                                r2 = cd[lj*4] * wl + cd[rj*4] * wr; g2 = cd[lj*4+1] * wl + cd[rj*4+1] * wr; b2 = cd[lj*4+2] * wl + cd[rj*4+2] * wr;
-                            } else { const j = lj >= 0 ? lj : rj; r2 = cd[j*4]; g2 = cd[j*4+1]; b2 = cd[j*4+2]; }
-                            cd[i*4] = r2; cd[i*4+1] = g2; cd[i*4+2] = b2; cd[i*4+3] = 255;
-                            resolved[i] = 1;
-                        }
-                    }
-                    // misses take the nearest RESOLVED reveal colour along their row
-                    // (never figure paint — those px are the doppelganger source)
-                    if (nMiss) {
-                        for (let y = 0; y < ph; y++) { const row = y * pw;
-                            for (let x = 0; x < pw; x++) { const i = row + x;
-                                if (!disocc[i] || resolved[i]) continue;
-                                let j = -1;
-                                for (let s = 1; s <= BOUNDR; s++) {
-                                    const xl = x - s, xr = x + s;
-                                    if (xl >= 0 && resolved[row + xl]) { j = row + xl; break; }
-                                    if (xr < pw && resolved[row + xr]) { j = row + xr; break; }
-                                }
-                                if (j >= 0) { cd[i*4] = cd[j*4]; cd[i*4+1] = cd[j*4+1]; cd[i*4+2] = cd[j*4+2]; cd[i*4+3] = 255; }
-                            }
-                        }
-                    }
-                    // A72 VERTICAL CONSENSUS. Rows are smooth by construction but
-                    // adjacent rows anchor to different flanks, and the
-                    // row-to-row decorrelation reads as comb striping (measured
-                    // on the warrior at 0.25: the a70 colours were right, the
-                    // stripes were the new artifact — same class the v1 wash
-                    // softening answered). Masked vertical box blur over the
-                    // reveal colours only: never crosses out of the disocc
-                    // region, radius resolution-scaled; vertical gradients
-                    // (sky -> mountain -> field) span hundreds of px and survive.
-                    {
-                        const RBV = Math.max(8, Math.round(16 * ph / 1920));   // vertical: the striping axis
-                        const RBH = Math.max(3, Math.round(6 * pw / 1920));    // horizontal: soften anchor handovers mid-reveal
-                        const tr = new Uint8Array(PNq), tg = new Uint8Array(PNq), tb = new Uint8Array(PNq);
-                        for (let x = 0; x < pw; x++) {
-                            let sr = 0, sg = 0, sb = 0, sn = 0;
-                            const add = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
-                            const sub = (yy) => { const j = yy*pw + x; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
-                            for (let yy = 0; yy <= Math.min(ph - 1, RBV); yy++) add(yy);
-                            for (let y = 0; y < ph; y++) {
-                                const i = y*pw + x;
-                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
-                                const yAdd = y + RBV + 1, ySub = y - RBV;
-                                if (yAdd < ph) add(yAdd);
-                                if (ySub >= 0) sub(ySub);
-                            }
-                        }
-                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
-                        for (let y = 0; y < ph; y++) { const row = y*pw;
-                            let sr = 0, sg = 0, sb = 0, sn = 0;
-                            const add = (xx) => { const j = row + xx; if (disocc[j]) { sr += cd[j*4]; sg += cd[j*4+1]; sb += cd[j*4+2]; sn++; } };
-                            const sub = (xx) => { const j = row + xx; if (disocc[j]) { sr -= cd[j*4]; sg -= cd[j*4+1]; sb -= cd[j*4+2]; sn--; } };
-                            for (let xx = 0; xx <= Math.min(pw - 1, RBH); xx++) add(xx);
-                            for (let x = 0; x < pw; x++) {
-                                const i = row + x;
-                                if (disocc[i] && sn > 0) { tr[i] = sr/sn; tg[i] = sg/sn; tb[i] = sb/sn; }
-                                const xAdd = x + RBH + 1, xSub = x - RBH;
-                                if (xAdd < pw) add(xAdd);
-                                if (xSub >= 0) sub(xSub);
-                            }
-                        }
-                        for (let i = 0; i < PNq; i++) if (disocc[i]) { cd[i*4] = tr[i]; cd[i*4+1] = tg[i]; cd[i*4+2] = tb[i]; }
-                    }
-                    cxP.putImageData(pxP, 0, 0);
-                    plateColorTex = new THREE.CanvasTexture(cvP);
-                    plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
-                    if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
-                    console.log('[QUICK-BAKE] depth-consistent plate colours: ' + nRow + ' row / ' + nCol + ' col / ' + nMiss + ' miss (' + (Date.now() - tCR0) + 'ms)');
-                } catch (eCR) { console.warn('[QUICK-BAKE] plate row-colour pass failed, wash kept:', eCR); plateColorTex = null; }
-            }
             // ===== S3 PLANE COLOUR (the plane far side, rim law) =====
             // The A242 membrane seeds its colours from non-band texels whose SOURCE depth is within fgTearStep
             // (0.06 normalised) of the band texel's plate depth. That gate's units are the depth volume's: on the
@@ -17210,8 +17041,8 @@ function bgBuildBackgroundLayerCore() {
             // A59f: the plug is hole-only (renders only where the FG is torn away),
             // so there is no FG to z-fight — the old -0.004 push-back is unneeded and
             // was a flat view-Z offset the FG never had (it misregistered the plug vs
-            // the FG). Default to matching the FG (0); window._plugZBias restores it.
-            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) + (window._plugZBias ? -0.004 : 0);
+            // the FG). Default to matching the FG (0). (The -0.004 hatch _plugZBias was removed, S60: a59f, REVIEW 3226.)
+            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0);
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
             if (matQ.uniforms.u_sdPaint) matQ.uniforms.u_sdPaint.value = platePaintDT || maskDT;   // C: the SD-regions tint reads the placeholder class (the band where no plane colour ran)
             // A84: the FG material needs the mask too — the stretch cut is
@@ -17293,7 +17124,7 @@ function bgBuildBackgroundLayerCore() {
                 mu.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mu.u_bandCutMaxGrad) mu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                 if (mu.u_bandCutUvRate) { mu.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); bgBandCutArmedW = Math.max(1, w); }
-                if (mu.u_cutContactRamp) mu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0; };
+                if (mu.u_cutContactRamp) mu.u_cutContactRamp.value = 1.0; };
             // FG cuts its rubber and reveals the wash; the PLATE renders
             // SOLID — it is the only fill in quick mode, and discarding the
             // backstop opens naked holes (double-discard speckle). Its own
@@ -18227,7 +18058,7 @@ function bgBuildBackgroundLayerCore() {
                     const cImgB = (L.elements && L.elements.color) || L.textures.color.image;
                     const cvB = document.createElement('canvas'); cvB.width = pw; cvB.height = ph; const cxB = cvB.getContext('2d', { willReadFrequently: true });
                     cxB.drawImage(cImgB, 0, 0, pw, ph); const pxB = cxB.getImageData(0, 0, pw, ph);
-                    const washB = window._geoBackColor && window._geoBackColor.length === PNq * 4 ? window._geoBackColor : null;   // A257d: the wash, else the raw texels (_plugBackTex)
+                    const washB = window._geoBackColor && window._geoBackColor.length === PNq * 4 ? window._geoBackColor : null;   // A257d: the wash (else, if the wash failed, the raw texels)
                     for (let i = 0; i < PNq; i++) { if (bd[i] >= 0) { if (washB) { pxB.data[i * 4] = washB[i * 4]; pxB.data[i * 4 + 1] = washB[i * 4 + 1]; pxB.data[i * 4 + 2] = washB[i * 4 + 2]; } pxB.data[i * 4 + 3] = 255; } else pxB.data[i * 4 + 3] = 0; }
                     cxB.putImageData(pxB, 0, 0);
                     const backTex = new THREE.CanvasTexture(cvB); backTex.minFilter = THREE.LinearFilter; backTex.magFilter = THREE.LinearFilter;
@@ -18288,6 +18119,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
+            try { bgPostBakeFill(); } catch (ePF) { console.warn('[S61] post-bake fill failed; the bake stands as it was:', ePF); }
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
             // The v1 FG pre-tear lives BELOW quick's return in this function, so
             // the shipped default has rendered the UNTORN foreground for its
@@ -19840,7 +19672,7 @@ function bgBuildBackgroundLayerCore() {
                         // canvas width; a rubber triangle runs at a small fraction of it
                         const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
                         if (fu.u_bandCutUvRate) { fu.u_bandCutUvRate.value = _uvRateThr; bgBandCutArmedW = Math.max(1, w); }
-                        if (fu.u_cutContactRamp) fu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
+                        if (fu.u_cutContactRamp) fu.u_cutContactRamp.value = 1.0;
                         _mark('bandcut-bake');
                         console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
                     }
@@ -21211,7 +21043,7 @@ function bgBuildBackgroundLayerCore() {
                 mat.uniforms.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mat.uniforms.u_bandCutMaxGrad) mat.uniforms.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                 if (mat.uniforms.u_bandCutUvRate) { mat.uniforms.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); bgBandCutArmedW = Math.max(1, w); }
-                if (mat.uniforms.u_cutContactRamp) mat.uniforms.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
+                if (mat.uniforms.u_cutContactRamp) mat.uniforms.u_cutContactRamp.value = 1.0;
             } else {
                 mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null;
             }
@@ -21527,7 +21359,7 @@ function _wireDebugSheetControls() {
         const gapSel = document.getElementById('bgGapRuleSel');
         const bakeGapRule = (m) => {
             window._bgGapRule = m;   // debug-sheet stamp
-            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoFarField = null; window._geoGateField = null;
+            if (m === 'default') { delete window._plugMembrane; delete window._plugGuided; delete window._fragTear; delete window._plateFlushExempt; window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoFarField = null; window._geoGateField = null;
                 if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = 1; window._plugExtent = (m === 'back') ? 'far' : m; window._geoLipSeed = 1; window._plugBack = (m === 'back') ? 1 : false;
             window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;
@@ -21547,7 +21379,7 @@ function _wireDebugSheetControls() {
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
     // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
     {
-        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel' };
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel', ramps: 'bgPlateRampSel', hole: 'bgPlateHoleSel', pinholes: 'bgPlatePinSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
         // Start-up defaults = the measured set (S19 / S20 / S23 / S25 on the seven pictures and the kit; LIVE_PASS §1 step 4),
         // made the defaults on 2026-09-15 at the user's word: plane far side (rim law), wash, faces off, tier 35°, sky off (on
@@ -21569,7 +21401,7 @@ function _wireDebugSheetControls() {
         // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
         // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
         // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
-        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new' };
+        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'perline', pinholes: 'asbaked' };
         // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
         // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
         // failure the versioning exists to prevent.
@@ -21592,6 +21424,12 @@ function _wireDebugSheetControls() {
             // live pass (S20 / S23): the two recommended rules as one select — current | + ceiling cut | + ceiling cut + line despeckle
             window._ceilCut = (opt.rules === 'ceil' || opt.rules === 'new') ? 1 : 0;
             window._despeckleLines = opt.rules === 'new' ? 1 : 0;
+            // S61: the colour-guided ramp collapse on the 16-bit path (off | safe = v2 | strong = v1), for the live pass
+            window._rampColour = opt.ramps === 'strong' ? 1 : (opt.ramps === 'safe' ? 2 : 0);
+            // S61 §12: post-bake fill options (arm C, the membrane wash, the pinhole spikes)
+            window._farFillMode = (plane && opt.hole === 'plain') ? 'plain' : 'perline';
+            window._washMode = (plane && opt.fill === 'membrane') ? 'membrane' : 'asbaked';
+            window._pinholeDepth = (plane && opt.pinholes === 'filled') ? 1 : 0;
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
         applyPlateOptions();
@@ -21604,6 +21442,9 @@ function _wireDebugSheetControls() {
             console.log('[S6] plate bake: ' + Object.keys(opt).map(k => k + '=' + opt[k]).join(' ') + (opt.far === 'plane' ? '' : '  -> NOT the plane recipe: the ordinary Build runs (far side is ' + opt.far + ')'));
             if (opt.far !== 'plane') { buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
+            // S60: an earlier gap-rule bake set these (21533) and nothing cleared them, so every later plate bake silently
+            // carried the guided membrane and the per-fragment tear
+            delete window._plugMembrane; delete window._plugGuided; delete window._fragTear;
             const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
             showBuildOverlay('Plane bake (rim law · plane far side' + (opt.fill === 'mirror' ? ' · mirrored fill' : ' · wash') + (opt.faces === 'on' ? ' · step faces' : '') + ')… 1–4 min', 240000);
             requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
