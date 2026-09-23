@@ -21786,7 +21786,11 @@ function _wireDebugSheetControls() {
             const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
             showBuildOverlay('Plane bake (rim law · plane far side' + (opt.fill === 'mirror' ? ' · mirrored fill' : ' · wash') + (opt.faces === 'on' ? ' · step faces' : '') + ')… 1–4 min', 240000);
             requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
-                try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); } catch (e) { console.error('[S6] plane bake failed:', e); }
+                // S62: the source-anchored hole needs one quick bake (the foreground mesh and its tears, the plate mesh and
+                // textures) and replaces the whole plate after it; the per-line pipeline (a pass-1 bake, the far field, the
+                // 17x5 sweep, the band, a pass-2 bake) would only be thrown away
+                if (window._srcHole) { try { window._plugSweepCapture = true; bgQuickBake = true; buildBackgroundLayer(); } catch (e) { console.error('[S62] source bake failed:', e); } }
+                else { try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); } catch (e) { console.error('[S6] plane bake failed:', e); } }
                 window._bgUserBuiltOnce = true; hideBuildOverlay();
             }, 30)));
         };
