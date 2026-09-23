@@ -21527,7 +21527,7 @@ function _wireDebugSheetControls() {
         const gapSel = document.getElementById('bgGapRuleSel');
         const bakeGapRule = (m) => {
             window._bgGapRule = m;   // debug-sheet stamp
-            if (m === 'default') { window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoFarField = null; window._geoGateField = null;
+            if (m === 'default') { delete window._plugMembrane; delete window._plugGuided; delete window._fragTear; delete window._plateFlushExempt; window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._bandReplace = null; window._carrierReplace = null; window._carrier2Replace = null; window._geoFarField = null; window._geoGateField = null;
                 if (window._bgUserBuiltOnce) buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = 1; window._plugExtent = (m === 'back') ? 'far' : m; window._geoLipSeed = 1; window._plugBack = (m === 'back') ? 1 : false;
             window._plateFlushExempt = true; window._plugMembrane = 1; window._plugGuided = 1; window._fragTear = 2; window._plugMargin = 1;
@@ -21604,6 +21604,9 @@ function _wireDebugSheetControls() {
             console.log('[S6] plate bake: ' + Object.keys(opt).map(k => k + '=' + opt[k]).join(' ') + (opt.far === 'plane' ? '' : '  -> NOT the plane recipe: the ordinary Build runs (far side is ' + opt.far + ')'));
             if (opt.far !== 'plane') { buildBackgroundLayerWithOverlay(); return; }
             window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
+            // S60: an earlier gap-rule bake set these (21533) and nothing cleared them, so every later plate bake silently
+            // carried the guided membrane and the per-fragment tear
+            delete window._plugMembrane; delete window._plugGuided; delete window._fragTear;
             const modeSel3 = document.getElementById('bgModeSel'); if (modeSel3) modeSel3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
             showBuildOverlay('Plane bake (rim law · plane far side' + (opt.fill === 'mirror' ? ' · mirrored fill' : ' · wash') + (opt.faces === 'on' ? ' · step faces' : '') + ')… 1–4 min', 240000);
             requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => {
