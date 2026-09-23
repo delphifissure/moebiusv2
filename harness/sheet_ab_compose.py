@@ -74,4 +74,5 @@ for p in PICS:
         sheet.save(os.path.join(OUT, '%s_%s.png' % (p, name)), optimize=True)
 print('key sha256', digest)
 print('rule-7 guard, mean |frame difference| at yaw +42 (0-255):', json.dumps(guard))
-json.dump({'sha256': digest, 'guard': guard}, open(os.path.join(OUT, 'compose.json'), 'w'), indent=1)
+for d in (OUT, SH):                  # SH: where sheet_ab_decide.py and sheet_ab_review.py check the key against it
+    json.dump({'sha256': digest, 'guard': guard}, open(os.path.join(d, 'compose.json'), 'w'), indent=1)
