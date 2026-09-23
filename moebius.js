@@ -753,6 +753,49 @@ function bgEdgeSharpen(src, rgb, pw, ph, rl0, step) {
     return { out, stats: { candidates, taken, propagated, changed } };
 }
 
+// S62 §6: the ink line at a silhouette belongs to the object. A painting outlines its figures; DA3 gives the outline the
+// background's depth, so the line stayed behind on the background when the figure moved (starwatcher's astronaut left
+// a dark trace of itself in the sky). At every torn step, walk RUN texels into the background (the run stops, and
+// nothing is done, at the frame edge or at a torn step). The outer half is the background's own colour: its median in
+// CIELAB and its robust spread (1.4826 x the median distance, the normal-consistent MAD). The leading texels that differ
+// from it by more than three spreads, and by more than one just-noticeable difference (dE*ab 2.3, Sharma 2003), up to
+// the first that matches, take the object's depth. At most half the run, so the background still outvotes the line.
+// RUN is WASH_RUN (twice the widest ink line measured, about 3 texels). Silhouette halos in photographs go the same way.
+function bgInkAdopt(src, rgb, pw, ph, rl0, step) {
+    const rl = bgRimLawAtStep(rl0, step), N = pw * ph, out = Float32Array.from(src);
+    const RUN = 8, INK = RUN >> 1, JND = 2.3;
+    const lab = new Float32Array(3 * N);
+    const lin = new Float64Array(256); for (let v = 0; v < 256; v++) { const c = v / 255; lin[v] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+    const fL = (t) => t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116;
+    for (let i = 0; i < N; i++) {                // sRGB -> CIELAB (D65)
+        const r = lin[rgb[3 * i]], g = lin[rgb[3 * i + 1]], b = lin[rgb[3 * i + 2]];
+        const X = (0.4124564 * r + 0.3575761 * g + 0.1804375 * b) / 0.95047, Y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b, Z = (0.0193339 * r + 0.1191920 * g + 0.9503041 * b) / 1.08883;
+        const fx = fL(X), fy = fL(Y), fz = fL(Z); lab[3 * i] = 116 * fy - 16; lab[3 * i + 1] = 500 * (fx - fy); lab[3 * i + 2] = 200 * (fy - fz);
+    }
+    const dE = (i, c) => Math.hypot(lab[3 * i] - c[0], lab[3 * i + 1] - c[1], lab[3 * i + 2] - c[2]);
+    const med = (a) => { a.sort((u, v) => u - v); const n = a.length; return n & 1 ? a[n >> 1] : 0.5 * (a[n / 2 - 1] + a[n / 2]); };
+    const outer = []; for (let m = INK; m < RUN; m++) outer.push(m);
+    let rims = 0, rimsInk = 0, adopted = 0;
+    const pos = new Int32Array(RUN);
+    for (const ax of [0, 1]) {
+        const L = ax === 1 ? pw : ph, NL = ax === 1 ? ph : pw;
+        const at = ax === 1 ? ((l, k) => l * pw + k) : ((l, k) => k * pw + l);
+        for (let l = 0; l < NL; l++) for (let k = 0; k < L - 1; k++) {
+            const i = at(l, k), j = at(l, k + 1); if (rl.joinedIdx(i, j, src, pw)) continue;
+            const fwd = src[i] > src[j], near = fwd ? i : j, f0 = fwd ? k + 1 : k, dir = fwd ? 1 : -1;
+            let ok = true;
+            for (let m = 0; m < RUN; m++) { const kk = f0 + m * dir; if (kk < 0 || kk >= L) { ok = false; break; } pos[m] = at(l, kk); if (m && !rl.joinedIdx(pos[m - 1], pos[m], src, pw)) { ok = false; break; } }
+            if (!ok) continue; rims++;
+            const ref = [0, 1, 2].map(c => med(outer.map(m => lab[3 * pos[m] + c])));
+            const thr = Math.max(JND, 3 * 1.4826 * med(outer.map(m => dE(pos[m], ref))));
+            let m = 0; while (m < INK && dE(pos[m], ref) > thr) m++;
+            if (!m) continue; rimsInk++;
+            for (let q = 0; q < m; q++) { const p = pos[q]; if (src[near] > out[p]) { if (out[p] === src[p]) adopted++; out[p] = src[near]; } }   // the nearest object wins
+        }
+    }
+    return { out, stats: { rims, rimsInk, adopted } };
+}
+
 // S62: THE SOURCE-ANCHORED HOLE (research/S62; harness/srcfill.py steps 2-5). No per-line value anywhere.
 //   rims   every 4-neighbour pair (rows and columns) the rim law tears; a run of torn steps of one sign across an edge is
 //          one rim, from its top texel (the object) to its bottom texel (the background it reveals); the run's interior
@@ -15696,8 +15739,9 @@ function bgBuildBackgroundLayerCore() {
                     cxE.drawImage(cImgE, 0, 0, pw, ph); const rgbaE = cxE.getImageData(0, 0, pw, ph).data, rgbE = new Uint8ClampedArray(3 * PNq);
                     for (let i = 0; i < PNq; i++) { rgbE[3 * i] = rgbaE[4 * i]; rgbE[3 * i + 1] = rgbaE[4 * i + 1]; rgbE[3 * i + 2] = rgbaE[4 * i + 2]; }
                     const lutE = bgShiftLUTFor(pw, ph), stepE = 1 / Math.max(1e-6, Math.max(Math.abs(lutE.m0), Math.abs(lutE.m1)));
-                    const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE); dQ.set(es.out);
-                    window._qbEdgeSharpen = Object.assign({ ms: Date.now() - t0e }, es.stats);
+                    const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE);
+                    const ink = bgInkAdopt(es.out, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE); dQ.set(ink.out);
+                    window._qbEdgeSharpen = Object.assign({ ms: Date.now() - t0e, ink: ink.stats }, es.stats);
                     console.log('[S62] occlusion edges sharpened: ' + JSON.stringify(window._qbEdgeSharpen));
                 } catch (eE) { console.warn('[S62] edge sharpening failed, the depth stands as loaded:', eE); }
             }
