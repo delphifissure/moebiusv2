@@ -66,7 +66,7 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
     await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 400; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF)) break; await new Promise(r => setTimeout(r, 1000)); }
 
-    const res = await page.evaluate(([LAM, SWEEPS, RS]) => {
+    const res = await page.evaluate(([LAM, SWEEPS, RS, DUMP]) => {
         const sz = window._qbSize; if (!sz) return { error: 'no bake' };
         const pw = sz.pw, ph = sz.ph, N = pw * ph;
         const dQ = window._qbDQ, ff = window._geoFarField, axis = window._geoFarAxis, axV = window._geoFarAxV,
@@ -220,10 +220,25 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
         let flipped = 0; for (let i = 0; i < N; i++) if (free[i] && lab[i] !== (axis[i] === 2 ? 1 : 0)) flipped++;
         // how far the field moved, in d and in screen px, so "it smoothed everything flat" is checkable
         let mx = 0, sum = 0, n = 0; for (let i = 0; i < N; i++) if (band[i]) { const dd = Math.abs(after[i] - ff[i]); if (dd > mx) mx = dd; sum += dd; n++; }
-        return { pw, ph, nBand, nFree, pairsV: pv.length, pairsH: phz.length, sweeps, lastChanged: changed, flipped,
+        // DUMP=1: hand the exact energy to an external solver (s51_mincut.py). Everything is in the units the energy
+        // uses -- screen-pixel positions s(d) = Z/(D+Z) before the half-angle factor -- so the solver cannot drift
+        // from this file's definition. Base64 of little-endian typed arrays, full plate size.
+        let dump = null;
+        if (DUMP) {
+            const b64 = (ta) => { const u = new Uint8Array(ta.buffer); let str = ''; for (let o = 0; o < u.length; o += 0x8000) str += String.fromCharCode.apply(null, u.subarray(o, o + 0x8000)); return btoa(str); };
+            const s0 = new Float64Array(N), s1 = new Float64Array(N), d0 = new Float64Array(N), d1 = new Float64Array(N);
+            const lawL = new Uint8Array(N), icmL = new Uint8Array(N);
+            for (let i = 0; i < N; i++) { if (!band[i]) continue;
+                s0[i] = sOf(valAt(i, 0)); s1[i] = free[i] ? sOf(valAt(i, 1)) : s0[i];
+                if (free[i]) { d0[i] = dataPx(i, 0); d1[i] = dataPx(i, 1); lawL[i] = axis[i] === 2 ? 1 : 0; icmL[i] = lab[i]; } }
+            const pvA = new Int32Array(pv), phA = new Int32Array(phz);
+            dump = { sH, sV, VISIBLE, band: b64(band), free: b64(free), s0: b64(s0), s1: b64(s1), d0: b64(d0), d1: b64(d1),
+                     lawL: b64(lawL), icmL: b64(icmL), pv: b64(pvA), ph: b64(phA), cv: b64(cv), ch: b64(ch), ffS: b64(Float64Array.from(ff, (v, i) => band[i] ? sOf(v) : 0)) };
+        }
+        return { dump, pw, ph, nBand, nFree, pairsV: pv.length, pairsH: phz.length, sweeps, lastChanged: changed, flipped,
                  seedErr, seedLog, before, after: aft, oracle, moved: { maxD: mx, meanD: sum / Math.max(n, 1) },
                  law: { exH: L.exH, exV: L.exV, pxPerWorldScreen: L.pxPerWorldScreen, D: L.D } };
-    }, [process.env.LAMBDA === 'inf' || !process.env.LAMBDA ? Infinity : +process.env.LAMBDA, +(process.env.SWEEPS || 40), +(process.env.RESTARTS || 1)]);
+    }, [process.env.LAMBDA === 'inf' || !process.env.LAMBDA ? Infinity : +process.env.LAMBDA, +(process.env.SWEEPS || 40), +(process.env.RESTARTS || 1), !!process.env.DUMP]);
 
     if (res.error) { console.log('FAILED: ' + res.error); }
     else {
@@ -255,6 +270,7 @@ const OUT = path.join(H, 'shots', 's51_label', TAG);
         const a1 = res.before.wall[1] + res.before.wall[3], a2 = res.after.wall[1] + res.after.wall[3];
         console.log('\n  ARTEFACT WALL (class 1 + 3): ' + a1.toFixed(0) + ' -> ' + a2.toFixed(0) + ' px  (' + (100 * (1 - a2 / Math.max(a1, 1e-9))).toFixed(1) + '% reduction; the bar is 50%)');
         console.log('  REAL STEP WALL (class 2):    ' + res.before.wall[2].toFixed(0) + ' -> ' + res.after.wall[2].toFixed(0) + ' px  (must survive)');
+        if (res.dump) { fs.writeFileSync(path.join(OUT, 'energy_dump.json'), JSON.stringify(res.dump)); delete res.dump; console.log('  energy dumped for s51_mincut.py'); }
         fs.writeFileSync(path.join(OUT, 'label.json'), JSON.stringify(res, null, 1));
         console.log('  -> ' + OUT);
     }
