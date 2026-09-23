@@ -395,6 +395,73 @@ function bgDepthAtShift(L, m) {
 // invariant to resolution (dtheta scales) and to the depth volume (a ratio). A crease
 // (S16's two walls) is continuous in distance and stays joined; a jump is not.
 let _bgRimLaw = null;
+// S61 §7-§8: THE COLOUR-GUIDED RAMP COLLAPSE on the 16-bit path. The estimator blurs a depth edge over several texels
+// (DA3 silhouette ramps: 3.5 texels median on the troll against 0.8 for an exact edge); the old ramp collapse (a52-a61b)
+// fixed that on the 8-bit live-bake path only, with the unit-bound gate fgTearStep = 0.06 (a107). This test takes no
+// constant: along each row and column a run of same-sign STEEP edges (disparity step > the rim law's tolerance at one
+// visible step 1/k) with a FLAT edge on both ends is a candidate; the image says where the true edge is (the run edge with
+// the largest colour change, counted only when it exceeds the flank edges' colour change -- and, in the 'safe' form, when
+// no other run edge does); the blur signature is texels strictly between the two surfaces on BOTH sides of that edge
+// (real geometry beside a cliff deviates on one side only). Each such texel takes its own side's flank extrapolation.
+// Held-out kit test (15 unseen scenes, S61 §8): 'safe' leaves exact geometry untouched on 13 of 15 (4 texels in 5.4 M);
+// 'strong' sharpens about 3x as much with small misfires on 8 of 15 (worst 0.08 % of a map). Pure: no app globals, so the
+// harness verifies THIS source against harness/ramp_colour.py texel for texel.
+function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
+    const outer = lp.outer, inner = lp.inner, pn = lp.pn, D = lp.D, N = pw * ph;
+    const zOf = (x) => { x = Math.min(1, Math.max(0, x)); if (x < pn) { const t = x / pn; return -outer + outer * (t * t * (3 - 2 * t)); } const t = (x - pn) / (1 - pn); return inner * (t * t * (3 - 2 * t)); };
+    const disp = (x) => 1 / Math.max(1e-4, D - zOf(x));
+    const G = 65536, gridD = new Float64Array(G); for (let i = 0; i < G; i++) gridD[i] = disp(i / (G - 1));
+    const inv = (v) => {   // np.interp(v, gridD, grid): gridD is non-decreasing
+        if (v <= gridD[0]) return 0; if (v >= gridD[G - 1]) return 1;
+        let lo = 0, hi = G - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (gridD[m] <= v) lo = m; else hi = m; }
+        const a = gridD[lo], b = gridD[hi]; return (lo + (b > a ? (v - a) / (b - a) : 0)) / (G - 1);
+    };
+    const Dsp = new Float64Array(N), tol = new Float64Array(N);
+    for (let i = 0; i < N; i++) { const x = d[i]; Dsp[i] = disp(x); tol[i] = Math.abs(disp(Math.min(1, x + step)) - disp(Math.max(0, x - step))) + 1e-12; }
+    const best = new Float64Array(N).fill(-1), newD = Float64Array.from(Dsp);
+    const stats = { candidates: 0, noColourEdge: 0, manyColourEdges: 0, oneSided: 0, collapsed: 0 };
+    for (const axis of [0, 1]) {
+        const nL = axis === 1 ? ph : pw, len = axis === 1 ? pw : ph;
+        const at = axis === 1 ? (li, k) => li * pw + k : (li, k) => k * pw + li;
+        const nE = len - 1, dCl = new Float64Array(nE), sg = new Int8Array(nE), fl = new Uint8Array(nE), row = new Float64Array(len), tl = new Float64Array(len);
+        for (let li = 0; li < nL; li++) {
+            for (let k = 0; k < len; k++) { const i = at(li, k); row[k] = Dsp[i]; tl[k] = tol[i]; }
+            for (let k = 0; k < nE; k++) {
+                const dd = row[k + 1] - row[k], tE = Math.max(tl[k], tl[k + 1]); const st = Math.abs(dd) > tE;
+                sg[k] = st ? (dd > 0 ? 1 : -1) : 0; fl[k] = Math.abs(dd) <= tE ? 1 : 0;
+                const i0 = at(li, k) * 4, i1 = at(li, k + 1) * 4; const r = rgba[i1] - rgba[i0], g = rgba[i1 + 1] - rgba[i0 + 1], b = rgba[i1 + 2] - rgba[i0 + 2];
+                dCl[k] = Math.sqrt(r * r + g * g + b * b);
+            }
+            let i = 0;
+            while (i < nE) {
+                if (sg[i] === 0) { i++; continue; }
+                let j = i; while (j + 1 < nE && sg[j + 1] === sg[i]) j++;
+                const a = i, b = j + 1;
+                if (b - a >= 2 && a - 1 >= 0 && b < nE && fl[a - 1] && fl[b]) {
+                    stats.candidates++;
+                    const sA = row[a] - row[a - 1], sB = row[b + 1] - row[b];
+                    let ce = a; for (let k = a + 1; k < b; k++) if (dCl[k] > dCl[ce]) ce = k;
+                    const flk = Math.max(dCl[a - 1], dCl[b]);
+                    if (!(dCl[ce] > flk)) { stats.noColourEdge++; i = j + 1; continue; }
+                    if (singleEdge) { let many = false; for (let k = a; k < b; k++) if (k !== ce && dCl[k] > flk) { many = true; break; } if (many) { stats.manyColourEdges++; i = j + 1; continue; } }
+                    const L = b - a, mid = 0.5 * (a + b), steep = Math.abs((row[a] + sA * (mid - a)) - (row[b] - sB * (b - mid))) / L;
+                    const inter = []; let left = 0, right = 0;
+                    for (let k = a; k <= b; k++) {
+                        const ea = row[a] + sA * (k - a), eb = row[b] - sB * (b - k), lo = Math.min(ea, eb), hi = Math.max(ea, eb);
+                        if (lo + tl[k] < row[k] && row[k] < hi - tl[k]) { inter.push([k, ea, eb]); if (k <= ce) left++; else right++; }
+                    }
+                    if (!left || !right) { stats.oneSided++; i = j + 1; continue; }
+                    stats.collapsed++;
+                    for (const [k, ea, eb] of inter) { const idx = at(li, k); if (steep > best[idx]) { best[idx] = steep; newD[idx] = k <= ce ? ea : eb; } }
+                }
+                i = j + 1;
+            }
+        }
+    }
+    const out = Float32Array.from(d); let changed = 0;
+    for (let i = 0; i < N; i++) if (best[i] >= 0) { out[i] = inv(newD[i]); changed++; }
+    return { out, changed, stats };
+}
 function bgRimLawFor(pwArg, phArg) {
     const pwv = Math.max(1, pwArg | 0), phv = Math.max(1, phArg | 0);
     const pn = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
@@ -14965,6 +15032,21 @@ function bgBuildBackgroundLayerCore() {
             if (L._depth16 && L._depth16.w === pw && L._depth16.h === ph) {
                 dQ.set(L._depth16.data);                        // A99: float ingest, 65535 levels
                 console.log('[QUICK-BAKE] a99: depth read at 16-bit precision (quantum 1/65535)');
+                // S61: the colour-guided ramp collapse, on the 16-bit path the old collapse never reached (panel 'ramps';
+                // window._rampColour 1 = strong / v1, 2 = safe / v2; off by default until the live pass)
+                if (window._rampColour === 1 || window._rampColour === 2) {
+                    try {
+                        const t0r = Date.now(); const cImgR = (L.elements && L.elements.color) || L.textures.color.image;
+                        const cvR = document.createElement('canvas'); cvR.width = pw; cvR.height = ph; const cxR = cvR.getContext('2d', { willReadFrequently: true });
+                        cxR.drawImage(cImgR, 0, 0, pw, ph); const rgbaR = cxR.getImageData(0, 0, pw, ph).data;
+                        const lutR = bgShiftLUTFor(pw, ph), stepR = 1 / Math.max(1e-6, Math.max(Math.abs(lutR.m0), Math.abs(lutR.m1)));
+                        const pnR = Math.min(0.999, Math.max(0.001, (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : 0.5));
+                        const DR = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
+                        const rc = bgRampColourCollapse(dQ, rgbaR, pw, ph, { outer: outerVolumeDepth, inner: innerVolumeDepth, pn: pnR, D: DR }, stepR, window._rampColour === 2);
+                        dQ.set(rc.out); window._qbRampColour = { mode: window._rampColour === 2 ? 'safe' : 'strong', changed: rc.changed, stats: rc.stats, step: stepR };
+                        console.log('[S61] colour-guided ramp collapse (' + (window._rampColour === 2 ? 'safe' : 'strong') + '): ' + rc.changed + ' texels, ' + JSON.stringify(rc.stats) + ' (' + (Date.now() - t0r) + ' ms)');
+                    } catch (eR) { console.warn('[S61] ramp collapse failed, raw depth kept:', eR); }
+                }
             } else {
                 for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
             }
@@ -21094,7 +21176,7 @@ function _wireDebugSheetControls() {
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
     // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
     {
-        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel' };
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel', ramps: 'bgPlateRampSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
         // Start-up defaults = the measured set (S19 / S20 / S23 / S25 on the seven pictures and the kit; LIVE_PASS §1 step 4),
         // made the defaults on 2026-09-15 at the user's word: plane far side (rim law), wash, faces off, tier 35°, sky off (on
@@ -21116,7 +21198,7 @@ function _wireDebugSheetControls() {
         // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
         // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
         // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
-        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new' };
+        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off' };
         // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
         // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
         // failure the versioning exists to prevent.
@@ -21139,6 +21221,8 @@ function _wireDebugSheetControls() {
             // live pass (S20 / S23): the two recommended rules as one select — current | + ceiling cut | + ceiling cut + line despeckle
             window._ceilCut = (opt.rules === 'ceil' || opt.rules === 'new') ? 1 : 0;
             window._despeckleLines = opt.rules === 'new' ? 1 : 0;
+            // S61: the colour-guided ramp collapse on the 16-bit path (off | safe = v2 | strong = v1), for the live pass
+            window._rampColour = opt.ramps === 'strong' ? 1 : (opt.ramps === 'safe' ? 2 : 0);
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
         applyPlateOptions();
