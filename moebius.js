@@ -395,6 +395,34 @@ function bgDepthAtShift(L, m) {
 // invariant to resolution (dtheta scales) and to the depth volume (a ratio). A crease
 // (S16's two walls) is continuous in distance and stays joined; a jump is not.
 let _bgRimLaw = null;
+// S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
+// where the per-line law returned the occluder's own depth (troll 928 of 962, vermeer 588 of 606, sunflowers 352 of 373,
+// starwatcher 432 of 449): not content, and in an SD inpaint each is an island of source pixels left unpainted inside a
+// hole. Rule, no size constant: an enclosed hole (a 4-connected component of the complement that does not touch the frame)
+// joins the mask when its median source depth is within two visible steps (S35 §47's lip criterion) of the median source
+// depth of the mask texels bordering it; holes nearer or farther than their surroundings are real content and stay out.
+// Pure (no app globals): used by the bundle export AND the return path, so what SD paints is what comes back.
+function bgPinholeFilledMask(src, dQ, pw, ph, step) {
+    const N = pw * ph, mask = new Uint8Array(N), seen = new Uint8Array(N), ringMark = new Int32Array(N).fill(-1); let filled = 0, holes = 0, joined = 0, kept = 0;
+    for (let i = 0; i < N; i++) if (src[i]) mask[i] = 1;
+    const q = new Int32Array(N);
+    for (let s0 = 0; s0 < N; s0++) {
+        if (mask[s0] || seen[s0]) continue;
+        let h = 0, t = 0, border = false; q[t++] = s0; seen[s0] = 1; const comp = []; const ring = [];
+        while (h < t) {
+            const i = q[h++]; comp.push(i); const x = i % pw, y = (i - x) / pw;
+            if (x === 0 || y === 0 || x === pw - 1 || y === ph - 1) border = true;
+            const nb = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, y > 0 ? i - pw : -1, y < ph - 1 ? i + pw : -1];
+            for (const j of nb) { if (j < 0) continue; if (mask[j]) { if (ringMark[j] !== s0) { ringMark[j] = s0; ring.push(j); } } else if (!seen[j]) { seen[j] = 1; q[t++] = j; } }   // each bordering texel once
+        }
+        if (border) continue;
+        holes++;
+        const med = (arr) => { const v = arr.map((k) => dQ[k]).sort((a, b) => a - b); const n = v.length; return n % 2 ? v[(n - 1) >> 1] : 0.5 * (v[n / 2 - 1] + v[n / 2]); };
+        if (ring.length && Math.abs(med(comp) - med(ring)) <= 2 * step) { for (const k of comp) mask[k] = 1; filled += comp.length; joined++; } else kept++;
+    }
+    return { mask, holes, joined, kept, filled };
+}
+
 // S61 §7-§8: THE COLOUR-GUIDED RAMP COLLAPSE on the 16-bit path. The estimator blurs a depth edge over several texels
 // (DA3 silhouette ramps: 3.5 texels median on the troll against 0.8 for an exact edge); the old ramp collapse (a52-a61b)
 // fixed that on the 8-bit live-bake path only, with the unit-bound gate fgTearStep = 0.06 (a107). This test takes no
@@ -11009,11 +11037,13 @@ window._importPlaneReturn = function (d) {
     const pF = window._qbPlateF, paint = window._qbPlatePaint, dis = window._qbDisocc;
     const flip = (i) => { const x = i % pw; return (ph - 1 - ((i - x) / pw)) * pw + x; };
     const band = new Uint8Array(N); let nB = 0;
-    const src = (d.mask && d.mask.length === N) ? d.mask : (paint || dis);
+    let src = (d.mask && d.mask.length === N) ? d.mask : (paint || dis);
+    // S61 §10: the same pinhole rule the bundle export applied, so colour painted into a pinhole comes back
+    if (!(d.mask && d.mask.length === N) && paint && window._qbDQ) { const lutI = bgShiftLUTFor(pw, ph); src = bgPinholeFilledMask(paint, window._qbDQ, pw, ph, 1 / Math.max(1e-6, Math.max(Math.abs(lutI.m0), Math.abs(lutI.m1)))).mask; }
     if (!src) { console.warn('[Sprint 25] no inpaint mask on this bake'); return null; }
     for (let i = 0; i < N; i++) if (src[i]) { band[i] = 1; nB++; }
     if (!nB) { console.warn('[Sprint 25] the inpaint mask is empty'); return null; }
-    const st = { pw, ph, band: nB, maskSource: (d.mask && d.mask.length === N) ? 'caller' : (paint ? 'plane_mask_inpaint (placeholder classes)' : 'the texture band') };
+    const st = { pw, ph, band: nB, maskSource: (d.mask && d.mask.length === N) ? 'caller' : (paint ? 'plane_mask_inpaint (placeholder classes + S61 pinhole rule)' : 'the texture band') };
 
     // ---- depth ----
     if (d.depth || d.gx || d.gy) {
@@ -11323,7 +11353,11 @@ function exportSDBundle() {
                 gray16('plane_plate_depth16.png', (i) => pF[flipIdx(i)], 'plate 1 depth: the plane far field on the carriers, the source depth elsewhere — the depth conditioning for plane_plate_color');
                 if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) rgba8('plane_plate_color.png', window._qbPlateColor, 'plate 1 colour: the source outside the placeholder set, the wash (rim-window means, harmonic membrane) on it — the image to inpaint where plane_mask_inpaint is white');
                 if (paint) {
-                    mask8('plane_mask_inpaint.png', (i) => paint[i] ? 255 : 0, 'white = every plate-1 texel whose colour is a placeholder (classes 1-3): the inpaint region');
+                    // S61 §10: the pinhole rule (same-depth enclosed holes join the mask); the raw set is kept beside it
+                    const lutP = bgShiftLUTFor(pw, ph), stepP = 1 / Math.max(1e-6, Math.max(Math.abs(lutP.m0), Math.abs(lutP.m1)));
+                    const ph_ = bgPinholeFilledMask(paint, dQ, pw, ph, stepP); window._qbPinholes = { holes: ph_.holes, joined: ph_.joined, kept: ph_.kept, filled: ph_.filled, step: stepP };
+                    mask8('plane_mask_inpaint.png', (i) => ph_.mask[i] ? 255 : 0, 'white = every plate-1 texel whose colour is a placeholder (classes 1-3), plus the enclosed pinholes at the depth of the band around them (S61 §10: ' + ph_.joined + ' of ' + ph_.holes + ' holes, ' + ph_.filled + ' texels): the inpaint region');
+                    mask8('plane_mask_inpaint_raw.png', (i) => paint[i] ? 255 : 0, 'the placeholder classes alone, before the S61 §10 pinhole rule (for comparison)');
                     mask8('plane_mask_class.png', (i) => paint[i] * 60, '0 = source colour; 60 = class 1 paint (uncovered inside the tier, or no tier set); 120 = class 2 band outside the tier (the wash may stay); 180 = class 3 carrier-only (coloured for continuity, never demanded)');
                     if (tier) mask8('plane_mask_inpaint_tier.png', (i) => paint[i] === 1 ? 255 : 0, 'white = class 1 only: paint this, the wash covers the rest (tier ' + window._bandTierDeg + ' deg of head angle)');
                 }
