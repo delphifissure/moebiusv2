@@ -28,8 +28,10 @@ const WT = path.resolve(__dirname, '..');
         const src = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) src[y * pw + x] = data[(ph - 1 - y) * pw + x];
         let s = ''; const u8 = new Uint8Array(src.buffer); for (let k = 0; k < u8.length; k += 32768) s += String.fromCharCode.apply(null, u8.subarray(k, k + 32768));
         let hs = ''; const h = window._qbSrcHole ? Uint8Array.from(window._qbSrcHole) : new Uint8Array(N); for (let k = 0; k < h.length; k += 32768) hs += String.fromCharCode.apply(null, h.subarray(k, k + 32768));
-        return { pw, ph, stats: window._qbSourceHole || null, plate: btoa(s), hole: btoa(hs) };
+        const img = bgLayerMesh.material.uniforms.map.value.image; const wash = (img && img.toDataURL) ? img.toDataURL('image/png').split(',')[1] : null;
+        return { pw, ph, stats: window._qbSourceHole || null, plate: btoa(s), hole: btoa(hs), wash };
     });
+    if (info.wash) fs.writeFileSync(path.join(OUT, 'wash.png'), Buffer.from(info.wash, 'base64'));
     fs.writeFileSync(path.join(OUT, 'plate.f32'), Buffer.from(info.plate, 'base64')); fs.writeFileSync(path.join(OUT, 'hole.u8'), Buffer.from(info.hole, 'base64'));
     const shot = async (name) => { const b64 = await page.evaluate(() => { updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }); fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, 'base64')); };
     for (const [n, x, y] of POSES) { await page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); }, [x, y]); await shot('S_' + n + '.png'); }

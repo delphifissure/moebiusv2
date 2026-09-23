@@ -827,6 +827,24 @@ function bgSourceHole(o) {
         return { lab, nc };
     }
     const nbrs = (i) => { const x = i % pw; return [x < pw - 1 ? i + 1 : -1, x > 0 ? i - 1 : -1, i < N - pw ? i + pw : -1, i >= pw ? i - pw : -1]; };
+    // a colour pin sits right at the silhouette, where a painting often has an ink outline (starwatcher's astronaut: its
+    // dark outline, taken as the background's colour, darkened the whole wash). The pin's colour is instead the median,
+    // per channel, of the background texels on a short run stepping away from the hole: WASH_RUN texels, over twice the
+    // widest ink line measured (about 3 texels on starwatcher), so the line is outvoted. The run stops at the frame edge
+    // or at anything nearer than the pin by two visible steps; a thin strip of background between fine lines uses what
+    // it has. The pin's depth is unchanged.
+    const WASH_RUN = 8;
+    const pinColour = (j) => {
+        let d = 0; for (const i of [j - 1, j + 1, j - pw, j + pw]) if (i >= 0 && i < N && hole[i] && Math.abs((i % pw) - (j % pw)) <= 1) { d = j - i; break; }
+        const cs = [[], [], []]; const dx = d === 1 ? 1 : d === -1 ? -1 : 0, dy = d === pw ? 1 : d === -pw ? -1 : 0;
+        let x = j % pw, y = (j / pw) | 0;
+        for (let k = 0; k < WASH_RUN; k++) {
+            if (k > 0) { x += dx; y += dy; if (x < 0 || x >= pw || y < 0 || y >= ph || (!dx && !dy)) break; }
+            const n = y * pw + x; if (hole[n] || dQ[n] > dQ[j] + 2 * step) break;
+            for (let c = 0; c < 3; c++) cs[c].push(rgb[3 * n + c]);
+        }
+        return cs.map(a => { a.sort((u, v) => u - v); return a.length ? a[(a.length - 1) >> 1] : 0; });
+    };
     function solve(hole, chans, warm) {
         const di = []; const idx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (hole[i]) { idx[i] = di.length; di.push(i); }
         const M = di.length;
@@ -851,7 +869,7 @@ function bgSourceHole(o) {
         for (let t = 0; t < M; t++) { const i = di[t]; for (const j of nbrs(i)) { if (j < 0) continue; if (hole[j]) adjH[t].push(idx[j]); else if (pinSet[j] && keep[j] && dQ[j] < dQ[i] - 2 * step) { adjH[t].push(pidx[j]); hasPin[lab[i]] = 1; } } }
         const fixH = new Uint8Array(M + P), xyH = new Int32Array(2 * (M + P)), vH = [0, 1, 2, 3].map(() => new Float64Array(M + P));
         for (let t = 0; t < M; t++) { const i = di[t]; xyH[2 * t] = i % pw; xyH[2 * t + 1] = (i / pw) | 0; if (!hasPin[lab[i]]) fixH[t] = 1; }
-        for (let p = 0; p < P; p++) { const j = pi[p]; xyH[2 * (M + p)] = j % pw; xyH[2 * (M + p) + 1] = (j / pw) | 0; fixH[M + p] = 1; vH[0][M + p] = dQ[j]; for (let c = 0; c < 3; c++) vH[c + 1][M + p] = rgb[3 * j + c]; }
+        for (let p = 0; p < P; p++) { const j = pi[p]; xyH[2 * (M + p)] = j % pw; xyH[2 * (M + p) + 1] = (j / pw) | 0; fixH[M + p] = 1; vH[0][M + p] = dQ[j]; const c3 = pinColour(j); for (let c = 0; c < 3; c++) vH[c + 1][M + p] = c3[c]; }
         // a component with no pin: flat at its farthest border texel (depth and colour)
         const far = new Int32Array(nc).fill(-1);
         for (let t = 0; t < M; t++) { const i = di[t], c = lab[i]; if (hasPin[c]) continue; for (const j of nbrs(i)) if (j >= 0 && !hole[j] && (far[c] < 0 || dQ[j] < dQ[far[c]])) far[c] = j; }
@@ -860,22 +878,61 @@ function bgSourceHole(o) {
         const ch_ = csr(adjH); const hard = bgMGSolve(M + P, ch_.st0, ch_.li, ch_.w, fixH, chans.map(c => vH[c]), xyH, TOL, xH);
         const softT = new Float64Array(N); for (let t = 0; t < M; t++) softT[di[t]] = soft[t]; for (let p = 0; p < P; p++) softT[pi[p]] = soft[M + p];
         let noPin = 0; for (let c = 0; c < nc; c++) if (!hasPin[c]) noPin++;
-        return { di, U: hard.outs, softT, info: { pins: P, pinsDropped: dropped, components: nc, componentsNoPin: noPin, iters: hard.iters } };
+        return { di, U: hard.outs, softT, keep, info: { pins: P, pinsDropped: dropped, components: nc, componentsNoPin: noPin, iters: hard.iters } };
     }
-    // the rounds solve depth only, each warm-started from the last (the answer is the same to the solver's tolerance);
-    // the wash is solved once, on the final hole, which is all the result uses
-    let rounds = 0, left = 0, res, warm = null;
+    // the rounds. A global round solves depth only, warm-started from the last. After it, the texels dropped are few and
+    // the fill changes only near them, so LOCAL rounds follow: the hole texels in small boxes around the dropped ones are
+    // re-solved with the hole texels just outside it
+    // held at the current fill, the same pins, the same rule; repeat until nothing drops. Then a global round checks the
+    // whole hole again (new drops -> more local rounds). The boxes are 33x33 texels around each drop, merged. The last global round decides: every hole texel's fill lies
+    // behind its own source depth by two steps, and the fill is a true membrane on the final hole.
+    let rounds = 0, localRounds = 0, left = 0, res, warm = null;
+    const depthNow = new Float64Array(N);
+    const RL = 32;   // the local box's half-width in texels: a changed boundary moves a membrane mostly within a few of its own widths
+    const localSolve = (drops, keep) => {
+        const inR = new Uint8Array(N);                                             // the union of the boxes around each drop
+        for (const i of drops) { const x = i % pw, y = (i / pw) | 0; for (let yy = Math.max(0, y - RL); yy <= Math.min(ph - 1, y + RL); yy++) for (let xx = Math.max(0, x - RL); xx <= Math.min(pw - 1, x + RL); xx++) inR[yy * pw + xx] = 1; }
+        const reg = []; const ridx = new Int32Array(N).fill(-1);
+        for (let i = 0; i < N; i++) if (inR[i] && hole[i]) { ridx[i] = reg.length; reg.push(i); }
+        const M = reg.length; if (!M) return [];
+        const extra = [], eidx = new Map(); const ext = (j) => { let k = eidx.get(j); if (k === undefined) { k = M + extra.length; eidx.set(j, k); extra.push(j); } return k; };
+        const adj = []; for (let t = 0; t < M; t++) adj.push([]);
+        for (let t = 0; t < M; t++) { const i = reg[t]; for (const j of nbrs(i)) { if (j < 0) continue;
+            if (ridx[j] >= 0) adj[t].push(ridx[j]);
+            else if (hole[j]) adj[t].push(ext(j));                                                    // held at the current fill
+            else if (keep[j] && dQ[j] < dQ[i] - 2 * step) adj[t].push(ext(j)); } }                    // a pin
+        const nN = M + extra.length; while (adj.length < nN) adj.push([]);
+        const st0 = new Int32Array(nN + 1); for (let n = 0; n < nN; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[nN]); for (let n = 0; n < nN; n++) li.set(adj[n], st0[n]);
+        const fix = new Uint8Array(nN), val = new Float64Array(nN), xy = new Int32Array(2 * nN), x0v = new Float64Array(nN);
+        for (let t = 0; t < M; t++) { const i = reg[t]; xy[2 * t] = i % pw; xy[2 * t + 1] = (i / pw) | 0; x0v[t] = depthNow[i]; }
+        for (let e = 0; e < extra.length; e++) { const j = extra[e], n = M + e; fix[n] = 1; val[n] = hole[j] ? depthNow[j] : dQ[j]; xy[2 * n] = j % pw; xy[2 * n + 1] = (j / pw) | 0; }
+        // a region component with no link out (no pin, no held texel) keeps its current fill
+        const lab = new Int32Array(nN).fill(-1); let nc = 0; const q = [];
+        for (let s0 = 0; s0 < M; s0++) { if (lab[s0] >= 0) continue; lab[s0] = nc; q.push(s0); while (q.length) { const n = q.pop(); for (let k = st0[n]; k < st0[n + 1]; k++) { const m = li[k]; if (m < M && lab[m] < 0) { lab[m] = nc; q.push(m); } } } nc++; }
+        const anch = new Uint8Array(nc); for (let t = 0; t < M; t++) for (let k = st0[t]; k < st0[t + 1]; k++) if (li[k] >= M) anch[lab[t]] = 1;
+        for (let t = 0; t < M; t++) if (!anch[lab[t]]) { fix[t] = 1; val[t] = depthNow[reg[t]]; }
+        const r = bgMGSolve(nN, st0, li, new Float64Array(li.length).fill(1), fix, [val], xy, TOL, [x0v]).outs[0];
+        const out = []; for (let t = 0; t < M; t++) { const i = reg[t]; depthNow[i] = r[t]; if (r[t] > dQ[i] - 2 * step) out.push(i); }
+        return out;
+    };
     for (;;) {
-        res = solve(hole, [0], warm); rounds++;
-        let bad = 0; for (let t = 0; t < res.di.length; t++) if (res.U[0][t] > dQ[res.di[t]] - 2 * step) { hole[res.di[t]] = 0; bad++; }
-        if (!bad) break; left += bad;
-        const depth = new Float64Array(N); for (let t = 0; t < res.di.length; t++) depth[res.di[t]] = res.U[0][t]; warm = { depth, soft: res.softT };
+        const tR = Date.now(); res = solve(hole, [0], warm); rounds++;
+        for (let t = 0; t < res.di.length; t++) depthNow[res.di[t]] = res.U[0][t];
+        let drops = []; for (let t = 0; t < res.di.length; t++) if (res.U[0][t] > dQ[res.di[t]] - 2 * step) drops.push(res.di[t]);
+        if (o.trace) o.trace.push({ round: rounds, global: true, ms: Date.now() - tR, dropped: drops.length });
+        if (!drops.length) break;
+        while (drops.length) {
+            for (const i of drops) hole[i] = 0; left += drops.length;
+            const tL = Date.now(); drops = localSolve(drops, res.keep); localRounds++;
+            if (o.trace) o.trace.push({ round: localRounds, global: false, ms: Date.now() - tL, dropped: drops.length });
+        }
+        warm = { depth: Float64Array.from(depthNow), soft: res.softT };
     }
     { const w = { depth: new Float64Array(N), soft: res.softT }; for (let t = 0; t < res.di.length; t++) w.depth[res.di[t]] = res.U[0][t]; res = solve(hole, [0, 1, 2, 3], w); }
     const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
     for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
     let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
-    Object.assign(st, res.info, { hole: nh, notBehindLeftHole: left, solveRounds: rounds, ms: Date.now() - t0 });
+    Object.assign(st, res.info, { hole: nh, notBehindLeftHole: left, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
     return { plate, wash, hole, stats: st };
 }
 
