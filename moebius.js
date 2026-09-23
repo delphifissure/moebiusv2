@@ -4663,7 +4663,7 @@ async function applyLayersFromModal() {
             // A99: try the float ingest alongside the 8-bit element. Non-blocking
             // for the render path; the bake picks it up if it arrived and the
             // dimensions match, otherwise nothing changes.
-            if (depthEl && depthEl.tagName !== 'VIDEO' && depthEl.src && window._noFloatDepth !== true) {
+            if (depthEl && depthEl.tagName !== 'VIDEO' && depthEl.src) {   // (hatch _noFloatDepth removed, S60: a99 float ingest shipped)
                 // AWAITED, not fire-and-forget: the bake is synchronous, so a
                 // dangling promise means the first bake silently uses the 8-bit
                 // path and the float ingest only takes effect on a later
@@ -12367,14 +12367,9 @@ function bgDirectionalPlug(depth, W, H, opts) {
     // the same quantity a102 computes exactly (only ever read as
     // |pxAt(a) - pxAt(b)|, so the sign convention is irrelevant); DELTA stays
     // as this caller's own head offset.
-    const _plugLegacy = (window._legacyPlugLUT === true);
-    const _plugLut = _plugLegacy ? (() => { const l = new Float32Array(1024);
-        for (let i=0;i<1024;i++){ const nd=i/1023; const t=Math.min(Math.max(nd/0.5,0),1); const slo=0.02*(1-(t*t*(3-2*t)));
-            const t2=Math.min(Math.max((nd-0.5)/0.5,0),1); const shi=-0.04*(t2*t2*(3-2*t2)); const s2=nd<0.5?slo:shi; l[i]=DELTA*s2/(0.20+s2)*(W/0.16); }
-        return l; })() : null;
-    const _plugL = _plugLegacy ? null : bgShiftLUTFor(W, H, DELTA);
-    const pxAt = dv => _plugLegacy ? _plugLut[Math.min(1023,Math.max(0,(dv*1023)|0))]
-                                   : bgShiftPxAt(_plugL, dv);
+    // (the private-LUT hatch _legacyPlugLUT was removed, S60 rule 5: a104 retired the three private copies, REVIEW 5901)
+    const _plugL = bgShiftLUTFor(W, H, DELTA);
+    const pxAt = dv => bgShiftPxAt(_plugL, dv);
     const band = new Uint8Array(N), rim = new Float32Array(N), budget = new Int32Array(N), rimSrc = new Int32Array(N).fill(-1);
     const q = new Int32Array(N); let qt = 0;   // [PERF] typed queue (each pixel enqueued at most once)
     const MAXW = opts.maxGrowPx || bgBandMaxGrowPx || 40;
@@ -13154,8 +13149,7 @@ function applyLiveBake(L) {
             //      content (> 4 tear steps) and adopts THAT depth — the physics
             //      is "this ink is attached to that occluder". No anchor (mesa
             //      lines, horizon strokes, bird flocks) -> untouched.
-            // window._noThinLift disables for A/B.
-            if (!window._noThinLift && nStroke) {
+            if (nStroke) {   // (A/B hatch _noThinLift removed, S60: the ribbon class solved, REVIEW 3439)
                 const N3 = w * h;
                 const D3 = out.sharpened;
                 const FARC = 0.06;                        // far-limit flush (tear-step scale)
@@ -13477,10 +13471,8 @@ function bgBuildFullPlanesCore(dV, cpxV, alphaV, pw, ph, srcMesh, tag, isPrimary
         // a88/a90/a101 corrected, used as reach = depthStep/sConeV = depthStep*k.
         // That product IS the screen displacement, which a102's envelope gives
         // exactly, so the budget no longer needs a slope at all.
-        const _budLegacy = (window._legacyV2Budget === true), _sConeV = 0.0015 * 1920 / pw;
-        const _budL = _budLegacy ? null : bgShiftLUTFor(pw, ph);
-        const _pxOf = (a, b) => _budLegacy ? (Math.abs(a - b) / _sConeV)
-                                           : Math.abs(bgShiftPxAt(_budL, a) - bgShiftPxAt(_budL, b));
+        const _budL = bgShiftLUTFor(pw, ph);   // (hatch _legacyV2Budget removed, S60 rule 5: a104, REVIEW 5904)
+        const _pxOf = (a, b) => Math.abs(bgShiftPxAt(_budL, a) - bgShiftPxAt(_budL, b));
         for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) {
             const i = y*pw+x; let s2 = 0, bpx = 0;
             // the cliff GATE stays on the depth step; the BUDGET is the largest
@@ -14490,8 +14482,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
         // rejected this using a RESAMPLED input and an area-normalised fold
         // metric, both since shown faulty (Addenda 101/102), so the rejection
         // is being re-examined rather than assumed.
-        const _seedThr = (window._noSeedReveal === true) ? tearStep
-                       : ((typeof window._seedRevealPx === 'number') ? window._seedRevealPx : 24) * sCone;
+        const _seedThr = ((typeof window._seedRevealPx === 'number') ? window._seedRevealPx : 24) * sCone;   // (hatch _noSeedReveal removed, S60: a95, REVIEW 5148)
         if (s <= _seedThr) continue;
         // A93: this budget window was a FIXED +-3 texels — not scaled at all,
         // so the lip's measured prominence spanned 1.4% of the frame at 425 px
@@ -14621,8 +14612,8 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // ground legitimately descends; the cone rise is wrong for it.
             // carry[] accumulates the path term per hop (passRem traversal
             // included: distance crossed over near content still costs —
-            // the head must clear it). window._noConeFill restores a84.
-            const coneF = (foldF[i] === 0) && (window._noConeFill !== true);
+            // the head must clear it). (Hatch _noConeFill removed, S60: A92 landed, REVIEW 4515.)
+            const coneF = (foldF[i] === 0);
             // A89 METRIC FIX. a85 accumulated the cone rise PER HOP over a
             // 4-connected flood — that is a MANHATTAN metric, while both the
             // prominence bound (dxp*dxp + dyp*dyp, line ~9343) and the
@@ -14642,8 +14633,7 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             const _dist = Math.sqrt(_dxc * _dxc + _dyc * _dyc);
             const v2 = coneF ? (_coneL ? bgDepthAtShift(_coneL, bgShiftPxAt(_coneL, av) + _dist)
                                        : av + bgConeSlopeAtDepth(pw, ph, av, tearStep) * _dist)
-                             : ((window._noDescFloor === true) ? Math.max(0, planeV)
-                                                               : Math.max(0, Math.max(av - tearStep, planeV)));
+                             : Math.max(0, Math.max(av - tearStep, planeV));   // descent floor (a63b; hatch _noDescFloor removed, S60)
             // A73 FARTHER-VALUE WINS (floored planes). Nearest-anchor-wins
             // partitioned each reveal into a Voronoi of anchor planes — and
             // the plate renders SOLID (backstop contract), so every step
@@ -14684,13 +14674,12 @@ function bgDirectionalPlate(dQ, pw, ph, cImg, sCone, tearStep) {
             // prominence over the fill is what a head move must overcome
             // to uncover it. Minimum reach tearStep/sCone (~24px) keeps
             // small figures' bands; a 0.35-prominent figure keeps its
-            // full band by construction. window._noPromBound reverts.
+            // full band by construction. (Revert hatch _noPromBound removed, S60: A81 landed, REVIEW 4098.)
             const promOK = (jj) => {
                 // A85: for cone fronts the bound is subsumed — the bid
                 // rises at sCone per px, so "d*sCone <= prominence" is
                 // exactly "v2 < dQ", the claim condition itself.
                 if (coneF) return true;
-                if (window._noPromBound === true) return true;
                 const pr = dQ[jj] - v2;
                 if (pr <= 0) return false;
                 const dxp = (jj % pw) - ax, dyp = ((jj / pw) | 0) - ay;
@@ -15396,8 +15385,8 @@ function bgBuildBackgroundLayerCore() {
             // 0.44x, safe but under-reaching. The law is geometric, not
             // tuned: the fill may rise at most one grazing limit per pixel,
             // k = 396 * (pw/1920) px per depth unit at the fade-end, so
-            // sCone = 1/k = 0.0025 * 1920/pw. window._sConeFixed reverts.
-            const sCone = (window._sConeFixed === true) ? 0.0025 : bgConeSlopePerPx(pw);
+            // sCone = 1/k = 0.0025 * 1920/pw. (Hatch _sConeFixed removed, S60: A95 landed, REVIEW 4672.)
+            const sCone = bgConeSlopePerPx(pw);
             // A91: the PER-CELL tear threshold is the fold limit (derived above);
             // fgTearStep stays the CLIFF-SCALE constant used by the windowed
             // barrier/seed/membrane tests, whose windows already scale with pw.
@@ -15466,8 +15455,7 @@ function bgBuildBackgroundLayerCore() {
             // ship as cap cards at REAL depths and colours — snapping
             // first is what makes tearing safe (tearing raw smear quads
             // would splat fringe colours at fringe depths).
-            // window._noSmearSnap reverts for A/B.
-            if (_dirPlateOn && window._noSmearSnap !== true) {
+            if (_dirPlateOn) {   // (the _noSmearSnap revert hatch was removed, S60 rule 5: A79 landed, REVIEW 4021)
                 const RS = 2 * Math.max(3, Math.round(4 * pw / 1200));   // full smear width = 2x the barrier half-window
                 const wmaxS = bgSlide2D(dQ, pw, ph, RS, false);
                 const stpS = new Float32Array(PNq);
@@ -16873,8 +16861,8 @@ function bgBuildBackgroundLayerCore() {
             // A59f: the plug is hole-only (renders only where the FG is torn away),
             // so there is no FG to z-fight — the old -0.004 push-back is unneeded and
             // was a flat view-Z offset the FG never had (it misregistered the plug vs
-            // the FG). Default to matching the FG (0); window._plugZBias restores it.
-            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0) + (window._plugZBias ? -0.004 : 0);
+            // the FG). Default to matching the FG (0). (The -0.004 hatch _plugZBias was removed, S60: a59f, REVIEW 3226.)
+            matQ.uniforms.displacementBias.value = (matQ.uniforms.displacementBias.value || 0);
             if (matQ.uniforms.u_sdMask) { matQ.uniforms.u_sdMask.value = maskDT; matQ.uniforms.u_sdMaskTexel.value.set(1 / pw, 1 / ph); }
             if (matQ.uniforms.u_sdPaint) matQ.uniforms.u_sdPaint.value = platePaintDT || maskDT;   // C: the SD-regions tint reads the placeholder class (the band where no plane colour ran)
             // A84: the FG material needs the mask too — the stretch cut is
@@ -16956,7 +16944,7 @@ function bgBuildBackgroundLayerCore() {
                 mu.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mu.u_bandCutMaxGrad) mu.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                 if (mu.u_bandCutUvRate) { mu.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); bgBandCutArmedW = Math.max(1, w); }
-                if (mu.u_cutContactRamp) mu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0; };
+                if (mu.u_cutContactRamp) mu.u_cutContactRamp.value = 1.0; };
             // FG cuts its rubber and reveals the wash; the PLATE renders
             // SOLID — it is the only fill in quick mode, and discarding the
             // backstop opens naked holes (double-discard speckle). Its own
@@ -19503,7 +19491,7 @@ function bgBuildBackgroundLayerCore() {
                         // canvas width; a rubber triangle runs at a small fraction of it
                         const _uvRateThr = bgBandCutStretchFrac / Math.max(1, w);
                         if (fu.u_bandCutUvRate) { fu.u_bandCutUvRate.value = _uvRateThr; bgBandCutArmedW = Math.max(1, w); }
-                        if (fu.u_cutContactRamp) fu.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
+                        if (fu.u_cutContactRamp) fu.u_cutContactRamp.value = 1.0;
                         _mark('bandcut-bake');
                         console.log('[RUNG-PLUG] band-gated FG cut armed (dilate ' + bgBandCutDilatePx + 'px, mismatch ' + bgBandCutMismatch + ', maxGrad ' + bgBandCutMaxGrad + ', uvRate<' + _uvRateThr.toExponential(2) + ')');
                     }
@@ -20874,7 +20862,7 @@ function bgBuildBackgroundLayerCore() {
                 mat.uniforms.u_bandCutMismatch.value = bgBandCutMismatch;
                 if (mat.uniforms.u_bandCutMaxGrad) mat.uniforms.u_bandCutMaxGrad.value = bgBandCutMaxGrad;
                 if (mat.uniforms.u_bandCutUvRate) { mat.uniforms.u_bandCutUvRate.value = bgBandCutStretchFrac / Math.max(1, w); bgBandCutArmedW = Math.max(1, w); }
-                if (mat.uniforms.u_cutContactRamp) mat.uniforms.u_cutContactRamp.value = (window._noContactCut === true) ? 0.0 : 1.0;
+                if (mat.uniforms.u_cutContactRamp) mat.uniforms.u_cutContactRamp.value = 1.0;
             } else {
                 mat.uniforms.u_useBandCut.value = false; mat.uniforms.u_bandMask.value = null;
             }
