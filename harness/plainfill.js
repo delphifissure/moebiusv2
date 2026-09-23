@@ -10,8 +10,9 @@
 // Verified against the Python fields: node harness/plainfill.js <dump dir> <fields dir> <step>
 // Troll (2026-09-23): depth max |JS - Python| 6.0e-8 (3.4e-5 visible steps), wash max 1 level (rounding), every count
 // equal (band 258 610, 427 components, 3 206 edge pins, 16 856 no-pin, 3 942 not-behind). BUT 60.6 s (2 730 / 2 645 CG
-// iterations, machine shared with a render and sheets.py): the port needs a multigrid or a coarse-to-fine warm start.
+// iterations, machine shared with a render and sheets.py): the port needs a multigrid (below).
 'use strict';
+let TOL = (typeof process !== 'undefined' && process.env && process.env.PF_TOL) ? Number(process.env.PF_TOL) : 1e-8;   // relative residual; 1e-8 measured at 0.0004 visible steps from the exact fill on the troll (1e-6: 81 steps)
 
 function plainFill(o) {
     const { pw, ph, band, dQ, law, step, rimJ, rimW, rgb } = o; const N = pw * ph;
@@ -39,34 +40,83 @@ function plainFill(o) {
     for (let s = 0; s < n; s++) { if (comp[s] >= 0) continue; comp[s] = nc; stack.push(s);
         while (stack.length) { const k = stack.pop(); for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const m = nbList[q]; if (comp[m] < 0) { comp[m] = nc; stack.push(m); } } } nc++; }
 
-    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0
+    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0.
+    // (A coarse-to-fine warm start was tried first and did not cut the iterations: the problem is conditioning, not the
+    // starting point.) AGGREGATION MULTIGRID-PRECONDITIONED CG on the eliminated system A u = b over the free nodes (A = D - W: D the
+    // weighted degree including links to fixed nodes, W the free-free links). Levels merge 2x2 blocks of the node
+    // coordinates (piecewise-constant prolongation P, Galerkin coarse operator P^T A P); a V-cycle with one forward and
+    // one backward Gauss-Seidel sweep per level is a symmetric preconditioner, so CG stays valid. The coarsest level
+    // (< 500 nodes) is solved by Gauss-Seidel to convergence. Stops on the relative residual TOL.
+    function buildLevel(m, rowStart, cols, vals, diag, xy) {    // CSR of the off-diagonal part (negative weights) + diag
+        return { m, rowStart, cols, vals, diag, xy };
+    }
+    function coarsen(L) {
+        const { m, rowStart, cols, vals, diag, xy } = L; const agg = new Int32Array(m), key2 = new Map(); let nc = 0; const cxy = [];
+        for (let i = 0; i < m; i++) { const X = xy[2 * i] >> 1, Y = xy[2 * i + 1] >> 1, key = Y * 1048576 + X; let c = key2.get(key); if (c === undefined) { c = nc++; key2.set(key, c); cxy.push(X, Y); } agg[i] = c; }
+        const cdiag = new Float64Array(nc); const links = new Map();
+        for (let i = 0; i < m; i++) { const a = agg[i]; cdiag[a] += diag[i];
+            for (let q = rowStart[i]; q < rowStart[i + 1]; q++) { const j = cols[q], bb = agg[j], v = vals[q]; if (a === bb) cdiag[a] += v; else { const k = a * nc + bb; links.set(k, (links.get(k) || 0) + v); } } }
+        const cStart = new Int32Array(nc + 1); for (const k of links.keys()) cStart[Math.floor(k / nc) + 1]++; for (let c = 0; c < nc; c++) cStart[c + 1] += cStart[c];
+        const cCols = new Int32Array(cStart[nc]), cVals = new Float64Array(cStart[nc]), fp = Int32Array.from(cStart.subarray(0, nc));
+        for (const [k, v] of links) { const aa = Math.floor(k / nc), bb = k - aa * nc; cCols[fp[aa]] = bb; cVals[fp[aa]] = v; fp[aa]++; }
+        return { agg, C: buildLevel(nc, cStart, cCols, cVals, cdiag, Int32Array.from(cxy)) };
+    }
+    function gs(L, x, rhs, backward) {
+        const { m, rowStart, cols, vals, diag } = L;
+        if (!backward) { for (let i = 0; i < m; i++) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+        else { for (let i = m - 1; i >= 0; i--) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+    }
+    function residual(L, x, rhs, out) { const { m, rowStart, cols, vals, diag } = L; for (let i = 0; i < m; i++) { let sum = diag[i] * x[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum += vals[q] * x[cols[q]]; out[i] = rhs[i] - sum; } }
+    function vcycle(levels, li, rhs) {     // returns x ~ A^-1 rhs from zero start
+        const L = levels[li].L; const x = new Float64Array(L.m);
+        if (li === levels.length - 1) { for (let s = 0; s < 60; s++) { gs(L, x, rhs, false); gs(L, x, rhs, true); } return x; }
+        gs(L, x, rhs, false);
+        const r = new Float64Array(L.m); residual(L, x, rhs, r);
+        const { agg } = levels[li]; const C = levels[li + 1].L; const rc = new Float64Array(C.m); for (let i = 0; i < L.m; i++) rc[agg[i]] += r[i];
+        const ec = vcycle(levels, li + 1, rc); for (let i = 0; i < L.m; i++) x[i] += ec[agg[i]];
+        gs(L, x, rhs, true);
+        return x;
+    }
+    function solveGraph(nN, adjStart, adjList, adjW, fixMask, fixVal) {
+        const free = []; for (let k = 0; k < nN; k++) if (!fixMask[k]) free.push(k);
+        const m = free.length, fidx = new Int32Array(nN).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
+        const out = Float64Array.from(fixVal); if (!m) return { out, iters: 0 };
+        // fine level: diag = weighted degree (all links), off-diagonal = -w for free-free links; rhs = sum w * fixed
+        const rowStart = new Int32Array(m + 1), diag = new Float64Array(m), b = new Float64Array(m);
+        for (let t = 0; t < m; t++) { const k = free[t]; let cnt = 0; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { diag[t] += adjW[q]; const j = adjList[q]; if (fidx[j] >= 0) cnt++; else b[t] += adjW[q] * fixVal[j]; } rowStart[t + 1] = rowStart[t] + cnt; }
+        const cols = new Int32Array(rowStart[m]), vals = new Float64Array(rowStart[m]);
+        for (let t = 0; t < m; t++) { const k = free[t]; let p0 = rowStart[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const f = fidx[adjList[q]]; if (f >= 0) { cols[p0] = f; vals[p0] = -adjW[q]; p0++; } } }
+        const xy = new Int32Array(2 * m); for (let t = 0; t < m; t++) { xy[2 * t] = xyB[2 * free[t]]; xy[2 * t + 1] = xyB[2 * free[t] + 1]; }
+        const levels = [{ L: buildLevel(m, rowStart, cols, vals, diag, xy) }];
+        while (levels[levels.length - 1].L.m > 500) { const c = coarsen(levels[levels.length - 1].L); if (c.C.m >= levels[levels.length - 1].L.m) break; levels[levels.length - 1].agg = c.agg; levels.push({ L: c.C }); }
+        const L0 = levels[0].L; const u = new Float64Array(m), r = Float64Array.from(b); let z = vcycle(levels, 0, r); const pv = Float64Array.from(z), Apv = new Float64Array(m);
+        let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
+        let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
+        const Ap = (x, o) => { for (let i = 0; i < m; i++) { let sum = L0.diag[i] * x[i]; for (let q = L0.rowStart[i]; q < L0.rowStart[i + 1]; q++) sum += L0.vals[q] * x[L0.cols[q]]; o[i] = sum; } };
+        let it = 0;
+        for (; it < 2000; it++) {
+            let rn = 0; for (let t = 0; t < m; t++) rn += r[t] * r[t]; if (Math.sqrt(rn) / bn < TOL) break;
+            Ap(pv, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += pv[t] * Apv[t];
+            const al = rz / pAp; for (let t = 0; t < m; t++) { u[t] += al * pv[t]; r[t] -= al * Apv[t]; }
+            z = vcycle(levels, 0, r); let rz2 = 0; for (let t = 0; t < m; t++) rz2 += r[t] * z[t];
+            const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) pv[t] = z[t] + beta * pv[t];
+        }
+        for (let t = 0; t < m; t++) out[free[t]] = u[t];
+        return { out, iters: it, levels: levels.length };
+    }
+    // the band texels as a graph (unit weights on band-band edges), shared by every channel
+    const adjStart = nbStart, adjList = nbList.subarray(0, e), adjW = new Float64Array(e).fill(1);
+    const xyB = new Int32Array(2 * n); for (let k = 0; k < n; k++) { xyB[2 * k] = bi[k] % pw; xyB[2 * k + 1] = (bi[k] / pw) | 0; }
     function membrane(fix, vals, nch) {
         const has = new Uint8Array(nc); for (let k = 0; k < n; k++) if (fix[k]) has[comp[k]] = 1;
-        const out = new Float64Array(n * nch); const free = [];
-        for (let k = 0; k < n; k++) { if (fix[k] || !has[comp[k]]) { for (let c = 0; c < nch; c++) out[k * nch + c] = vals[k * nch + c]; } else free.push(k); }
-        const m = free.length, fidx = new Int32Array(n).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
-        const deg = new Float64Array(m); for (let t = 0; t < m; t++) deg[t] = nbStart[free[t] + 1] - nbStart[free[t]];
-        const Ap = (p, r) => { for (let t = 0; t < m; t++) { const k = free[t]; let s = deg[t] * p[t]; for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const f = fidx[nbList[q]]; if (f >= 0) s -= p[f]; } r[t] = s; } };
-        let iters = 0, worst = 0;
+        const out = new Float64Array(n * nch); let iters = 0, worst = 0;
+        const fm = new Uint8Array(n); for (let k = 0; k < n; k++) fm[k] = (fix[k] || !has[comp[k]]) ? 1 : 0;
         for (let c = 0; c < nch; c++) {
-            const b = new Float64Array(m);
-            for (let t = 0; t < m; t++) { const k = free[t]; let s = 0; for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const j = nbList[q]; if (fidx[j] < 0) s += out[j * nch + c]; } b[t] = s; }
-            const u = new Float64Array(m), r = Float64Array.from(b), z = new Float64Array(m), p = new Float64Array(m), Apv = new Float64Array(m);
-            for (let t = 0; t < m; t++) { z[t] = r[t] / deg[t]; p[t] = z[t]; }
-            let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
-            let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
-            let it = 0;
-            for (; it < 20000; it++) {
-                Ap(p, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += p[t] * Apv[t];
-                const a = rz / pAp; let rn = 0;
-                for (let t = 0; t < m; t++) { u[t] += a * p[t]; r[t] -= a * Apv[t]; rn += r[t] * r[t]; }
-                if (Math.sqrt(rn) / bn < 1e-10) { it++; break; }
-                let rz2 = 0; for (let t = 0; t < m; t++) { z[t] = r[t] / deg[t]; rz2 += r[t] * z[t]; }
-                const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) p[t] = z[t] + beta * p[t];
-            }
-            iters = Math.max(iters, it);
-            for (let t = 0; t < m; t++) out[free[t] * nch + c] = u[t];
-            Ap(u, Apv); for (let t = 0; t < m; t++) worst = Math.max(worst, Math.abs(Apv[t] - b[t]));
+            const fv = new Float64Array(n); for (let k = 0; k < n; k++) if (fm[k]) fv[k] = vals[k * nch + c];
+            const r = solveGraph(n, adjStart, adjList, adjW, fm, fv); iters = Math.max(iters, r.iters);
+            for (let k = 0; k < n; k++) out[k * nch + c] = r.out[k];
+            // residual on the free texels (the Laplace equation)
+            for (let k = 0; k < n; k++) { if (fm[k]) continue; let sum = (adjStart[k + 1] - adjStart[k]) * r.out[k]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) sum -= r.out[adjList[q]]; worst = Math.max(worst, Math.abs(sum)); }
         }
         return { out, has, iters, residual: worst };
     }
