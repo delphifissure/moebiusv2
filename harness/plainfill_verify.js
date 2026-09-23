@@ -4,7 +4,8 @@
 const fs = require('fs'), path = require('path'), { execSync } = require('child_process');
 const src = fs.readFileSync(path.join(__dirname, '..', 'moebius.js'), 'utf8');
 const a = src.indexOf('function bgPlainFill('), b = src.indexOf('\n// S61 §12: THE POST-BAKE FILL OPTIONS', a);
-const bgPlainFill = new Function(src.slice(a, b) + '\nreturn bgPlainFill;')();
+const m0 = src.indexOf('function bgMGSolve('), m1 = src.indexOf('\n// S62: DA3', m0);   // S62: the shared multigrid solver bgPlainFill calls
+const bgPlainFill = new Function(src.slice(m0, m1) + '\n' + src.slice(a, b) + '\nreturn bgPlainFill;')();
 const D = '/home/user/moebiusv2/harness/shots/streakclass/ab_troll', F = D + '/ab_fields', step = 1.760e-3;
 const { pw, ph } = JSON.parse(fs.readFileSync(D + '/size.json')); const N = pw * ph;
 const f32 = (p) => { const x = fs.readFileSync(p); return new Float32Array(x.buffer, x.byteOffset, x.byteLength / 4); };

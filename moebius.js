@@ -427,74 +427,9 @@ function bgPlainFill(o) {
     for (let s = 0; s < n; s++) { if (comp[s] >= 0) continue; comp[s] = nc; stack.push(s);
         while (stack.length) { const k = stack.pop(); for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const m = nbList[q]; if (comp[m] < 0) { comp[m] = nc; stack.push(m); } } } nc++; }
 
-    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0.
-    // The solve is a weighted-graph Laplacian with a COARSE-TO-FINE WARM START (a cascade): the graph is coarsened by
-    // merging 4x4 texel blocks (a fine edge adds weight 1 to the link between its two blocks; a block holding a fixed
-    // texel is fixed at their mean), the coarse problem is solved first (recursively, down to a few thousand nodes) and
-    // its answer is the fine CG's starting point. The fine CG still runs to the same relative tolerance, so the answer is
-    // the same to that tolerance; only the iteration count changes.
-    // AGGREGATION MULTIGRID-PRECONDITIONED CG on the eliminated system A u = b over the free nodes (A = D - W: D the
-    // weighted degree including links to fixed nodes, W the free-free links). Levels merge 2x2 blocks of the node
-    // coordinates (piecewise-constant prolongation P, Galerkin coarse operator P^T A P); a V-cycle with one forward and
-    // one backward Gauss-Seidel sweep per level is a symmetric preconditioner, so CG stays valid. The coarsest level
-    // (< 500 nodes) is solved by Gauss-Seidel to convergence. Stops on the relative residual TOL.
-    function buildLevel(m, rowStart, cols, vals, diag, xy) {    // CSR of the off-diagonal part (negative weights) + diag
-        return { m, rowStart, cols, vals, diag, xy };
-    }
-    function coarsen(L) {
-        const { m, rowStart, cols, vals, diag, xy } = L; const agg = new Int32Array(m), key2 = new Map(); let nc = 0; const cxy = [];
-        for (let i = 0; i < m; i++) { const X = xy[2 * i] >> 1, Y = xy[2 * i + 1] >> 1, key = Y * 1048576 + X; let c = key2.get(key); if (c === undefined) { c = nc++; key2.set(key, c); cxy.push(X, Y); } agg[i] = c; }
-        const cdiag = new Float64Array(nc); const links = new Map();
-        for (let i = 0; i < m; i++) { const a = agg[i]; cdiag[a] += diag[i];
-            for (let q = rowStart[i]; q < rowStart[i + 1]; q++) { const j = cols[q], bb = agg[j], v = vals[q]; if (a === bb) cdiag[a] += v; else { const k = a * nc + bb; links.set(k, (links.get(k) || 0) + v); } } }
-        const cStart = new Int32Array(nc + 1); for (const k of links.keys()) cStart[Math.floor(k / nc) + 1]++; for (let c = 0; c < nc; c++) cStart[c + 1] += cStart[c];
-        const cCols = new Int32Array(cStart[nc]), cVals = new Float64Array(cStart[nc]), fp = Int32Array.from(cStart.subarray(0, nc));
-        for (const [k, v] of links) { const aa = Math.floor(k / nc), bb = k - aa * nc; cCols[fp[aa]] = bb; cVals[fp[aa]] = v; fp[aa]++; }
-        return { agg, C: buildLevel(nc, cStart, cCols, cVals, cdiag, Int32Array.from(cxy)) };
-    }
-    function gs(L, x, rhs, backward) {
-        const { m, rowStart, cols, vals, diag } = L;
-        if (!backward) { for (let i = 0; i < m; i++) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
-        else { for (let i = m - 1; i >= 0; i--) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
-    }
-    function residual(L, x, rhs, out) { const { m, rowStart, cols, vals, diag } = L; for (let i = 0; i < m; i++) { let sum = diag[i] * x[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum += vals[q] * x[cols[q]]; out[i] = rhs[i] - sum; } }
-    function vcycle(levels, li, rhs) {     // returns x ~ A^-1 rhs from zero start
-        const L = levels[li].L; const x = new Float64Array(L.m);
-        if (li === levels.length - 1) { for (let s = 0; s < 60; s++) { gs(L, x, rhs, false); gs(L, x, rhs, true); } return x; }
-        gs(L, x, rhs, false);
-        const r = new Float64Array(L.m); residual(L, x, rhs, r);
-        const { agg } = levels[li]; const C = levels[li + 1].L; const rc = new Float64Array(C.m); for (let i = 0; i < L.m; i++) rc[agg[i]] += r[i];
-        const ec = vcycle(levels, li + 1, rc); for (let i = 0; i < L.m; i++) x[i] += ec[agg[i]];
-        gs(L, x, rhs, true);
-        return x;
-    }
-    function solveGraph(nN, adjStart, adjList, adjW, fixMask, fixVal) {
-        const free = []; for (let k = 0; k < nN; k++) if (!fixMask[k]) free.push(k);
-        const m = free.length, fidx = new Int32Array(nN).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
-        const out = Float64Array.from(fixVal); if (!m) return { out, iters: 0 };
-        // fine level: diag = weighted degree (all links), off-diagonal = -w for free-free links; rhs = sum w * fixed
-        const rowStart = new Int32Array(m + 1), diag = new Float64Array(m), b = new Float64Array(m);
-        for (let t = 0; t < m; t++) { const k = free[t]; let cnt = 0; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { diag[t] += adjW[q]; const j = adjList[q]; if (fidx[j] >= 0) cnt++; else b[t] += adjW[q] * fixVal[j]; } rowStart[t + 1] = rowStart[t] + cnt; }
-        const cols = new Int32Array(rowStart[m]), vals = new Float64Array(rowStart[m]);
-        for (let t = 0; t < m; t++) { const k = free[t]; let p0 = rowStart[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const f = fidx[adjList[q]]; if (f >= 0) { cols[p0] = f; vals[p0] = -adjW[q]; p0++; } } }
-        const xy = new Int32Array(2 * m); for (let t = 0; t < m; t++) { xy[2 * t] = xyB[2 * free[t]]; xy[2 * t + 1] = xyB[2 * free[t] + 1]; }
-        const levels = [{ L: buildLevel(m, rowStart, cols, vals, diag, xy) }];
-        while (levels[levels.length - 1].L.m > 500) { const c = coarsen(levels[levels.length - 1].L); if (c.C.m >= levels[levels.length - 1].L.m) break; levels[levels.length - 1].agg = c.agg; levels.push({ L: c.C }); }
-        const L0 = levels[0].L; const u = new Float64Array(m), r = Float64Array.from(b); let z = vcycle(levels, 0, r); const pv = Float64Array.from(z), Apv = new Float64Array(m);
-        let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
-        let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
-        const Ap = (x, o) => { for (let i = 0; i < m; i++) { let sum = L0.diag[i] * x[i]; for (let q = L0.rowStart[i]; q < L0.rowStart[i + 1]; q++) sum += L0.vals[q] * x[L0.cols[q]]; o[i] = sum; } };
-        let it = 0;
-        for (; it < 2000; it++) {
-            let rn = 0; for (let t = 0; t < m; t++) rn += r[t] * r[t]; if (Math.sqrt(rn) / bn < TOL) break;
-            Ap(pv, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += pv[t] * Apv[t];
-            const al = rz / pAp; for (let t = 0; t < m; t++) { u[t] += al * pv[t]; r[t] -= al * Apv[t]; }
-            z = vcycle(levels, 0, r); let rz2 = 0; for (let t = 0; t < m; t++) rz2 += r[t] * z[t];
-            const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) pv[t] = z[t] + beta * pv[t];
-        }
-        for (let t = 0; t < m; t++) out[free[t]] = u[t];
-        return { out, iters: it, levels: levels.length };
-    }
+    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0, by the
+    // shared multigrid-preconditioned CG (bgMGSolve, lifted out of this function unchanged in S62)
+    function solveGraph(nN, adjStart, adjList, adjW, fixMask, fixVal) { const r = bgMGSolve(nN, adjStart, adjList, adjW, fixMask, [fixVal], xyB, TOL); return { out: r.outs[0], iters: r.iters[0], levels: r.levels }; }
     // the band texels as a graph (unit weights on band-band edges), shared by every channel
     const adjStart = nbStart, adjList = nbList.subarray(0, e), adjW = new Float64Array(e).fill(1);
     const xyB = new Int32Array(2 * n); for (let k = 0; k < n; k++) { xyB[2 * k] = bi[k] % pw; xyB[2 * k + 1] = (bi[k] / pw) | 0; }
@@ -575,6 +510,47 @@ function bgPostBakeFill() {
     return st;
 }
 
+// S62: THE SOURCE-ANCHORED HOLE ON THE FINISHED BAKE (panel 'hole depth: source'; default off). Replaces the whole plate:
+// the depth (bgSourceHole: the source outside the hole, the membrane inside), the colour (the source outside, the wash
+// inside), the plate's triangle index (rebuilt on the full grid with the rim law's own rule on the NEW plate, S2b.4), and
+// hides plate 2 (the per-line law's second layer). The captures (_qbPlateF, _qbPlateColor, _qbDisocc) follow, so the SD
+// bundle carries what is on screen.
+function bgApplySourceHole() {
+    if (!window._srcHole) return null;
+    if (!(bgFarRuleOn() && window._qbSize && window._qbDQ && typeof bgLayerMesh !== 'undefined' && bgLayerMesh)) { console.warn('[S62] source hole: no plane bake on screen'); return null; }
+    const t0 = Date.now(); const { pw, ph } = window._qbSize, N = pw * ph, dQ = window._qbDQ;
+    const L = mediaLayers[0]; const cImg = (L.elements && L.elements.color) || L.textures.color.image;
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(cImg, 0, 0, pw, ph);
+    const rgba = cx.getImageData(0, 0, pw, ph).data, rgb = new Uint8ClampedArray(3 * N); for (let i = 0; i < N; i++) { rgb[3 * i] = rgba[4 * i]; rgb[3 * i + 1] = rgba[4 * i + 1]; rgb[3 * i + 2] = rgba[4 * i + 2]; }
+    const rl = bgRimLawFor(pw, ph), lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
+    const D = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
+    const layerW = (pw / ph > terrariumWidth / terrariumHeight) ? terrariumWidth : terrariumHeight * pw / ph;
+    const r = bgSourceHole({ dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 });
+    const tex = bgLayerMesh.material.uniforms.displacementMap.value, data = tex.image.data, pF = window._qbPlateF;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const v = r.plate[y * pw + x], k = (ph - 1 - y) * pw + x; data[k] = v; if (pF && pF !== data && pF.length === N) pF[k] = v; }
+    tex.needsUpdate = true;
+    const mp = bgLayerMesh.material.uniforms.map, img = mp && mp.value && mp.value.image, pc = window._qbPlateColor;
+    if (img && img.getContext) {
+        const cc = img.getContext('2d'), id = cc.getImageData(0, 0, pw, ph), d = id.data;
+        for (let i = 0; i < N; i++) { for (let c = 0; c < 3; c++) { d[4 * i + c] = r.wash[3 * i + c]; if (pc && pc.length === 4 * N) pc[4 * i + c] = r.wash[3 * i + c]; } d[4 * i + 3] = 255; }
+        cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
+    } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
+    let tri = null; try {
+        const gQ = bgLayerMesh.geometry, gp = L.mesh.geometry.parameters, vw = gp.widthSegments + 1, vh = gp.heightSegments + 1;
+        const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1), ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
+        const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0; const pl = r.plate;
+        const t3 = (a, b, c) => { const A = ti(a), B = ti(b), C = ti(c); if (rl.joinedIdx(A, B, pl, pw) && rl.joinedIdx(B, C, pl, pw) && rl.joinedIdx(A, C, pl, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; } else drop++; };
+        for (let iy = 0; iy < vh - 1; iy++) for (let ix = 0; ix < vw - 1; ix++) { const a = ix + vw * iy, b = ix + vw * (iy + 1), c = ix + 1 + vw * (iy + 1), d = ix + 1 + vw * iy; t3(a, b, d); t3(b, c, d); }
+        gQ.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1)); tri = { kept: n / 3, dropped: drop };
+    } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
+    const p2 = bgLayerMesh.userData && bgLayerMesh.userData.plate2; if (p2) p2.visible = false;
+    window._qbDisocc = r.hole; window._qbSrcHole = r.hole;
+    const st = Object.assign({}, r.stats, { plateTriangles: tri, edges: window._qbEdgeSharpen || null, msTotal: Date.now() - t0 });
+    window._qbSourceHole = st; console.log('[S62] source-anchored hole ' + JSON.stringify(st));
+    if (typeof render === 'function') { try { render(); } catch (e) {} }
+    return st;
+}
+
 // S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
 // where the per-line law returned the occluder's own depth (troll 928 of 962, vermeer 588 of 606, sunflowers 352 of 373,
 // starwatcher 432 of 449): not content, and in an SD inpaint each is an island of source pixels left unpainted inside a
@@ -614,6 +590,277 @@ function bgPinholeFilledMask(src, dQ, pw, ph, step) {
 // Held-out kit test (15 unseen scenes, S61 §8): 'safe' leaves exact geometry untouched on 13 of 15 (4 texels in 5.4 M);
 // 'strong' sharpens about 3x as much with small misfires on 8 of 15 (worst 0.08 % of a map). Pure: no app globals, so the
 // harness verifies THIS source against harness/ramp_colour.py texel for texel.
+// S62: THE MULTIGRID-PRECONDITIONED CG, lifted out of bgPlainFill unchanged so the source-anchored hole shares it.
+// A weighted-graph Laplacian over nN nodes (CSR adjStart/adjList/adjW), fixed nodes hold their values, free nodes satisfy
+// deg u - sum w u_nb = 0. Aggregation multigrid: levels merge 2x2 blocks of the node coordinates xyB (piecewise-constant
+// prolongation, Galerkin coarse operator); a V-cycle with one forward and one backward Gauss-Seidel sweep per level is a
+// symmetric preconditioner, so CG stays valid; the coarsest level (< 500 nodes) is solved by Gauss-Seidel to convergence.
+// fixVals is an array of channels (one hierarchy, several right-hand sides); x0s optional warm starts (full-length arrays).
+function bgMGSolve(nN, adjStart, adjList, adjW, fixMask, fixVals, xyB, TOL, x0s) {
+    function buildLevel(m, rowStart, cols, vals, diag, xy) { return { m, rowStart, cols, vals, diag, xy }; }
+    function coarsen(L) {
+        // aggregates = 2x2 blocks of node coordinates; the coarse operator is summed row by row with a scratch accumulator
+        // (flat arrays, O(nnz)), in the same order of summation as a keyed map would give per coarse link
+        const { m, rowStart, cols, vals, diag, xy } = L; const agg = new Int32Array(m), key2 = new Map(); let nc = 0; const cxy = [];
+        for (let i = 0; i < m; i++) { const X = xy[2 * i] >> 1, Y = xy[2 * i + 1] >> 1, key = Y * 1048576 + X; let c = key2.get(key); if (c === undefined) { c = nc++; key2.set(key, c); cxy.push(X, Y); } agg[i] = c; }
+        const cdiag = new Float64Array(nc);
+        const mStart = new Int32Array(nc + 1); for (let i = 0; i < m; i++) mStart[agg[i] + 1]++; for (let c = 0; c < nc; c++) mStart[c + 1] += mStart[c];
+        const members = new Int32Array(m), fp0 = Int32Array.from(mStart.subarray(0, nc)); for (let i = 0; i < m; i++) members[fp0[agg[i]]++] = i;
+        const seen = new Int32Array(nc).fill(-1), acc = new Float64Array(nc), rowC = []; let cStartArr = [0], cColsArr = [], cValsArr = [];
+        for (let a = 0; a < nc; a++) {
+            rowC.length = 0;
+            for (let t = mStart[a]; t < mStart[a + 1]; t++) { const i = members[t]; cdiag[a] += diag[i];
+                for (let q = rowStart[i]; q < rowStart[i + 1]; q++) { const bb = agg[cols[q]], v = vals[q]; if (bb === a) cdiag[a] += v; else { if (seen[bb] !== a) { seen[bb] = a; acc[bb] = 0; rowC.push(bb); } acc[bb] += v; } } }
+            for (const bb of rowC) { cColsArr.push(bb); cValsArr.push(acc[bb]); }
+            cStartArr.push(cColsArr.length);
+        }
+        return { agg, C: buildLevel(nc, Int32Array.from(cStartArr), Int32Array.from(cColsArr), Float64Array.from(cValsArr), cdiag, Int32Array.from(cxy)) };
+    }
+    function gs(L, x, rhs, backward) {
+        const { m, rowStart, cols, vals, diag } = L;
+        if (!backward) { for (let i = 0; i < m; i++) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+        else { for (let i = m - 1; i >= 0; i--) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+    }
+    function residual(L, x, rhs, out) { const { m, rowStart, cols, vals, diag } = L; for (let i = 0; i < m; i++) { let sum = diag[i] * x[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum += vals[q] * x[cols[q]]; out[i] = rhs[i] - sum; } }
+    function vcycle(levels, li, rhs) {     // returns x ~ A^-1 rhs from zero start
+        const L = levels[li].L; const x = new Float64Array(L.m);
+        if (li === levels.length - 1) { for (let s = 0; s < 60; s++) { gs(L, x, rhs, false); gs(L, x, rhs, true); } return x; }
+        gs(L, x, rhs, false);
+        const r = new Float64Array(L.m); residual(L, x, rhs, r);
+        const { agg } = levels[li]; const C = levels[li + 1].L; const rc = new Float64Array(C.m); for (let i = 0; i < L.m; i++) rc[agg[i]] += r[i];
+        const ec = vcycle(levels, li + 1, rc); for (let i = 0; i < L.m; i++) x[i] += ec[agg[i]];
+        gs(L, x, rhs, true);
+        return x;
+    }
+    const free = []; for (let k = 0; k < nN; k++) if (!fixMask[k]) free.push(k);
+    const m = free.length, fidx = new Int32Array(nN).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
+    const outs = fixVals.map(fv => Float64Array.from(fv)); if (!m) return { outs, iters: [0], levels: 0 };
+    // fine level: diag = weighted degree (all links), off-diagonal = -w for free-free links
+    const rowStart = new Int32Array(m + 1), diag = new Float64Array(m);
+    for (let t = 0; t < m; t++) { const k = free[t]; let cnt = 0; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { diag[t] += adjW[q]; if (fidx[adjList[q]] >= 0) cnt++; } rowStart[t + 1] = rowStart[t] + cnt; }
+    const cols = new Int32Array(rowStart[m]), vals = new Float64Array(rowStart[m]);
+    for (let t = 0; t < m; t++) { const k = free[t]; let p0 = rowStart[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const f = fidx[adjList[q]]; if (f >= 0) { cols[p0] = f; vals[p0] = -adjW[q]; p0++; } } }
+    const xy = new Int32Array(2 * m); for (let t = 0; t < m; t++) { xy[2 * t] = xyB[2 * free[t]]; xy[2 * t + 1] = xyB[2 * free[t] + 1]; }
+    const levels = [{ L: buildLevel(m, rowStart, cols, vals, diag, xy) }];
+    while (levels[levels.length - 1].L.m > 500) { const c = coarsen(levels[levels.length - 1].L); if (c.C.m >= levels[levels.length - 1].L.m) break; levels[levels.length - 1].agg = c.agg; levels.push({ L: c.C }); }
+    const L0 = levels[0].L;
+    const Ap = (x, o) => { for (let i = 0; i < m; i++) { let sum = L0.diag[i] * x[i]; for (let q = L0.rowStart[i]; q < L0.rowStart[i + 1]; q++) sum += L0.vals[q] * x[L0.cols[q]]; o[i] = sum; } };
+    const iters = [];
+    fixVals.forEach((fixVal, ch) => {
+        const b = new Float64Array(m);   // rhs = sum w * fixed
+        for (let t = 0; t < m; t++) { const k = free[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const j = adjList[q]; if (fidx[j] < 0) b[t] += adjW[q] * fixVal[j]; } }
+        const u = new Float64Array(m), r = Float64Array.from(b);
+        const x0 = x0s && x0s[ch]; if (x0) { for (let t = 0; t < m; t++) u[t] = x0[free[t]]; const Au = new Float64Array(m); Ap(u, Au); for (let t = 0; t < m; t++) r[t] = b[t] - Au[t]; }
+        let z = vcycle(levels, 0, r); const pv = Float64Array.from(z), Apv = new Float64Array(m);
+        let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
+        let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
+        let it = 0;
+        for (; it < 2000; it++) {
+            let rn = 0; for (let t = 0; t < m; t++) rn += r[t] * r[t]; if (Math.sqrt(rn) / bn < TOL) break;
+            Ap(pv, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += pv[t] * Apv[t];
+            const al = rz / pAp; for (let t = 0; t < m; t++) { u[t] += al * pv[t]; r[t] -= al * Apv[t]; }
+            z = vcycle(levels, 0, r); let rz2 = 0; for (let t = 0; t < m; t++) rz2 += r[t] * z[t];
+            const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) pv[t] = z[t] + beta * pv[t];
+        }
+        for (let t = 0; t < m; t++) outs[ch][free[t]] = u[t];
+        iters.push(it);
+    });
+    return { outs, iters, levels: levels.length };
+}
+
+// S62: DA3'S BLURRED OCCLUSION EDGES, SHARPENED WHERE THEY OCCLUDE (research/S62 §3, §5; harness/srcfill.py step 1).
+// Per line (columns, then rows), a candidate stretch grows from each steepest step (larger first) through steps of the
+// same sign that are steep (over the rim law's tolerance tolAt) and still CURVING (each step outward smaller than the last
+// by more than the tolerance): a blur's sigmoid tail, never a straight slope however steep. A stretch is taken if it holds
+// a step the rim law tears, or if it continues a taken stretch of the same sign on the next line over (one contour). A
+// taken stretch becomes a one-texel cliff at the centre of the colour change across it: texels on the near side take the
+// near end's depth, the rest the far end's; a texel taken both ways keeps the steeper stretch. A surface with no occlusion
+// on its contour (a faceted mountain, a receding ground) is left as DA3 drew it. Pure: src (Float32, source rows), rgb
+// (RGB bytes, 3N), the rim law rl.
+function bgEdgeSharpen(src, rgb, pw, ph, rl) {
+    const N = pw * ph, out = Float32Array.from(src), score = new Float64Array(N).fill(-1);
+    const disp = new Float64Array(N), tol = new Float64Array(N);
+    for (let i = 0; i < N; i++) { disp[i] = rl.dispAt(src[i]); tol[i] = rl.tolAt(src[i]); }
+    const rhe = (v) => { const f = Math.floor(v), d = v - f; return d > 0.5 ? f + 1 : (d < 0.5 ? f : (f % 2 === 0 ? f : f + 1)); };   // numpy's round
+    let taken = 0, propagated = 0, candidates = 0;
+    for (const ax of [0, 1]) {                   // 0: columns, 1: rows (srcfill.py's order)
+        const L = ax === 1 ? pw : ph, NL = ax === 1 ? ph : pw;
+        const at = ax === 1 ? ((l, k) => l * pw + k) : ((l, k) => k * pw + l);
+        const cands = []; const byLine = new Array(NL);
+        const dD = new Float64Array(L - 1), ad = new Float64Array(L - 1), TE = new Float64Array(L - 1), Tl = new Float64Array(L), sg = new Int8Array(L - 1), used = new Uint8Array(L - 1);
+        for (let l = 0; l < NL; l++) {
+            for (let k = 0; k < L; k++) Tl[k] = tol[at(l, k)];
+            for (let k = 0; k < L - 1; k++) { const i = at(l, k), j = at(l, k + 1); dD[k] = disp[j] - disp[i]; ad[k] = Math.abs(dD[k]); sg[k] = Math.sign(dD[k]); TE[k] = Math.max(tol[i], tol[j]); used[k] = 0; }
+            const order = Array.from({ length: L - 1 }, (_, k) => k).sort((p, q) => (ad[q] - ad[p]) || (p - q));
+            byLine[l] = [];
+            for (const x of order) {
+                if (ad[x] <= TE[x]) break;
+                if (used[x]) continue;
+                let a = x, b = x; const s = sg[x];
+                while (a - 2 >= 0 && !used[a - 1] && sg[a - 1] === s && ad[a - 1] > TE[a - 1] && ad[a - 1] - ad[a - 2] > Tl[a - 1]) a--;
+                while (b + 2 < L - 1 && !used[b + 1] && sg[b + 1] === s && ad[b + 1] > TE[b + 1] && ad[b + 1] - ad[b + 2] > Tl[b + 2]) b++;
+                for (let k = a; k <= b; k++) used[k] = 1;
+                if (b + 1 - a >= 2) {
+                    let anch = false; for (let k = a; k <= b && !anch; k++) if (!rl.joinedIdx(at(l, k), at(l, k + 1), src, pw)) anch = true;
+                    byLine[l].push(cands.length); cands.push({ l, a, b, s, anch });
+                }
+            }
+        }
+        candidates += cands.length;
+        // one contour: a stretch continues a taken stretch of the same sign on the next line over, overlapping it
+        const acc = new Uint8Array(cands.length), stack = [];
+        for (let c = 0; c < cands.length; c++) if (cands[c].anch) { acc[c] = 1; stack.push(c); }
+        while (stack.length) {
+            const c = cands[stack.pop()];
+            for (const l2 of [c.l - 1, c.l + 1]) {
+                if (l2 < 0 || l2 >= NL) continue;
+                for (const c2 of byLine[l2]) { if (acc[c2]) continue; const d = cands[c2]; if (d.s === c.s && d.a <= c.b + 1 && d.b >= c.a - 1) { acc[c2] = 1; stack.push(c2); propagated++; } }
+            }
+        }
+        for (let c = 0; c < cands.length; c++) {
+            if (!acc[c]) continue; const { l, a, b } = cands[c];
+            let sw = 0, swk = 0;                  // the colour change across the stretch; its CENTRE is the cut
+            for (let k = a; k <= b; k++) { const i = at(l, k), j = at(l, k + 1); const w = Math.abs(rgb[3 * j] - rgb[3 * i]) + Math.abs(rgb[3 * j + 1] - rgb[3 * i + 1]) + Math.abs(rgb[3 * j + 2] - rgb[3 * i + 2]); sw += w; swk += w * (k - a); }
+            const e = a + rhe(swk / Math.max(1e-9, sw));
+            const va = src[at(l, a)], vb = src[at(l, b + 1)], sc = Math.abs(vb - va) / Math.max(1, b + 1 - a);
+            for (let k = a; k <= b + 1; k++) { const i = at(l, k); if (sc > score[i]) { out[i] = k <= e ? va : vb; score[i] = sc; } }
+            taken++;
+        }
+    }
+    let changed = 0; for (let i = 0; i < N; i++) if (out[i] !== src[i]) changed++;
+    return { out, stats: { candidates, taken, propagated, changed } };
+}
+
+// S62: THE SOURCE-ANCHORED HOLE (research/S62; harness/srcfill.py steps 2-5). No per-line value anywhere.
+//   rims   every 4-neighbour pair (rows and columns) the rim law tears; a run of torn steps of one sign across an edge is
+//          one rim, from its top texel (the object) to its bottom texel (the background it reveals); the run's interior
+//          texels are the blur and join the hole
+//   hole   a rim reveals, at the envelope's edge, the app's own shift difference R = s(near) - s(far) texels (bgShiftLUTFor's
+//          forward law, s(d) = D tan(fadeEnd) z/(D-z) px/m); the reach spreads from the rim THROUGH the object only (moves the
+//          rim law joins; texels in front of the background that rim reveals by more than two visible steps) in the ellipse
+//          through the envelope rectangle's corners, 16 directions; plus the same-depth pinholes it encloses (S61 §10)
+//   depth  a membrane on the hole pinned at every neighbour outside it that lies behind the adjacent hole texel by two steps
+//          (the background); a pin more than two steps from a first solve with every pin SOFT (one edge's weight) is the
+//          blur's leftover and is dropped; a hole texel whose fill is not behind its own source depth by two steps leaves
+//          the hole and the fill is solved again; a component with no pin is flat at its farthest border texel
+//   wash   the same membrane per RGB channel, pinned at the same texels to their own source colour
+// Pure: dQ (Float32, source rows, already edge-sharpened), rgb (RGB bytes), rl, step (the visible step 1/k), D, layerW.
+function bgSourceHole(o) {
+    const { dQ, rgb, pw, ph, rl, step } = o, N = pw * ph, t0 = Date.now(), st = { step };
+    const fadeH = (typeof bgViewFadeEndDeg === 'number' ? bgViewFadeEndDeg : 45) * Math.PI / 180, env = (typeof bgEnvAspect === 'function') ? bgEnvAspect() : Math.tan(Math.PI / 6);
+    const ex = o.D * Math.tan(fadeH), ppm = pw / o.layerW;
+    const s = new Float64Array(N); for (let i = 0; i < N; i++) { const ze = rl.zeAt(dQ[i]); s[i] = ex * (o.D - ze) / ze * ppm; }
+    const joined = (i, j) => rl.joinedIdx(i, j, dQ, pw);
+    // rims as runs of torn steps, both axes
+    const R = new Float64Array(N), F = new Float64Array(N).fill(Infinity), rampF = new Float64Array(N).fill(-Infinity);
+    for (const ax of [0, 1]) {
+        const L = ax === 1 ? pw : ph, NL = ax === 1 ? ph : pw, at = ax === 1 ? ((l, k) => l * pw + k) : ((l, k) => k * pw + l);
+        const torn = new Uint8Array(L - 1);
+        for (let l = 0; l < NL; l++) {
+            for (let k = 0; k < L - 1; k++) torn[k] = joined(at(l, k), at(l, k + 1)) ? 0 : 1;
+            for (const down of [true, false]) {
+                let k = 0;
+                while (k < L - 1) {
+                    const ok = (kk) => torn[kk] && (down ? dQ[at(l, kk)] > dQ[at(l, kk + 1)] : dQ[at(l, kk)] < dQ[at(l, kk + 1)]);
+                    if (!ok(k)) { k++; continue; }
+                    let x1 = k; while (x1 + 1 < L - 1 && ok(x1 + 1)) x1++;
+                    const near = at(l, down ? k : x1 + 1), far = at(l, down ? x1 + 1 : k), r = s[near] - s[far], f = dQ[far];
+                    if (r > R[near]) { R[near] = r; F[near] = f; }
+                    for (let kk = k + 1; kk <= x1; kk++) { const i = at(l, kk); if (f > rampF[i]) rampF[i] = f; }   // the blur itself
+                    k = x1 + 1;
+                }
+            }
+        }
+    }
+    let nRim = 0; for (let i = 0; i < N; i++) if (R[i] > 0) nRim++; st.rimTexels = nRim;
+    // the reach: largest remaining budget first (a binary max-heap), through the object only
+    const Bud = new Float64Array(N).fill(-Infinity), Fc = Float64Array.from(F);
+    const hv = [], hi = []; const push = (b, i) => { hv.push(b); hi.push(i); let c = hv.length - 1; while (c > 0) { const p = (c - 1) >> 1; if (hv[p] >= hv[c]) break; [hv[p], hv[c]] = [hv[c], hv[p]]; [hi[p], hi[c]] = [hi[c], hi[p]]; c = p; } };
+    const pop = () => { const b = hv[0], i = hi[0], lb = hv.pop(), li = hi.pop(); if (hv.length) { hv[0] = lb; hi[0] = li; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < hv.length && hv[l] > hv[m]) m = l; if (r < hv.length && hv[r] > hv[m]) m = r; if (m === c) break; [hv[m], hv[c]] = [hv[c], hv[m]]; [hi[m], hi[c]] = [hi[c], hi[m]]; c = m; } } return [b, i]; };
+    for (let i = 0; i < N; i++) if (R[i] > 0) { Bud[i] = R[i]; push(R[i], i); }
+    const moves = []; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { if (!(dy || dx)) continue; if (Math.abs(dy) === 2 && Math.abs(dx) !== 1) continue; if (Math.abs(dx) === 2 && Math.abs(dy) !== 1) continue; moves.push([dy, dx, Math.hypot(dx, dy / env) / Math.SQRT2]); }
+    const idxOf = (y, x) => (y < 0 || y >= ph || x < 0 || x >= pw) ? -1 : y * pw + x;
+    const axOk = (y, x, dy, dx) => { const a = idxOf(y, x), b = idxOf(y + dy, x + dx); return a >= 0 && b >= 0 && joined(a, b); };
+    const diagOk = (y, x, dy, dx) => (axOk(y, x, dy, 0) && axOk(y + dy, x, 0, dx)) || (axOk(y, x, 0, dx) && axOk(y, x + dx, dy, 0));
+    const moveOk = (y, x, dy, dx) => {
+        if (!dy || !dx) return axOk(y, x, dy, dx);
+        if (Math.abs(dy) === 1 && Math.abs(dx) === 1) return diagOk(y, x, dy, dx);
+        const a = Math.abs(dx) === 2 ? [0, Math.sign(dx)] : [Math.sign(dy), 0], g = [dy - a[0], dx - a[1]];
+        return (axOk(y, x, a[0], a[1]) && diagOk(y + a[0], x + a[1], g[0], g[1])) || (diagOk(y, x, g[0], g[1]) && axOk(y + g[0], x + g[1], a[0], a[1]));
+    };
+    while (hv.length) {
+        const [b, i] = pop(); if (b < Bud[i]) continue;
+        const y = (i / pw) | 0, x = i - y * pw;
+        for (const [dy, dx, c] of moves) {
+            const j = idxOf(y + dy, x + dx); if (j < 0) continue; const nb = b - c;
+            if (nb > Bud[j] && dQ[j] > Fc[i] + 2 * step && moveOk(y, x, dy, dx)) { Bud[j] = nb; Fc[j] = Fc[i]; push(nb, j); }
+        }
+    }
+    let hole = new Uint8Array(N); let nRamp = 0;
+    for (let i = 0; i < N; i++) { const rp = isFinite(rampF[i]) && dQ[i] > rampF[i] + 2 * step; if (Bud[i] >= 0 || rp) hole[i] = 1; if (rp) nRamp++; }
+    const ph0 = bgPinholeFilledMask(hole, dQ, pw, ph, step); hole = ph0.mask; st.rampInHole = nRamp; st.pinholes = ph0.holes; st.pinholesJoined = ph0.joined;
+    // the membrane, rounds until every hole texel's fill lies behind its own source depth by two steps
+    const TOL = (typeof o.tol === 'number') ? o.tol : 1e-10, NB = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+    function comps(mask) {                       // 4-connected components of a mask: label per texel (-1 outside)
+        const lab = new Int32Array(N).fill(-1); let nc = 0; const q = new Int32Array(N);
+        for (let s0 = 0; s0 < N; s0++) { if (!mask[s0] || lab[s0] >= 0) continue; let h = 0, t = 0; q[t++] = s0; lab[s0] = nc;
+            while (h < t) { const i = q[h++], x = i % pw; for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) if (j >= 0 && mask[j] && lab[j] < 0) { lab[j] = nc; q[t++] = j; } }
+            nc++; }
+        return { lab, nc };
+    }
+    const nbrs = (i) => { const x = i % pw; return [x < pw - 1 ? i + 1 : -1, x > 0 ? i - 1 : -1, i < N - pw ? i + pw : -1, i >= pw ? i - pw : -1]; };
+    function solve(hole, chans, warm) {
+        const di = []; const idx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (hole[i]) { idx[i] = di.length; di.push(i); }
+        const M = di.length;
+        const pinSet = new Uint8Array(N); for (const i of di) for (const j of nbrs(i)) if (j >= 0 && !hole[j] && dQ[j] < dQ[i] - 2 * step) pinSet[j] = 1;
+        const pi = []; const pidx = new Int32Array(N).fill(-1); for (let j = 0; j < N; j++) if (pinSet[j]) { pidx[j] = M + pi.length; pi.push(j); }
+        const P = pi.length; const { lab, nc } = comps(hole);
+        // soft consensus: nodes = hole texels, pin texels (free), and one ghost per pin fixed at the pin's value (weight 1)
+        const nS = M + 2 * P, adjS = []; for (let n = 0; n < nS; n++) adjS.push([]);
+        for (let t = 0; t < M; t++) { const i = di[t]; for (const j of nbrs(i)) { if (j < 0) continue; if (hole[j]) adjS[t].push(idx[j]); else if (pinSet[j]) { adjS[t].push(pidx[j]); adjS[pidx[j]].push(t); } } }
+        for (let p = 0; p < P; p++) { adjS[M + p].push(M + P + p); adjS[M + P + p].push(M + p); }
+        const pinComp = new Uint8Array(nc); for (let t = 0; t < M; t++) for (const j of nbrs(di[t])) if (j >= 0 && pinSet[j]) pinComp[lab[di[t]]] = 1;
+        const fixS = new Uint8Array(nS), valS = new Float64Array(nS), xyS = new Int32Array(2 * nS);
+        for (let t = 0; t < M; t++) { const i = di[t]; xyS[2 * t] = i % pw; xyS[2 * t + 1] = (i / pw) | 0; if (!pinComp[lab[i]]) fixS[t] = 1; }
+        for (let p = 0; p < P; p++) { const j = pi[p]; for (const n of [M + p, M + P + p]) { xyS[2 * n] = j % pw; xyS[2 * n + 1] = (j / pw) | 0; } fixS[M + P + p] = 1; valS[M + P + p] = dQ[j]; }
+        const csr = (adj) => { const st0 = new Int32Array(adj.length + 1); for (let n = 0; n < adj.length; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[adj.length]); for (let n = 0; n < adj.length; n++) li.set(adj[n], st0[n]); return { st0, li, w: new Float64Array(li.length).fill(1) }; };
+        const xS = warm ? [(() => { const x = new Float64Array(nS); for (let t = 0; t < M; t++) x[t] = warm.soft[di[t]]; for (let p = 0; p < P; p++) { x[M + p] = warm.soft[pi[p]]; x[M + P + p] = dQ[pi[p]]; } return x; })()] : null;
+        const cs = csr(adjS); const soft = bgMGSolve(nS, cs.st0, cs.li, cs.w, fixS, [valS], xyS, TOL, xS).outs[0];
+        const keep = new Uint8Array(N).fill(1); let dropped = 0; for (let p = 0; p < P; p++) if (Math.abs(soft[M + p] - dQ[pi[p]]) > 2 * step) { keep[pi[p]] = 0; dropped++; }
+        // hard: hole texels free, kept pins fixed (only the pairs that pass the lip test link)
+        const adjH = []; for (let n = 0; n < M + P; n++) adjH.push([]);
+        const hasPin = new Uint8Array(nc);
+        for (let t = 0; t < M; t++) { const i = di[t]; for (const j of nbrs(i)) { if (j < 0) continue; if (hole[j]) adjH[t].push(idx[j]); else if (pinSet[j] && keep[j] && dQ[j] < dQ[i] - 2 * step) { adjH[t].push(pidx[j]); hasPin[lab[i]] = 1; } } }
+        const fixH = new Uint8Array(M + P), xyH = new Int32Array(2 * (M + P)), vH = [0, 1, 2, 3].map(() => new Float64Array(M + P));
+        for (let t = 0; t < M; t++) { const i = di[t]; xyH[2 * t] = i % pw; xyH[2 * t + 1] = (i / pw) | 0; if (!hasPin[lab[i]]) fixH[t] = 1; }
+        for (let p = 0; p < P; p++) { const j = pi[p]; xyH[2 * (M + p)] = j % pw; xyH[2 * (M + p) + 1] = (j / pw) | 0; fixH[M + p] = 1; vH[0][M + p] = dQ[j]; for (let c = 0; c < 3; c++) vH[c + 1][M + p] = rgb[3 * j + c]; }
+        // a component with no pin: flat at its farthest border texel (depth and colour)
+        const far = new Int32Array(nc).fill(-1);
+        for (let t = 0; t < M; t++) { const i = di[t], c = lab[i]; if (hasPin[c]) continue; for (const j of nbrs(i)) if (j >= 0 && !hole[j] && (far[c] < 0 || dQ[j] < dQ[far[c]])) far[c] = j; }
+        for (let t = 0; t < M; t++) { const c = lab[di[t]]; if (hasPin[c]) continue; const j = far[c]; vH[0][t] = j >= 0 ? dQ[j] : dQ[di[t]]; for (let ch = 0; ch < 3; ch++) vH[ch + 1][t] = j >= 0 ? rgb[3 * j + ch] : rgb[3 * di[t] + ch]; }
+        const xH = warm ? [(() => { const x = Float64Array.from(vH[0]); for (let t = 0; t < M; t++) if (!fixH[t]) x[t] = warm.depth[di[t]]; return x; })()] : null;
+        const ch_ = csr(adjH); const hard = bgMGSolve(M + P, ch_.st0, ch_.li, ch_.w, fixH, chans.map(c => vH[c]), xyH, TOL, xH);
+        const softT = new Float64Array(N); for (let t = 0; t < M; t++) softT[di[t]] = soft[t]; for (let p = 0; p < P; p++) softT[pi[p]] = soft[M + p];
+        let noPin = 0; for (let c = 0; c < nc; c++) if (!hasPin[c]) noPin++;
+        return { di, U: hard.outs, softT, info: { pins: P, pinsDropped: dropped, components: nc, componentsNoPin: noPin, iters: hard.iters } };
+    }
+    // the rounds solve depth only, each warm-started from the last (the answer is the same to the solver's tolerance);
+    // the wash is solved once, on the final hole, which is all the result uses
+    let rounds = 0, left = 0, res, warm = null;
+    for (;;) {
+        res = solve(hole, [0], warm); rounds++;
+        let bad = 0; for (let t = 0; t < res.di.length; t++) if (res.U[0][t] > dQ[res.di[t]] - 2 * step) { hole[res.di[t]] = 0; bad++; }
+        if (!bad) break; left += bad;
+        const depth = new Float64Array(N); for (let t = 0; t < res.di.length; t++) depth[res.di[t]] = res.U[0][t]; warm = { depth, soft: res.softT };
+    }
+    { const w = { depth: new Float64Array(N), soft: res.softT }; for (let t = 0; t < res.di.length; t++) w.depth[res.di[t]] = res.U[0][t]; res = solve(hole, [0, 1, 2, 3], w); }
+    const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
+    for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
+    let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
+    Object.assign(st, res.info, { hole: nh, notBehindLeftHole: left, solveRounds: rounds, ms: Date.now() - t0 });
+    return { plate, wash, hole, stats: st };
+}
+
 function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
     const outer = lp.outer, inner = lp.inner, pn = lp.pn, D = lp.D, N = pw * ph;
     const zOf = (x) => { x = Math.min(1, Math.max(0, x)); if (x < pn) { const t = x / pn; return -outer + outer * (t * t * (3 - 2 * t)); } const t = (x - pn) / (1 - pn); return inner * (t * t * (3 - 2 * t)); };
@@ -15360,6 +15607,19 @@ function bgBuildBackgroundLayerCore() {
                     console.log('[S9] source noise (diagnostic): σ = ' + _qSigma.toExponential(2) + (_qStep > 0 ? ' = ' + (_qSigma / _qStep).toFixed(2) + ' × the grid; 3σ would be ' + (_qNoise3 / _qStep).toFixed(2) + ' × the grid' : ' — NO GRID DETECTED: the tolerances fall back to 1/255 and the tear floors to 0 (3σ = ' + _qNoise3.toExponential(2) + ' = ' + (_qNoise3 * 255).toFixed(3) + ' of an 8-bit step)') + '; sampled triples beyond 2× the grid: ' + (100 * _brkOld).toFixed(1) + '%');
                 }
             }
+            // S62 (panel 'hole depth: source'): DA3's blurred occlusion edges, sharpened where they occlude, before anything
+            // is built on dQ, so the foreground tears at the same one-texel cliffs the source-anchored hole starts from
+            if (window._srcHole) {
+                try {
+                    const t0e = Date.now(); const cImgE = (L.elements && L.elements.color) || L.textures.color.image;
+                    const cvE = document.createElement('canvas'); cvE.width = pw; cvE.height = ph; const cxE = cvE.getContext('2d', { willReadFrequently: true });
+                    cxE.drawImage(cImgE, 0, 0, pw, ph); const rgbaE = cxE.getImageData(0, 0, pw, ph).data, rgbE = new Uint8ClampedArray(3 * PNq);
+                    for (let i = 0; i < PNq; i++) { rgbE[3 * i] = rgbaE[4 * i]; rgbE[3 * i + 1] = rgbaE[4 * i + 1]; rgbE[3 * i + 2] = rgbaE[4 * i + 2]; }
+                    const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph)); dQ.set(es.out);
+                    window._qbEdgeSharpen = Object.assign({ ms: Date.now() - t0e }, es.stats);
+                    console.log('[S62] occlusion edges sharpened: ' + JSON.stringify(window._qbEdgeSharpen));
+                } catch (eE) { console.warn('[S62] edge sharpening failed, the depth stands as loaded:', eE); }
+            }
             // A127b PRINT k. k is the screen displacement in SOURCE TEXELS
             // between the near and far ends of the depth range, at the rim of
             // the supported cone. Nearly every open thread in this arc is one
@@ -18120,6 +18380,7 @@ function bgBuildBackgroundLayerCore() {
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
             try { bgPostBakeFill(); } catch (ePF) { console.warn('[S61] post-bake fill failed; the bake stands as it was:', ePF); }
+            try { bgApplySourceHole(); } catch (eSH) { console.warn('[S62] source-anchored hole failed; the bake stands as it was:', eSH); }
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
             // The v1 FG pre-tear lives BELOW quick's return in this function, so
             // the shipped default has rendered the UNTORN foreground for its
@@ -21428,6 +21689,7 @@ function _wireDebugSheetControls() {
             window._rampColour = opt.ramps === 'strong' ? 1 : (opt.ramps === 'safe' ? 2 : 0);
             // S61 §12: post-bake fill options (arm C, the membrane wash, the pinhole spikes)
             window._farFillMode = (plane && opt.hole === 'plain') ? 'plain' : 'perline';
+            window._srcHole = (plane && opt.hole === 'source') ? 1 : 0;   // S62: the source-anchored hole (edges sharpened at load, the whole plate replaced after the bake)
             window._washMode = (plane && opt.fill === 'membrane') ? 'membrane' : 'asbaked';
             window._pinholeDepth = (plane && opt.pinholes === 'filled') ? 1 : 0;
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
