@@ -395,6 +395,186 @@ function bgDepthAtShift(L, m) {
 // invariant to resolution (dtheta scales) and to the depth volume (a ratio). A crease
 // (S16's two walls) is continuous in distance and stays joined; a jump is not.
 let _bgRimLaw = null;
+// S59 ARM C, THE PLAIN FILL, AND THE MEMBRANE WASH, as panel options (S61 §12; default off). Copied verbatim from
+// harness/plainfill.js (verified against harness/sheet_ab_fields.py): per band component a membrane pinned at the
+// background edge to the per-line law's own value there, free elsewhere; texels not behind their occluder by two
+// visible steps, and pin-less components, keep the law's value. The wash: the same membrane per channel pinned to the
+// colour of the law's own far rim (farRimJ / farRimW). Solved by aggregation-multigrid-preconditioned CG.
+function bgPlainFill(o) {
+    const TOL = (typeof o.tol === "number") ? o.tol : 1e-8;   // relative residual; 1e-8 = 0.0004 visible steps from exact on the troll (S61 §12)
+    const { pw, ph, band, dQ, law, step, rimJ, rimW, rgb } = o; const N = pw * ph;
+    const bi = []; const idx = new Int32Array(N).fill(-1);
+    for (let i = 0; i < N; i++) if (band[i]) { idx[i] = bi.length; bi.push(i); }
+    const n = bi.length;
+    // neighbours (band-band edges only: a non-band neighbour is a free boundary unless it pins)
+    const nbStart = new Int32Array(n + 1), nbList = new Int32Array(4 * n); let e = 0;
+    const edge = new Uint8Array(n), ringC = new Float64Array(3 * n), ringN = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+        nbStart[k] = e; const i = bi[k], x = i % pw;
+        const cand = [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1];
+        for (const j of cand) {
+            if (j < 0) continue;
+            if (band[j]) nbList[e++] = idx[j];
+            else {
+                if (dQ[j] < dQ[i] - 2 * step) edge[k] = 1;
+                ringC[3 * k] += rgb[3 * j]; ringC[3 * k + 1] += rgb[3 * j + 1]; ringC[3 * k + 2] += rgb[3 * j + 2]; ringN[k]++;
+            }
+        }
+    }
+    nbStart[n] = e;
+    // components (band-band connectivity)
+    const comp = new Int32Array(n).fill(-1); let nc = 0; const stack = [];
+    for (let s = 0; s < n; s++) { if (comp[s] >= 0) continue; comp[s] = nc; stack.push(s);
+        while (stack.length) { const k = stack.pop(); for (let q = nbStart[k]; q < nbStart[k + 1]; q++) { const m = nbList[q]; if (comp[m] < 0) { comp[m] = nc; stack.push(m); } } } nc++; }
+
+    // solve: fixed texels hold vals; free texels in a component with a fixed texel satisfy deg u - sum u_nb = 0.
+    // The solve is a weighted-graph Laplacian with a COARSE-TO-FINE WARM START (a cascade): the graph is coarsened by
+    // merging 4x4 texel blocks (a fine edge adds weight 1 to the link between its two blocks; a block holding a fixed
+    // texel is fixed at their mean), the coarse problem is solved first (recursively, down to a few thousand nodes) and
+    // its answer is the fine CG's starting point. The fine CG still runs to the same relative tolerance, so the answer is
+    // the same to that tolerance; only the iteration count changes.
+    // AGGREGATION MULTIGRID-PRECONDITIONED CG on the eliminated system A u = b over the free nodes (A = D - W: D the
+    // weighted degree including links to fixed nodes, W the free-free links). Levels merge 2x2 blocks of the node
+    // coordinates (piecewise-constant prolongation P, Galerkin coarse operator P^T A P); a V-cycle with one forward and
+    // one backward Gauss-Seidel sweep per level is a symmetric preconditioner, so CG stays valid. The coarsest level
+    // (< 500 nodes) is solved by Gauss-Seidel to convergence. Stops on the relative residual TOL.
+    function buildLevel(m, rowStart, cols, vals, diag, xy) {    // CSR of the off-diagonal part (negative weights) + diag
+        return { m, rowStart, cols, vals, diag, xy };
+    }
+    function coarsen(L) {
+        const { m, rowStart, cols, vals, diag, xy } = L; const agg = new Int32Array(m), key2 = new Map(); let nc = 0; const cxy = [];
+        for (let i = 0; i < m; i++) { const X = xy[2 * i] >> 1, Y = xy[2 * i + 1] >> 1, key = Y * 1048576 + X; let c = key2.get(key); if (c === undefined) { c = nc++; key2.set(key, c); cxy.push(X, Y); } agg[i] = c; }
+        const cdiag = new Float64Array(nc); const links = new Map();
+        for (let i = 0; i < m; i++) { const a = agg[i]; cdiag[a] += diag[i];
+            for (let q = rowStart[i]; q < rowStart[i + 1]; q++) { const j = cols[q], bb = agg[j], v = vals[q]; if (a === bb) cdiag[a] += v; else { const k = a * nc + bb; links.set(k, (links.get(k) || 0) + v); } } }
+        const cStart = new Int32Array(nc + 1); for (const k of links.keys()) cStart[Math.floor(k / nc) + 1]++; for (let c = 0; c < nc; c++) cStart[c + 1] += cStart[c];
+        const cCols = new Int32Array(cStart[nc]), cVals = new Float64Array(cStart[nc]), fp = Int32Array.from(cStart.subarray(0, nc));
+        for (const [k, v] of links) { const aa = Math.floor(k / nc), bb = k - aa * nc; cCols[fp[aa]] = bb; cVals[fp[aa]] = v; fp[aa]++; }
+        return { agg, C: buildLevel(nc, cStart, cCols, cVals, cdiag, Int32Array.from(cxy)) };
+    }
+    function gs(L, x, rhs, backward) {
+        const { m, rowStart, cols, vals, diag } = L;
+        if (!backward) { for (let i = 0; i < m; i++) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+        else { for (let i = m - 1; i >= 0; i--) { let sum = rhs[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum -= vals[q] * x[cols[q]]; x[i] = sum / diag[i]; } }
+    }
+    function residual(L, x, rhs, out) { const { m, rowStart, cols, vals, diag } = L; for (let i = 0; i < m; i++) { let sum = diag[i] * x[i]; for (let q = rowStart[i]; q < rowStart[i + 1]; q++) sum += vals[q] * x[cols[q]]; out[i] = rhs[i] - sum; } }
+    function vcycle(levels, li, rhs) {     // returns x ~ A^-1 rhs from zero start
+        const L = levels[li].L; const x = new Float64Array(L.m);
+        if (li === levels.length - 1) { for (let s = 0; s < 60; s++) { gs(L, x, rhs, false); gs(L, x, rhs, true); } return x; }
+        gs(L, x, rhs, false);
+        const r = new Float64Array(L.m); residual(L, x, rhs, r);
+        const { agg } = levels[li]; const C = levels[li + 1].L; const rc = new Float64Array(C.m); for (let i = 0; i < L.m; i++) rc[agg[i]] += r[i];
+        const ec = vcycle(levels, li + 1, rc); for (let i = 0; i < L.m; i++) x[i] += ec[agg[i]];
+        gs(L, x, rhs, true);
+        return x;
+    }
+    function solveGraph(nN, adjStart, adjList, adjW, fixMask, fixVal) {
+        const free = []; for (let k = 0; k < nN; k++) if (!fixMask[k]) free.push(k);
+        const m = free.length, fidx = new Int32Array(nN).fill(-1); for (let t = 0; t < m; t++) fidx[free[t]] = t;
+        const out = Float64Array.from(fixVal); if (!m) return { out, iters: 0 };
+        // fine level: diag = weighted degree (all links), off-diagonal = -w for free-free links; rhs = sum w * fixed
+        const rowStart = new Int32Array(m + 1), diag = new Float64Array(m), b = new Float64Array(m);
+        for (let t = 0; t < m; t++) { const k = free[t]; let cnt = 0; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { diag[t] += adjW[q]; const j = adjList[q]; if (fidx[j] >= 0) cnt++; else b[t] += adjW[q] * fixVal[j]; } rowStart[t + 1] = rowStart[t] + cnt; }
+        const cols = new Int32Array(rowStart[m]), vals = new Float64Array(rowStart[m]);
+        for (let t = 0; t < m; t++) { const k = free[t]; let p0 = rowStart[t]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) { const f = fidx[adjList[q]]; if (f >= 0) { cols[p0] = f; vals[p0] = -adjW[q]; p0++; } } }
+        const xy = new Int32Array(2 * m); for (let t = 0; t < m; t++) { xy[2 * t] = xyB[2 * free[t]]; xy[2 * t + 1] = xyB[2 * free[t] + 1]; }
+        const levels = [{ L: buildLevel(m, rowStart, cols, vals, diag, xy) }];
+        while (levels[levels.length - 1].L.m > 500) { const c = coarsen(levels[levels.length - 1].L); if (c.C.m >= levels[levels.length - 1].L.m) break; levels[levels.length - 1].agg = c.agg; levels.push({ L: c.C }); }
+        const L0 = levels[0].L; const u = new Float64Array(m), r = Float64Array.from(b); let z = vcycle(levels, 0, r); const pv = Float64Array.from(z), Apv = new Float64Array(m);
+        let rz = 0; for (let t = 0; t < m; t++) rz += r[t] * z[t];
+        let bn = 0; for (let t = 0; t < m; t++) bn += b[t] * b[t]; bn = Math.sqrt(bn) || 1;
+        const Ap = (x, o) => { for (let i = 0; i < m; i++) { let sum = L0.diag[i] * x[i]; for (let q = L0.rowStart[i]; q < L0.rowStart[i + 1]; q++) sum += L0.vals[q] * x[L0.cols[q]]; o[i] = sum; } };
+        let it = 0;
+        for (; it < 2000; it++) {
+            let rn = 0; for (let t = 0; t < m; t++) rn += r[t] * r[t]; if (Math.sqrt(rn) / bn < TOL) break;
+            Ap(pv, Apv); let pAp = 0; for (let t = 0; t < m; t++) pAp += pv[t] * Apv[t];
+            const al = rz / pAp; for (let t = 0; t < m; t++) { u[t] += al * pv[t]; r[t] -= al * Apv[t]; }
+            z = vcycle(levels, 0, r); let rz2 = 0; for (let t = 0; t < m; t++) rz2 += r[t] * z[t];
+            const beta = rz2 / rz; rz = rz2; for (let t = 0; t < m; t++) pv[t] = z[t] + beta * pv[t];
+        }
+        for (let t = 0; t < m; t++) out[free[t]] = u[t];
+        return { out, iters: it, levels: levels.length };
+    }
+    // the band texels as a graph (unit weights on band-band edges), shared by every channel
+    const adjStart = nbStart, adjList = nbList.subarray(0, e), adjW = new Float64Array(e).fill(1);
+    const xyB = new Int32Array(2 * n); for (let k = 0; k < n; k++) { xyB[2 * k] = bi[k] % pw; xyB[2 * k + 1] = (bi[k] / pw) | 0; }
+    function membrane(fix, vals, nch) {
+        const has = new Uint8Array(nc); for (let k = 0; k < n; k++) if (fix[k]) has[comp[k]] = 1;
+        const out = new Float64Array(n * nch); let iters = 0, worst = 0;
+        const fm = new Uint8Array(n); for (let k = 0; k < n; k++) fm[k] = (fix[k] || !has[comp[k]]) ? 1 : 0;
+        for (let c = 0; c < nch; c++) {
+            const fv = new Float64Array(n); for (let k = 0; k < n; k++) if (fm[k]) fv[k] = vals[k * nch + c];
+            const r = solveGraph(n, adjStart, adjList, adjW, fm, fv); iters = Math.max(iters, r.iters);
+            for (let k = 0; k < n; k++) out[k * nch + c] = r.out[k];
+            // residual on the free texels (the Laplace equation)
+            for (let k = 0; k < n; k++) { if (fm[k]) continue; let sum = (adjStart[k + 1] - adjStart[k]) * r.out[k]; for (let q = adjStart[k]; q < adjStart[k + 1]; q++) sum -= r.out[adjList[q]]; worst = Math.max(worst, Math.abs(sum)); }
+        }
+        return { out, has, iters, residual: worst };
+    }
+    // depth
+    const dv = new Float64Array(n); for (let k = 0; k < n; k++) dv[k] = law[bi[k]];
+    const D = membrane(edge, dv, 1);
+    const depth = Float32Array.from(dQ); let notBehind = 0, noPin = 0;
+    for (let k = 0; k < n; k++) { let v = D.out[k]; if (!D.has[comp[k]]) noPin++; else if (v >= dQ[bi[k]] - 2 * step) { v = law[bi[k]]; notBehind++; } depth[bi[k]] = v; }
+    // wash
+    const cfix = new Uint8Array(n), cv = new Float64Array(3 * n); let rimPins = 0, ringPins = 0;
+    for (let k = 0; k < n; k++) {
+        if (!edge[k]) continue; const i = bi[k]; let w = 0, r = 0, g = 0, bl = 0;
+        for (let s = 0; s < 2; s++) { const j = rimJ[2 * i + s]; if (j >= 0 && j < N) { const ww = rimW[2 * i + s] > 0 ? rimW[2 * i + s] : 0; w += ww; r += ww * rgb[3 * j]; g += ww * rgb[3 * j + 1]; bl += ww * rgb[3 * j + 2]; } }
+        if (w === 0) { let c = 0; for (let s = 0; s < 2; s++) { const j = rimJ[2 * i + s]; if (j >= 0 && j < N) { c++; r += rgb[3 * j]; g += rgb[3 * j + 1]; bl += rgb[3 * j + 2]; } } w = c; }
+        if (w > 0) { cfix[k] = 1; cv[3 * k] = r / w; cv[3 * k + 1] = g / w; cv[3 * k + 2] = bl / w; rimPins++; }
+    }
+    const hasC = new Uint8Array(nc); for (let k = 0; k < n; k++) if (cfix[k]) hasC[comp[k]] = 1;
+    for (let k = 0; k < n; k++) if (!hasC[comp[k]] && ringN[k] > 0) { cfix[k] = 1; for (let c = 0; c < 3; c++) cv[3 * k + c] = ringC[3 * k + c] / ringN[k]; ringPins++; }
+    const W = membrane(cfix, cv, 3);
+    const colour = Uint8ClampedArray.from(rgb);
+    for (let k = 0; k < n; k++) if (W.has[comp[k]]) for (let c = 0; c < 3; c++) colour[3 * bi[k] + c] = Math.round(Math.min(255, Math.max(0, W.out[3 * k + c])));
+    return { depth, colour, stats: { band: n, components: nc, edgePins: edge.reduce((a, v) => a + v, 0), noPin, notBehind, rimPins, ringPins, itersDepth: D.iters, itersWash: W.iters, residualDepth: D.residual, residualWash: W.residual } };
+}
+
+// S61 §12: THE POST-BAKE FILL OPTIONS (default off), applied to the finished plane bake exactly as the S59 A/B injected its
+// arms, so each option shows what was judged. hole depth 'plain' = arm C; wash 'membrane' = the S59 wash (LIVE_PASS §10 D);
+// pinholes 'filled' = the S61 §10 rule on the bake's own band (the depth spikes the per-line law leaves at the occluder's
+// depth inside a hole take the fill, and the wash). The band is the A/B's: _qbDisocc where the plate lies behind the
+// source by the grid (streak_class.js's definition). The plate depth and colour captures (_qbPlateF, _qbPlateColor) are
+// updated too, so the SD bundle carries what is on screen.
+function bgPostBakeFill() {
+    const hole = window._farFillMode === 'plain', washM = window._washMode === 'membrane', pin = window._pinholeDepth === 1;
+    if (!(hole || washM || pin)) return null;
+    if (!(bgFarRuleOn() && window._qbSize && window._qbDQ && window._qbDisocc && window._geoFarRimJ && window._geoFarRimW && typeof bgLayerMesh !== 'undefined' && bgLayerMesh)) { console.warn('[S61] post-bake fill: no plane bake on screen'); return null; }
+    const t0 = Date.now(); const { pw, ph } = window._qbSize, N = pw * ph, dQ = window._qbDQ, dis = window._qbDisocc;
+    const tex = bgLayerMesh.material.uniforms.displacementMap.value, data = tex.image.data;
+    const flip = (i) => { const x = i % pw, y = (i - x) / pw; return (ph - 1 - y) * pw + x; };
+    const law = new Float32Array(N); for (let i = 0; i < N; i++) law[i] = data[flip(i)];
+    const qg = (typeof window._qbSrcGrid === 'number' && window._qbSrcGrid > 0) ? window._qbSrcGrid : 1 / 65535;
+    let band = new Uint8Array(N); for (let i = 0; i < N; i++) band[i] = (dis[i] && law[i] < dQ[i] - qg) ? 1 : 0;
+    const lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
+    const band0 = band; let pinSt = null;
+    if (pin) { const r = bgPinholeFilledMask(band0, dQ, pw, ph, step); band = r.mask; pinSt = { holes: r.holes, joined: r.joined, texels: r.filled }; }
+    const L = mediaLayers[0]; const cImg = (L.elements && L.elements.color) || L.textures.color.image;
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(cImg, 0, 0, pw, ph);
+    const rgba = cx.getImageData(0, 0, pw, ph).data, rgb = new Uint8ClampedArray(3 * N); for (let i = 0; i < N; i++) { rgb[3 * i] = rgba[4 * i]; rgb[3 * i + 1] = rgba[4 * i + 1]; rgb[3 * i + 2] = rgba[4 * i + 2]; }
+    const r = bgPlainFill({ pw, ph, band, dQ, law, step, rimJ: window._geoFarRimJ, rimW: window._geoFarRimW, rgb });
+    const pF = window._qbPlateF; let nD = 0, nC = 0;
+    for (let i = 0; i < N; i++) {
+        if (!band[i]) continue; const isPin = !band0[i];
+        if (hole || isPin) { const v = r.depth[i]; data[flip(i)] = v; if (pF && pF !== data) pF[flip(i)] = v; nD++; }
+    }
+    tex.needsUpdate = true;
+    if (washM || pin) {
+        const mp = bgLayerMesh.material.uniforms.map, img = mp && mp.value && mp.value.image;
+        if (img && img.getContext) {
+            const cc = img.getContext('2d'), id = cc.getImageData(0, 0, pw, ph), d = id.data, pc = window._qbPlateColor;
+            for (let i = 0; i < N; i++) { if (!band[i] || !(washM || !band0[i])) continue; for (let c = 0; c < 3; c++) { d[4 * i + c] = r.colour[3 * i + c]; if (pc && pc.length === 4 * N) pc[4 * i + c] = r.colour[3 * i + c]; } d[4 * i + 3] = 255; nC++; }
+            cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
+        } else console.warn('[S61] post-bake fill: the plate has no colour canvas; the wash is not applied');
+    }
+    const st = { hole: hole ? 'plain' : 'per-line', wash: washM ? 'membrane' : 'as baked', pinholes: pinSt, depthTexels: nD, colourTexels: nC, stats: r.stats, ms: Date.now() - t0 };
+    window._qbPostFill = st; console.log('[S61] post-bake fill ' + JSON.stringify(st));
+    if (typeof render === 'function') { try { render(); } catch (e) {} }
+    return st;
+}
+
 // S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
 // where the per-line law returned the occluder's own depth (troll 928 of 962, vermeer 588 of 606, sunflowers 352 of 373,
 // starwatcher 432 of 449): not content, and in an SD inpaint each is an island of source pixels left unpainted inside a
@@ -17939,6 +18119,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
+            try { bgPostBakeFill(); } catch (ePF) { console.warn('[S61] post-bake fill failed; the bake stands as it was:', ePF); }
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
             // The v1 FG pre-tear lives BELOW quick's return in this function, so
             // the shipped default has rendered the UNTORN foreground for its
@@ -21198,7 +21379,7 @@ function _wireDebugSheetControls() {
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
     // angle); sky: off | on (the plane at infinity for sky texels — only for pictures with sky).
     {
-        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel', ramps: 'bgPlateRampSel' };
+        const ids = { far: 'bgPlateFarSel', fill: 'bgPlateFillSel', margin: 'bgPlateMarginSel', faces: 'bgPlateFacesSel', band: 'bgPlateBandSel', sky: 'bgPlateSkySel', seams: 'bgPlateSeamSel', join: 'bgPlateJoinSel', rules: 'bgPlateRulesSel', ramps: 'bgPlateRampSel', hole: 'bgPlateHoleSel', pinholes: 'bgPlatePinSel' };
         const els = {}; for (const k in ids) els[k] = document.getElementById(ids[k]);
         // Start-up defaults = the measured set (S19 / S20 / S23 / S25 on the seven pictures and the kit; LIVE_PASS §1 step 4),
         // made the defaults on 2026-09-15 at the user's word: plane far side (rim law), wash, faces off, tier 35°, sky off (on
@@ -21220,7 +21401,7 @@ function _wireDebugSheetControls() {
         // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
         // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
         // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
-        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off' };
+        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'perline', pinholes: 'asbaked' };
         // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
         // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
         // failure the versioning exists to prevent.
@@ -21245,6 +21426,10 @@ function _wireDebugSheetControls() {
             window._despeckleLines = opt.rules === 'new' ? 1 : 0;
             // S61: the colour-guided ramp collapse on the 16-bit path (off | safe = v2 | strong = v1), for the live pass
             window._rampColour = opt.ramps === 'strong' ? 1 : (opt.ramps === 'safe' ? 2 : 0);
+            // S61 §12: post-bake fill options (arm C, the membrane wash, the pinhole spikes)
+            window._farFillMode = (plane && opt.hole === 'plain') ? 'plain' : 'perline';
+            window._washMode = (plane && opt.fill === 'membrane') ? 'membrane' : 'asbaked';
+            window._pinholeDepth = (plane && opt.pinholes === 'filled') ? 1 : 0;
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
         };
         applyPlateOptions();
