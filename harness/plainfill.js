@@ -1,5 +1,5 @@
 // S59 arm C, the plain fill, as a standalone JS module (NOT wired into moebius.js; the port waits for the A/B's
-// decision). Same construction as harness/sheet_ab_fields.py, solved by Jacobi-preconditioned conjugate gradients so
+// decision). Same construction as harness/sheet_ab_fields.py, solved by multigrid-preconditioned conjugate gradients so
 // a hole hundreds of texels wide converges (red-black SOR at a fixed 600 iterations, as _screenedPoissonBand runs, does
 // not).
 //   depth: per band component, a membrane pinned at the background edge (band texels with a non-band 4-neighbour
