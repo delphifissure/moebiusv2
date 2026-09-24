@@ -24,10 +24,11 @@ from PIL import Image
 ap = argparse.ArgumentParser(); ap.add_argument('bundle'); ap.add_argument('out')
 ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type=int, default=768); ap.add_argument('--seed', type=int, default=1234)
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
-ap.add_argument('--depth', action='store_true'); A = ap.parse_args()
+ap.add_argument('--depth', action='store_true')
+ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
-img_name = 'plane_color_occluder_removed.png' if 'plane_color_occluder_removed.png' in names else 'plane_plate_color.png'
+img_name = 'plane_color_occluder_removed.png' if (A.image == 'occluder_removed' and 'plane_color_occluder_removed.png' in names) else 'plane_plate_color.png'
 img = rd(img_name).convert('RGB'); pw, ph = img.size
 mask = np.asarray(rd('plane_mask_inpaint.png').convert('L')) > 127
 ctl16 = np.asarray(rd('plane_plate_depth16.png')).astype(np.float64); ctl16 = ctl16 / (65535.0 if ctl16.max() > 255 else 255.0)

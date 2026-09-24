@@ -1,6 +1,6 @@
 // S62 §11: the SD stage on the source-mode bundle, end to end in the app. Two modes, one picture per run:
 //   MODE=export  bake in source mode, exportSDBundle() with the download intercepted -> <out>/bundle.zip
-//   MODE=view    bake again, render the wide poses (before), import <out>/return/return_band_*.png through the app's own
+//   MODE=view    [RET=<return dir name, default 'return'>] bake again, render the wide poses (before), import <out>/return/return_band_*.png through the app's own
 //                _importPlaneReturnFiles (the "Import plane return" button's path), render the same poses (after)
 // Between the two: python3 harness/sd_return.py <out>/bundle.zip <out>/return [--depth]
 //   COLOR= DEPTH= TAG= MODE=export|view [PORT=8099] [MB=<variant moebius.js>] [SEL=...] node harness/sd_src_roundtrip.js
@@ -48,14 +48,15 @@ const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], 
         fs.writeFileSync(path.join(OUT, 'export.json'), JSON.stringify({ bakeMs, stats, bytes: bytes.length, logs }, null, 1));
         console.log(JSON.stringify({ bundle: path.join(OUT, 'bundle.zip'), bytes: bytes.length, hole: stats && stats.hole, bakeMs }));
     } else {
-        for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, 'before_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));
-        const RD = path.join(OUT, 'return'); const files = fs.readdirSync(RD).filter(f => /^return_band_.*\.png$/.test(f)).map(f => [f, fs.readFileSync(path.join(RD, f)).toString('base64')]);
+        const RD = path.join(OUT, process.env.RET || 'return'), PFX = (process.env.RET && process.env.RET !== 'return') ? process.env.RET.replace(/^return_?/, '') + '_' : '';
+        for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, PFX + 'before_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));
+        const files = fs.readdirSync(RD).filter(f => /^return_band_.*\.png$/.test(f)).map(f => [f, fs.readFileSync(path.join(RD, f)).toString('base64')]);
         const st = await page.evaluate(async (files) => {
             const F = files.map(([n, b]) => { const s = atob(b), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new File([a], n, { type: 'image/png' }); });
             const r = await window._importPlaneReturnFiles(F); return r ? JSON.parse(JSON.stringify(r, (k, v) => (v && v.length > 64 && typeof v !== 'string') ? '[array]' : v)) : null;
         }, files);
-        for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, 'after_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));
-        fs.writeFileSync(path.join(OUT, 'view.json'), JSON.stringify({ bakeMs, stats, imported: files.map(f => f[0]), importReport: st, logs }, null, 1));
+        for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, PFX + 'after_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));
+        fs.writeFileSync(path.join(OUT, PFX + 'view.json'), JSON.stringify({ bakeMs, stats, imported: files.map(f => f[0]), importReport: st, logs }, null, 1));
         console.log(JSON.stringify({ imported: files.map(f => f[0]), band: st && st.band, bakeMs }));
     }
     await browser.close(); srv.kill(); process.exit(0);
