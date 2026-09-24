@@ -9,3 +9,5 @@ harness/vendor/ort
 harness/vendor/sam2
 __pycache__/
 *.pyc
+harness/_var/
+harness/_var_*.html
