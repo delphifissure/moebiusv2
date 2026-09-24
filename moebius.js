@@ -1297,6 +1297,74 @@ function bgSourceHole(o) {
         st.plate2Seams = nSeam;
         st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
     }
+    // A MIDDLE SURFACE (S62 §12; user: "the silhouette of the legs leaves a gap in the dune"). A hole can hold two layers of
+    // the source itself: the starwatcher's hole takes in both his legs and the dune's top band, and its one fill is the
+    // plain behind the dune's ridge -- right for the band, but behind the legs the nearest surface is the dune going on,
+    // and the plain only one layer further back. The dune there is no rim's far side (the boots stand in it: legs and dune
+    // meet at one depth), so neither the pins nor the rims' reach carry it; what does is the band's own SOURCE. A hole
+    // texel whose source lies in front of its own fill by two steps, and behind a neighbouring hole texel's source across a
+    // rim, is that middle surface: a pin at its source depth and colour. The hole texels in front of it (reached through
+    // texels joined to that neighbour in the source) take the smooth continuation of the middle surface where it lies
+    // behind their own source by two steps and in front of their fill by two; that is their plate 1, and the fill they had
+    // becomes their plate 2 (what shows once the middle surface has slid past).
+    // The region reaches only as far as the nearer part can slide off the middle surface: the difference of their shifts
+    // at the envelope's edge, in texels (past it no pose shows the texel's middle layer; without the bound the region ran
+    // through the boots, where legs and dune meet at one depth, and over the whole dune: 73 405 texels).
+    { const tM = Date.now(), jS = (i, j) => rl.joinedIdx(i, j, dQ, pw), pinM = new Uint8Array(N), inU = new Uint8Array(N), bud = new Int16Array(N).fill(-1), q = [];
+      const shfM = (d) => { if (rl.sky >= 0 && d < rl.sky) return -ex * ppm; const ze = rl.zeAt(d); return ex * (o.D - ze) / ze * ppm; };
+      for (let i = 0; i < N; i++) { if (!hole[i] || !(dQ[i] > plate[i] + 2 * step) || (has2 && has2[i])) continue;
+        for (const j of nbrs(i)) if (j >= 0 && hole[j] && dQ[j] > dQ[i] + 2 * step && !jS(i, j)) { pinM[i] = 1;
+          const b0 = Math.min(32000, Math.ceil(Math.abs(shfM(dQ[j]) - shfM(dQ[i]))) + 1); if (b0 > bud[j]) { bud[j] = b0; inU[j] = 1; q.push(j); } } }
+      for (let h = 0; h < q.length; h++) { const j = q[h]; if (bud[j] <= 1) continue; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !pinM[k] && jS(j, k) && !(has2 && has2[k]) && bud[j] - 1 > bud[k]) { bud[k] = bud[j] - 1; inU[k] = 1; q.push(k); } }
+      const J = [], jx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (inU[i]) { jx[i] = J.length; J.push(i); }
+      let nMid = 0, nPin = 0; for (let i = 0; i < N; i++) if (pinM[i]) nPin++;
+      if (J.length && nPin) { const M = J.length, ext = new Map(), exP = [], adj = []; for (let t = 0; t < M; t++) adj.push([]);
+        // the region's neighbours outside it: a source layer in the hole (its source in front of its fill by two steps: the
+        // dune beside the legs, the legs past the reach, the dune below the boots) anchors the continuation at its own
+        // source; the far fill beside the region (the plain beside the upper legs) anchors nothing but says "no middle
+        // surface here". PRESENCE (a fifth channel) is 1 at a neighbour behind the region's texel by two steps (the middle
+        // surface seen beside the nearer part), 0 at a far-fill neighbour, free elsewhere; the middle layer is kept where it
+        // is above one half: the ridge between the two, continued across the nearer part
+        const inO = (i) => hole[i] && dQ[i] > plate[i] + 2 * step;
+        const kind = []; for (let t = 0; t < M; t++) for (const j of nbrs(J[t])) { if (j < 0) continue; if (jx[j] >= 0) { adj[t].push(jx[j]); continue; }
+          let k = ext.get(j); if (k === undefined) { k = M + exP.length; ext.set(j, k); exP.push(j); kind.push(inO(j) ? (dQ[j] < dQ[J[t]] - 2 * step ? 1 : 2) : 0); } else if (kind[k - M] === 2 && inO(j) && dQ[j] < dQ[J[t]] - 2 * step) kind[k - M] = 1; adj[t].push(k); }
+        const nN = M + exP.length; while (adj.length < nN) adj.push([]);
+        // links to a far-fill neighbour carry presence only: in the depth channels that neighbour is free (weight 0)
+        const s0 = new Int32Array(nN + 1); for (let n = 0; n < M; n++) s0[n + 1] = s0[n] + adj[n].length; for (let n = M; n < nN; n++) s0[n + 1] = s0[n];
+        const lk = new Int32Array(s0[nN]); for (let n = 0; n < M; n++) lk.set(adj[n], s0[n]);
+        // one surface at a time: the middle-surface neighbours are grouped where the rim law joins them in the source (the
+        // dune beside both legs is one group; the table and the leaves beside a vase are two), each texel of the region
+        // takes the group nearest to it (breadth-first from the groups), and it is linked only to texels and pins of its own
+        // group -- so where two groups meet the continuation tears instead of stretching a sheet between them (a single
+        // membrane over all of them: sunflowers 160 walls per 1 000 hole texels inside the middle layer)
+        const nE = exP.length, gp = new Int32Array(nE).fill(-1); { const par = new Int32Array(nE); for (let e = 0; e < nE; e++) par[e] = e;
+          const fnd = (e) => { while (par[e] !== e) { par[e] = par[par[e]]; e = par[e]; } return e; };
+          for (let e = 0; e < nE; e++) { if (kind[e] !== 1) continue; const i = exP[e], x = i % pw;
+            for (const j of [x < pw - 1 ? i + 1 : -1, i + pw < N ? i + pw : -1, x < pw - 1 && i + pw < N ? i + pw + 1 : -1, x > 0 && i + pw < N ? i + pw - 1 : -1]) { if (j < 0) continue; const f = ext.get(j); if (f === undefined || kind[f - M] !== 1 || !jS(i, j)) continue; const ra = fnd(e), rb = fnd(f - M); if (ra !== rb) par[ra] = rb; } }
+          for (let e = 0; e < nE; e++) if (kind[e] === 1) gp[e] = fnd(e); }
+        const gU = new Int32Array(M).fill(-1), bq = []; for (let t = 0; t < M; t++) for (let e = s0[t]; e < s0[t + 1]; e++) { const m2 = lk[e]; if (m2 >= M && kind[m2 - M] === 1) { gU[t] = gp[m2 - M]; bq.push(t); break; } }
+        for (let h = 0; h < bq.length; h++) { const t = bq[h]; for (let e = s0[t]; e < s0[t + 1]; e++) { const m2 = lk[e]; if (m2 < M && gU[m2] < 0) { gU[m2] = gU[t]; bq.push(m2); } } }
+        const wD = new Float64Array(lk.length), wP = new Float64Array(lk.length);
+        for (let t = 0; t < M; t++) for (let e = s0[t]; e < s0[t + 1]; e++) { const m2 = lk[e], kk = m2 >= M ? kind[m2 - M] : -1;
+          wD[e] = gU[t] >= 0 && ((kk === -1 && gU[m2] === gU[t]) || (kk === 1 && gp[m2 - M] === gU[t])) ? 1 : 0; wP[e] = kk === 2 ? 0 : 1; }
+        const fx = new Uint8Array(nN), xy = new Int32Array(2 * nN), v4 = [0, 1, 2, 3].map(() => new Float64Array(nN)), vP = new Float64Array(nN);
+        for (let n = 0; n < nN; n++) { const i = n < M ? J[n] : exP[n - M]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0;
+          if (n >= M) { fx[n] = 1; v4[0][n] = dQ[i]; for (let c = 0; c < 3; c++) v4[c + 1][n] = rgb[3 * i + c]; vP[n] = kind[n - M] === 1 ? 1 : 0; } else { v4[0][n] = plate[i]; vP[n] = 0.5; } }
+        // a group of the region with no source anchor in depth has nothing to continue: it keeps its fill (and is not taken)
+        { const lab = new Int32Array(M).fill(-1), anch = []; let nc = 0; for (let s1 = 0; s1 < M; s1++) { if (lab[s1] >= 0) continue; lab[s1] = nc; const qq = [s1]; let a0 = false;
+            while (qq.length) { const n = qq.pop(); for (const m2 of adj[n]) { if (m2 >= M) { if (kind[m2 - M] === 1) a0 = true; continue; } if (lab[m2] < 0) { lab[m2] = nc; qq.push(m2); } } } anch.push(a0); nc++; }
+          for (let t = 0; t < M; t++) if (!anch[lab[t]] || gU[t] < 0) fx[t] = 1; }
+        // presence is pinned only at the middle surface (1) and at the far fill (0): a link to a source neighbour of the
+        // nearer part's own surface (kind 2) carries none (weight 0); a texel with no link left in a channel is fixed
+        const fxP = Uint8Array.from(fx);
+        for (let t = 0; t < M; t++) { let sd = 0, sp = 0; for (let e = s0[t]; e < s0[t + 1]; e++) { sd += wD[e]; sp += wP[e]; } if (!sd) fx[t] = 1; if (!sp) { fxP[t] = 1; vP[t] = 0; } }
+        const U = bgMGSolve(nN, s0, lk, wD, fx, v4, xy, 1e-6).outs, P = bgMGSolve(nN, s0, lk, wP, fxP, [vP], xy, 1e-6).outs[0];
+        if (!has2) { plate2 = Float32Array.from(plate); wash2 = Uint8ClampedArray.from(wash); has2 = new Uint8Array(N); }
+        for (let t = 0; t < M; t++) { const i = J[t]; const f = U[0][t]; if (fx[t]) continue;
+          if (!(P[t] > 0.5 && f < dQ[i] - 2 * step && f > plate[i] + 2 * step)) continue;
+          has2[i] = 1; n2++; plate2[i] = plate[i]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c];
+          plate[i] = f; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, U[c + 1][t]))); nMid++; } }
+      st.middle = { pins: nPin, region: J.length, texels: nMid, ms: Date.now() - tM }; }
     // SHOWN (S62 §9). The hole was chosen before the fill existed; with the fill in hand, the plates are drawn at the same
     // 32 poses behind the source mesh (each texel moved by its own shift, stretched where the rim law joins, nearest wins)
     // and a texel whose quad fills some uncovered pixel is SHOWN. A hole texel no pose shows is never on screen (the
