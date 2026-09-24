@@ -517,7 +517,90 @@ def L9_tufts(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'L5 regime, extreme: a dense low field of tufts on the ground, figure in front'}
 
 
+# ---- S62 §13 (2026-09-24): the starwatcher family -- a figure whose silhouette encloses windows onto the background, and a
+# background with a depth step (a hill crest) running behind the figure. One defect per scene, then the combination.
+def _figure_open(prims, W, H, x, z, name, akimbo=True):
+    """A standing figure with its legs apart (a see-through window between them, closed at the hip) and, when akimbo, the
+    right hand on the hip (a second window between the arm and the torso). Feet on y = -H/2, head top near y = +H/2."""
+    body = lambda p: tex_stripes(p, scale=W * 0.02, c1=(0.25, 0.28, 0.45), c2=(0.18, 0.20, 0.32), axis=1)
+    skin = tex_solid((0.85, 0.66, 0.52))
+    yf, yh, ys = -H / 2, -0.10 * H, 0.20 * H           # feet, hip, shoulder
+    rl, rt, ra = W * 0.018, W * 0.040, W * 0.012        # leg, torso, arm radii
+    for s in (-1, 1):                                   # legs: hip joint to feet planted apart
+        prims.append(Cylinder([x + s * 0.02 * W, yh, z], [x + s * 0.085 * W, yf + rl, z], rl, body, THING, f'{name}_leg{s:+d}'))
+    prims.append(Cylinder([x, yh - 0.02 * H, z], [x, ys, z], rt, body, THING, name + '_torso'))
+    prims.append(Sphere([x, ys + 0.14 * H, z], W * 0.035, skin, THING, name + '_head'))
+    prims.append(Cylinder([x - 0.045 * W, ys, z], [x - 0.05 * W, -0.12 * H, z], ra, body, THING, name + '_armL'))   # left arm hangs
+    if akimbo:                                          # right arm: shoulder -> elbow out -> hand back on the hip
+        el = [x + 0.19 * W, 0.04 * H, z]
+        prims.append(Cylinder([x + 0.045 * W, ys, z], el, ra, body, THING, name + '_armR_up'))
+        prims.append(Cylinder(el, [x + 0.045 * W, -0.08 * H, z], ra, body, THING, name + '_armR_fore'))
+    else:
+        prims.append(Cylinder([x + 0.045 * W, ys, z], [x + 0.05 * W, -0.12 * H, z], ra, body, THING, name + '_armR'))
+
+
+def _hills(W, H, crest_y, depth):
+    """Ploughed ground (furrows receding to a vanishing point), a near hill whose crest runs across the frame at crest_y,
+    a far range of hills above it, sky. The crest is a depth step inside the background: ground-side below, far hills above."""
+    prims = []
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001,
+                      lambda p: tex_stripes(p, scale=W * 0.035, c1=(0.55, 0.42, 0.28), c2=(0.42, 0.31, 0.20), axis=0), STUFF, 'ground'))
+    ry = crest_y + H / 2 + 0.35 * H                     # the near hill: an ellipsoid sunk into the ground, top at crest_y
+    prims.append(Ellipsoid([0.2 * W, crest_y - ry, -1.1 * W], [2.6 * W, ry, 0.45 * W],
+                           lambda p: tex_noise(p, scale=W * 0.03, base=(0.42, 0.52, 0.26), amp=0.10, axes=(0, 1)), STUFF, 'hill_near'))
+    ry2 = 0.95 * H
+    prims.append(Ellipsoid([-0.6 * W, 0.22 * H - ry2, -2.6 * W], [3.2 * W, ry2, 0.6 * W],
+                           lambda p: tex_noise(p, scale=W * 0.06, base=(0.45, 0.55, 0.68), amp=0.06, axes=(0, 1)), STUFF, 'hill_far'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 3 * W, 3 * H,
+                      lambda p: tex_noise(p, scale=W * 0.4, base=(0.62, 0.74, 0.92), amp=0.05, axes=(0, 1)), STUFF, 'sky_wall'))
+    return prims
+
+
+def H1_open_figure(W=0.16, H=0.09):
+    """The starwatcher's legs, isolated: a figure with its legs apart and a hand on the hip on flat furrowed ground before
+    sky. Two windows enclosed by the figure; the ground and sky must continue through them and behind the whole silhouette."""
+    depth = 4.0 * W
+    prims = _ground_and_sky(W, H, depth)
+    prims[0] = Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001,
+                    lambda p: tex_stripes(p, scale=W * 0.035, c1=(0.55, 0.42, 0.28), c2=(0.42, 0.31, 0.20), axis=0), STUFF, 'ground')
+    _figure_open(prims, W, H, -0.05 * W, -0.30 * W, 'figure')
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'figure with enclosed windows (legs apart, hand on hip) on receding ground'}
+
+
+def H2_crest(W=0.16, H=0.09):
+    """The depth step behind a figure, isolated: a plain standing figure before a hill whose crest crosses behind its waist,
+    far hills above the crest. The hole straddles two background surfaces and the crest's hidden contour."""
+    depth = 4.0 * W
+    prims = _hills(W, H, 0.0, depth)
+    _figure(prims, W, H, -0.05 * W, -0.30 * W, W * 0.09, 'figure')
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'background depth step (hill crest) behind a figure'}
+
+
+def H3_star(W=0.16, H=0.09):
+    """The starwatcher, harder: the open figure standing on the furrowed ground before the crest, the crest crossing the
+    arm window, the leg window showing the near hill's face and the ground's contact line, far hills and sky above."""
+    depth = 4.0 * W
+    prims = _hills(W, H, 0.08 * H, depth)
+    _figure_open(prims, W, H, -0.05 * W, -0.30 * W, 'figure')
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'open figure + crest behind: windows straddling a background depth step'}
+
+
+def H4_rolling(W=0.16, H=0.09):
+    """H3 with more depths and an object inside the hole: a second, nearer hill whose crest crosses the leg window, and a
+    smaller figure further back standing half behind the main figure's arm -- its hidden half must be continued (or left as
+    background), never replaced by an invented object. Three background surfaces and one thing behind one silhouette."""
+    depth = 4.0 * W
+    prims = _hills(W, H, 0.08 * H, depth)
+    cy = -0.24 * H; ry = cy + H / 2 + 0.25 * H
+    prims.append(Ellipsoid([-0.5 * W, cy - ry, -0.85 * W], [1.6 * W, ry, 0.3 * W],
+                           lambda p: tex_noise(p, scale=W * 0.025, base=(0.52, 0.58, 0.30), amp=0.12, seed=5, axes=(0, 1)), STUFF, 'hill_mid'))
+    _figure(prims, W, H, 0.10 * W, -0.47 * W, W * 0.05, 'figure_far')
+    _figure_open(prims, W, H, -0.05 * W, -0.30 * W, 'figure')
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'rolling hills (two crests) + a half-hidden far figure behind an open figure'}
+
+
 SCENES = {
+    'H1': H1_open_figure, 'H2': H2_crest, 'H3': H3_star, 'H4': H4_rolling,
     'C1': C1_screen, 'C2': C2_corner_figure, 'C3': C3_screen_deep,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
