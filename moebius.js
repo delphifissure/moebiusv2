@@ -974,12 +974,13 @@ function bgSourceHole(o) {
         const a = Math.abs(dx) === 2 ? [0, Math.sign(dx)] : [Math.sign(dy), 0], g = [dy - a[0], dx - a[1]];
         return (axOk(y, x, a[0], a[1]) && diagOk(y + a[0], x + a[1], g[0], g[1])) || (diagOk(y, x, g[0], g[1]) && axOk(y + g[0], x + g[1], a[0], a[1]));
     };
+    const Pc = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (R[i] > 0) Pc[i] = i;
     while (hv.length) {
         const [b, i] = pop(); if (b < Bud[i]) continue;
         const y = (i / pw) | 0, x = i - y * pw;
         for (const [dy, dx, c] of moves) {
             const j = idxOf(y + dy, x + dx); if (j < 0) continue; const nb = b - c;
-            if (nb > Bud[j] && dQ[j] > Fc[i] + 2 * step && moveOk(y, x, dy, dx)) { Bud[j] = nb; Fc[j] = Fc[i]; push(nb, j); }
+            if (nb > Bud[j] && dQ[j] > Fc[i] + 2 * step && moveOk(y, x, dy, dx)) { Bud[j] = nb; Fc[j] = Fc[i]; Pc[j] = Pc[i]; push(nb, j); }
         }
     }
     // the far field (what the object code measures objects against, _planeObjects): the reach again with no budget, so it
@@ -991,6 +992,50 @@ function bgSourceHole(o) {
             for (const [dy, dx] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) { const j = idxOf(y + dy, x + dx); if (j < 0 || FF[j] === FF[j]) continue; if (dQ[j] > FF[i] + 2 * step && axOk(y, x, dy, dx)) { FF[j] = FF[i]; q[t++] = j; } } } }
     let hole = new Uint8Array(N); let nRamp = 0;
     for (let i = 0; i < N; i++) { const rp = isFinite(rampF[i]) && dQ[i] > rampF[i] + 2 * step; if (Bud[i] >= 0 || rp) hole[i] = 1; if (rp) nRamp++; }
+    // SEEN (S62 §8). The reach is a budget, not a view: it flowed off an object through the contact where it stands (a trunk on
+    // the ground, a box on the floor; joined, so the reach passed) and over the whole ground, which then held no pins, and
+    // the fill behind the trunk was pinned at the hills (kit S15: 3.5 m median error, per-line 0.18 m). A hole texel is
+    // kept only if it is SEEN: at some head offset h over the envelope (|hx|, |hy| <= 1; vertical shift scaled by env) the
+    // source mesh, each texel moved by its own shift s*h and stretched between the texels the rim law joins, leaves the
+    // texel's screen place x + s_far*h uncovered inside the frame (s_far: the shift of the background its rim reveals). The
+    // ground under a box is covered by the ground itself at every pose, and leaves the hole. Poses: 8 directions x 4
+    // magnitudes over the envelope rectangle (the gaps open with |h|, so the ring of poses bounds what any pose shows).
+    // Kit truth (env45 scope, hole vs the exact hidden set): S2 precision 0.22 -> 0.47 at recall 1.00 -> 0.997; S15 0.16 ->
+    // 0.53 at recall 0.994 -> 0.967 (visibility-weighted 0.999 -> 0.993). Pictures: troll 259k -> 133k texels, starwatcher
+    // 89k -> 54k, the Vermeer 342k -> 246k, the sunflowers 170k -> 121k.
+    { const tS = Date.now(), zb = new Float32Array(N), sb = new Float32Array(N), dem = new Uint8Array(N); let nCand = 0; for (let i = 0; i < N; i++) if (hole[i]) nCand++;
+      const jR = new Uint8Array(N), jD = new Uint8Array(N);
+      for (let i = 0; i < N; i++) { const x = i % pw; if (x < pw - 1 && joined(i, i + 1)) jR[i] = 1; if (i < N - pw && joined(i, i + pw)) jD[i] = 1; }
+      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]; let nGap = 0;
+      for (const [ux, uy] of dirs) for (const m of [0.25, 0.5, 0.75, 1]) {
+        const hx = ux * m, hy = uy * m * env; zb.fill(-1);
+        for (let i = 0; i < N; i++) {   // the source mesh at this pose: each texel moved by its own shift, stretched to the texels it is joined to; nearest wins
+          const x = i % pw, y = (i - x) / pw, X = x + s[i] * hx, Y = y + s[i] * hy;
+          let x0 = X, x1 = X, y0 = Y, y1 = Y;
+          if (jR[i]) { const X2 = x + 1 + s[i + 1] * hx, Y2 = y + s[i + 1] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
+          if (jD[i]) { const X2 = x + s[i + pw] * hx, Y2 = y + 1 + s[i + pw] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
+          const ax = Math.max(0, Math.round(x0)), bx = Math.min(pw - 1, Math.round(x1)), ay = Math.max(0, Math.round(y0)), by = Math.min(ph - 1, Math.round(y1));
+          const d = dQ[i]; for (let yy = ay; yy <= by; yy++) for (let xx = ax; xx <= bx; xx++) { const c = yy * pw + xx; if (d > zb[c]) { zb[c] = d; sb[c] = s[i]; } }
+        }
+        // every uncovered screen pixel inside the frame shows the plate; the surface on the gap's FAR side (the farther of the
+        // first covered pixels either way along h) is what continues there, and the plate texel it shows is g - s_far*h
+        const hl = Math.hypot(hx, hy), sx = hx / hl, sy = hy / hl;
+        // a disocclusion gap has a surface on BOTH sides along h; an uncovered band at the frame's edge (content shifted in from
+        // beyond the picture) is the outpaint margin, not a reveal, and demands nothing here
+        for (let c = 0; c < N; c++) { if (zb[c] >= 0) continue; nGap++; const gx = c % pw, gy = (c - gx) / pw; let best = -1, bd = Infinity, sides = 0;
+          for (const sg of [1, -1]) for (let k = 1; k < 4 * pw; k++) { const qx = Math.round(gx + sg * sx * k), qy = Math.round(gy + sg * sy * k); if (qx < 0 || qx >= pw || qy < 0 || qy >= ph) break; const q = qy * pw + qx; if (zb[q] >= 0) { sides++; if (zb[q] < bd) { bd = zb[q]; best = q; } break; } }
+          if (sides < 2) continue; const sF = sb[best], xx = Math.round(gx - sF * hx), yy = Math.round(gy - sF * hy); if (xx >= 0 && xx < pw && yy >= 0 && yy < ph) dem[yy * pw + xx] = 1; }
+      }
+      // the seen set's outline carries the map's column-to-column noise and the pose sampling; a majority over a square of
+      // side 2*WASH_RUN+1 (the ink-line scale below which a mask detail cannot be told from a line) smooths it
+      const RS = 8 /* = WASH_RUN */, W2 = pw + 1, II = new Int32Array((pw + 1) * (ph + 1));
+      for (let y = 0; y < ph; y++) { let rs = 0; for (let x = 0; x < pw; x++) { rs += (hole[y * pw + x] && dem[y * pw + x]) ? 1 : 0; II[(y + 1) * W2 + x + 1] = II[y * W2 + x + 1] + rs; } }
+      let nSeen = 0;
+      for (let i = 0; i < N; i++) { if (!hole[i]) continue; const x = i % pw, y = (i - x) / pw, x0 = Math.max(0, x - RS), x1 = Math.min(pw, x + RS + 1), y0 = Math.max(0, y - RS), y1 = Math.min(ph, y + RS + 1);
+        const sum = II[y1 * W2 + x1] - II[y0 * W2 + x1] - II[y1 * W2 + x0] + II[y0 * W2 + x0], area = (x1 - x0) * (y1 - y0);
+        const nearRim = dem[i] && Pc[i] >= 0 && (R[Pc[i]] - Bud[i]) <= RS;   // within an ink run of its rim: a thin thing (a staff) is all rim
+        if (2 * sum < area && !nearRim) hole[i] = 0; else nSeen++; }
+      st.seen = { candidates: nCand, kept: nSeen, gapPx: nGap, poses: 32, ms: Date.now() - tS }; }
     const ph0 = bgPinholeFilledMask(hole, dQ, pw, ph, step); hole = ph0.mask; st.rampInHole = nRamp; st.pinholes = ph0.holes; st.pinholesJoined = ph0.joined;
     // the membrane, rounds until every hole texel's fill lies behind its own source depth by two steps
     const TOL = (typeof o.tol === 'number') ? o.tol : 1e-10, NB = [[0, 1], [0, -1], [1, 0], [-1, 0]];
