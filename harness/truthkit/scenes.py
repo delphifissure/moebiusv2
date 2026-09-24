@@ -599,8 +599,39 @@ def H4_rolling(W=0.16, H=0.09):
     return prims, {'outer': depth, 'inner': 0.0, 'element': 'rolling hills (two crests) + a half-hidden far figure behind an open figure'}
 
 
+
+def H5_horizon(W=0.16, H=0.09):
+    """A straight sea horizon crossing a standing figure's torso: the sea runs out to 30 window widths so its horizon sits
+    near eye level; swell lines parallel to the horizon, spaced evenly in log distance (no aliasing toward the horizon); a
+    sky graded toward it. A straight line is where a fill that drifts, bends or steps is easiest to see."""
+    depth = 30.0 * W
+    swell = lambda p: np.where((np.floor(np.log(np.maximum(1e-4, -p[..., 2]) / W + 0.3) / 0.06).astype(int) % 2 == 0)[..., None],
+                               np.array((0.16, 0.34, 0.46)), np.array((0.22, 0.42, 0.54)))
+    prims = []
+    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 20 * W, depth / 2 + 0.001, swell, STUFF, 'sea'))
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 20 * W, 20 * H,
+                      lambda p: (lambda t: np.array((0.95, 0.78, 0.62)) * (1 - t) + np.array((0.45, 0.62, 0.88)) * t)(np.clip(p[..., 1:2] / np.maximum(1e-6, -p[..., 2:3]) / (H / 0.4), 0, 1)), STUFF, 'sky_wall'))
+    _figure_open(prims, W, H, 0.05 * W, -0.30 * W, 'figure', akimbo=False)
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'straight horizon behind a figure'}
+
+
+def H6_gap(W=0.16, H=0.09):
+    """A thin gap between two near objects: two tree trunks just behind the window, their gap narrowing from ~12 px at the
+    bottom to ~2 px at the top (1200 px grid), the H3 background (ground, crest, far hills, sky) seen through it. Both sides
+    of the hole are foreground; the far side is a sliver with a depth step inside it."""
+    depth = 4.0 * W
+    prims = _hills(W, H, 0.08 * H, depth)
+    z, r = -0.2 * W, 0.075 * W
+    bark = lambda p: tex_stripes(p, scale=W * 0.012, c1=(0.36, 0.28, 0.22), c2=(0.26, 0.20, 0.16), axis=0)
+    g_top, g_bot = 2.0 / 6466, 12.0 / 6466              # px -> world at z (0.2 / 0.232 / 0.16 * 1200 = 6466 px per unit)
+    prims.append(Cylinder([-0.0001 - r, -H / 2, z], [-0.0001 - r, H, z], r, bark, THING, 'trunk_l'))
+    xb, xt = -0.0001 + g_bot + r, -0.0001 + g_top + r - (g_bot - g_top) * (H / 2) / H
+    prims.append(Cylinder([xb, -H / 2, z], [xt, H, z], r, bark, THING, 'trunk_r'))
+    return prims, {'outer': depth, 'inner': 0.0, 'element': 'thin gap (2-12 px) between two near trunks onto a crest'}
+
+
 SCENES = {
-    'H1': H1_open_figure, 'H2': H2_crest, 'H3': H3_star, 'H4': H4_rolling,
+    'H1': H1_open_figure, 'H2': H2_crest, 'H3': H3_star, 'H4': H4_rolling, 'H5': H5_horizon, 'H6': H6_gap,
     'C1': C1_screen, 'C2': C2_corner_figure, 'C3': C3_screen_deep,
     'L1': L1_forest_dense, 'L2': L2_disc_field, 'L3': L3_figure_cluster, 'L4': L4_forest_sparse,
     'P1': P1_canopy_sparse, 'P2': P2_canopy_dense, 'P3': P3_canopy_fine, 'P4': P4_canopy_layered, 'P5': P5_fence, 'P6': P6_grille,
