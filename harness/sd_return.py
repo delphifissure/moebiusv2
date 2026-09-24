@@ -112,7 +112,12 @@ if has2.any():
     p2c = np.asarray(rd('plane_plate2_color.png').convert('RGB')); p2d = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); p2d /= 65535.0 if p2d.max() > 255 else 255.0
     farImg = p1c.copy(); farImg[has2] = p2c[has2]; farD = ctl16.copy(); farD[has2] = p2d[has2]
     far = paint(farImg, mask, farD, A.seed); farOut = farImg.copy(); farOut[mask] = far[mask]
-    nearImg = src_rgb2.copy(); nearImg[has2] = p1c[has2]; nearD = src_d2.copy(); nearD[has2] = ctl16[has2]; nm = grown(has2)
+    # the figure in front of the middle surface is taken out of the near picture (plane_mask_occluder): left in, SD continued
+    # the legs it saw above the region down into it (new boots at the starwatcher's feet). Its texels take plate 1's wash,
+    # the dune continued below the ridge and the plain above, and plate 1's depth
+    occ = (np.asarray(rd('plane_mask_occluder.png').convert('L')) > 127) & mask_app if 'plane_mask_occluder.png' in names else np.zeros_like(has2)
+    nearImg = src_rgb2.copy(); nearD = src_d2.copy(); fig = occ | has2
+    nearImg[fig] = p1c[fig]; nearD[fig] = ctl16[fig]; nm = grown(has2)
     near = paint(nearImg, nm, nearD, A.seed + 1)
     out = farOut.copy(); out[has2] = near[has2]; out2 = farOut
 else:
@@ -152,5 +157,5 @@ if A.depth:
     for nm, g in (('return_band_gradx16.png', gx), ('return_band_grady16.png', gy)):
         Image.fromarray(np.round(np.clip(g + 0.5, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(A.out, nm))
     info['depth'] = {'model': 'DA3-Mono-Large', 'fit': {'form': form, 'a': float(a), 'b': float(b)}, 'visibleMedianAbsResidual': resid, 'secs': round(time.time() - t1)}
-if has2.any(): info['layers'] = {'plate2Texels': int(has2.sum()), 'passes': ['far (plate 1 outside plate 2, and plate 2)', 'near (plate 1 on plate 2\'s texels, on the source picture)']}
+if has2.any(): info['layers'] = {'plate2Texels': int(has2.sum()), 'occluderTexels': int(occ.sum()), 'passes': ['far (plate 1 outside plate 2, and plate 2)', 'near (plate 1 on plate 2\'s texels, on the source picture)']}
 json.dump(info, open(os.path.join(A.out, 'sd_return.json'), 'w'), indent=1); print(json.dumps(info))

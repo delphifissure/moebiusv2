@@ -591,6 +591,7 @@ function bgFinishSourceHole(r, c) {
     } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
     let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph, r.hole, r.has2); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
     window._qbSrcCtx = { rl, L };   // S62 §12: the import rebuilds plate 2 with these
+    window._qbOccluder = r.occluder || null;   // S62 §12: the figure in front of a middle surface, for the bundle
     let p2st = null; try { p2st = bgSourcePlate2(r, pw, ph, rl, L); } catch (e2) { console.warn('[S62] plate 2 failed (none):', e2); }
     // sky (§7): a hole part that continues the sky has sky depth, so the plate leaves its triangles to the sky layer
     // (bgRetearPlate); the sky layer takes that part's wash (the sky surface's own colours) where its texture held the
@@ -1302,6 +1303,7 @@ function bgSourceHole(o) {
         st.plate2Seams = nSeam;
         st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
     }
+    let occluder = null;
     // A MIDDLE SURFACE (S62 §12; user: "the silhouette of the legs leaves a gap in the dune"). A hole can hold two layers of
     // the source itself: the starwatcher's hole takes in both his legs and the dune's top band, and its one fill is the
     // plain behind the dune's ridge -- right for the band, but behind the legs the nearest surface is the dune going on,
@@ -1320,7 +1322,25 @@ function bgSourceHole(o) {
       for (let i = 0; i < N; i++) { if (!hole[i] || !(dQ[i] > plate[i] + 2 * step) || (has2 && has2[i])) continue;
         for (const j of nbrs(i)) if (j >= 0 && hole[j] && dQ[j] > dQ[i] + 2 * step && !jS(i, j)) { pinM[i] = 1;
           const b0 = Math.min(32000, Math.ceil(Math.abs(shfM(dQ[j]) - shfM(dQ[i]))) + 1); if (b0 > bud[j]) { bud[j] = b0; inU[j] = 1; q.push(j); } } }
-      for (let h = 0; h < q.length; h++) { const j = q[h]; if (bud[j] <= 1) continue; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !pinM[k] && jS(j, k) && !(has2 && has2[k]) && bud[j] - 1 > bud[k]) { bud[k] = bud[j] - 1; inU[k] = 1; q.push(k); } }
+      // THE CONTACT (user: "the leg silhouette fills still is either filled with a hallucinated object or is partially
+      // transparent"). Where the boots stand in the dune, legs and dune meet at one depth, so a flood through texels joined in
+      // depth runs from the legs into the dune and the dune is continued behind itself (a phantom middle layer below the
+      // boots, drawn half through the dune). Colour still parts them there -- tan boots, lavender dune. So each texel the
+      // flood reaches must look like the part it came from: its colour nearer the seed's (the nearer part, a 3x3 mean at the
+      // rim) than the pin's (the middle surface beside it, likewise). A colour STEP bound (the picture's own 90th percentile
+      // within a joined surface) stopped at every ink line inside the starwatcher's boots and left slivers.
+      const m3 = (i) => { const x = i % pw, y = (i - x) / pw, c = [0, 0, 0]; let n = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= pw || yy >= ph) continue; const k = yy * pw + xx; for (let c3 = 0; c3 < 3; c3++) c[c3] += rgb[3 * k + c3]; n++; } return c.map(v => v / n); };
+      const refO = new Map(), refM = new Map(), from = new Int32Array(N).fill(-1);   // per seed: the part's colour and the middle surface's
+      for (const j of q) if (!refO.has(j)) { refO.set(j, m3(j)); let best = null; for (const i of nbrs(j)) if (i >= 0 && pinM[i]) { best = m3(i); break; } refM.set(j, best || m3(j)); from[j] = j; }
+      const dist2 = (i, c) => { let s2 = 0; for (let c3 = 0; c3 < 3; c3++) { const d = rgb[3 * i + c3] - c[c3]; s2 += d * d; } return s2; };
+      const likePart = (k, sd) => dist2(k, refO.get(sd)) < dist2(k, refM.get(sd));
+      // the nearer part itself, whole (the figure standing in front of the middle surface): the same flood without the reach
+      // bound. The bundle carries it (plane_mask_occluder) so a painter can take the figure out of its picture: SD's near pass
+      // otherwise continued the legs it saw above the region, down into it (new boots at the starwatcher's feet)
+      const occ = new Uint8Array(N); { const oq = q.slice(), of = new Int32Array(N).fill(-1); for (const j of oq) { occ[j] = 1; of[j] = from[j]; }
+        for (let h = 0; h < oq.length; h++) { const j = oq[h]; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !occ[k] && !pinM[k] && jS(j, k) && likePart(k, of[j])) { occ[k] = 1; of[k] = of[j]; oq.push(k); } } }
+      for (let h = 0; h < q.length; h++) { const j = q[h]; if (bud[j] <= 1) continue; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !pinM[k] && jS(j, k) && likePart(k, from[j]) && !(has2 && has2[k]) && bud[j] - 1 > bud[k]) { bud[k] = bud[j] - 1; inU[k] = 1; from[k] = from[j]; q.push(k); } }
+      occluder = occ;
       const J = [], jx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (inU[i]) { jx[i] = J.length; J.push(i); }
       let nMid = 0, nPin = 0; for (let i = 0; i < N; i++) if (pinM[i]) nPin++;
       if (J.length && nPin) { const M = J.length, ext = new Map(), exP = [], adj = []; for (let t = 0; t < M; t++) adj.push([]);
@@ -1527,7 +1547,7 @@ function bgSourceHole(o) {
     const far = Float32Array.from(dQ); let nFar = 0;
     for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }
     Object.assign(st, res.info, { hole: nh, farFieldTexels: nFar, notBehindLeftHole: left, notBehindAfterFinal: nBack, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
-    return { plate, wash, hole, far, plate2, wash2, has2, stats: st };
+    return { plate, wash, hole, far, plate2, wash2, has2, occluder, stats: st };
 }
 
 function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
@@ -12492,6 +12512,7 @@ function exportSDBundle() {
                     gray16('plane_plate2_depth16.png', (i) => pF2[flipIdx(i)], 'plate 2 depth: the second far surface where one exists (plane_plate2_mask), plate 1 elsewhere');
                     if (window._qbPlateColor2 && window._qbPlateColor2.length === 4 * N) rgba8('plane_plate2_color.png', window._qbPlateColor2, 'plate 2 colour: rim-window means of its own rims — every masked texel is a placeholder');
                     mask8('plane_plate2_mask.png', (i) => has2[i] ? 255 : 0, 'white = texels that carry a second far surface (all placeholders): inpaint these on plane_plate2_color');
+                    if (window._qbOccluder && window._qbOccluder.length === N) mask8('plane_mask_occluder.png', (i) => window._qbOccluder[i] ? 255 : 0, 'white = the figure standing in front of a middle surface (S62 §12: found from the middle surface\'s rim through texels joined in depth and continuous in colour): a painter repainting the middle layer takes it out of its picture, or continues it (SD painted new boots at the starwatcher\'s feet)');
                 }
                 // sky
                 const skyOn = bgSkyInfOn(); const sq = bgSkyQ();
