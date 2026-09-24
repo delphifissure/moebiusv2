@@ -25,13 +25,13 @@ from reveal import shift_px
 from tk import app_z_of_d
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--pics', nargs='+', required=True)
+ap.add_argument('--pics', nargs='+', default=[])
 ap.add_argument('--deg', default='30,60'); ap.add_argument('--long', type=int, default=768)
-ap.add_argument('--painters', default='lama,pp,pp_far'); ap.add_argument('--out', required=True)
+ap.add_argument('--painters', default='lama,pp,pp_far'); ap.add_argument('--out', default=None)
 ap.add_argument('--W', type=float, default=0.16); ap.add_argument('--D', type=float, default=0.2)
-ap.add_argument('--pn', type=float, default=0.5); ap.add_argument('--outer', type=float, default=0.24); ap.add_argument('--inner', type=float, default=0.0001)
-A = ap.parse_args()
-os.makedirs(A.out, exist_ok=True)
+ap.add_argument('--pn', type=float, default=0.5); ap.add_argument('--outer', type=float, default=0.02); ap.add_argument('--inner', type=float, default=0.04)   # the app's defaults, moebius.js L2959-2960
+A = ap.parse_known_args()[0]
+if A.out: os.makedirs(A.out, exist_ok=True)
 
 
 def load(pc, pd):
@@ -125,28 +125,29 @@ def scores(fill, truth, hole):
     return {'mae': float(np.abs(fill[hole] - truth[hole]).mean()), 'lpips': L, 'gradRatio': gE(comp) / max(gE(truth), 1e-9)}
 
 
-res = {}
-painters = A.painters.split(',')
-for spec in A.pics:
-    name, rest = spec.split('='); pc, pd = rest.split(':')
-    img, dn = load(pc, pd)
-    H, W = dn.shape
-    Wl = A.W if W / H > A.W / (A.W * 9 / 16) else (A.W * 9 / 16) * W / H
-    sig = shift_px(dn, A.D, A.D, A.pn, A.outer, A.inner, W / Wl)       # px at theta = 45 deg; f = tan(theta)
-    res[name] = {}
-    for deg in [float(x) for x in A.deg.split(',')]:
-        f = np.tan(np.radians(deg))
-        hole = occluded(dn, sig, f) | occluded(dn, sig, -f)
-        key = '%g' % deg; res[name][key] = {'holePct': float(100 * hole.mean())}
-        if hole.sum() < 50: continue
-        Image.fromarray((hole * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_hole.png' % (name, key)))
-        for p in painters:
-            t0 = time.time()
-            if p == 'lama': fill = lama(img, hole)
-            elif p == 'pp': fill = pushpull(img, ~hole)
-            elif p == 'pp_far': fill = pushpull(img, far_seed(dn, hole))
-            comp = img.copy(); comp[hole] = fill[hole]
-            Image.fromarray((np.clip(comp, 0, 1) * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_%s.png' % (name, key, p)))
-            res[name][key][p] = scores(fill, img, hole); res[name][key][p]['secs'] = round(time.time() - t0, 1)
-            print(name, key, p, {k: round(v, 4) for k, v in res[name][key][p].items()}, 'hole %.2f%%' % res[name][key]['holePct'], flush=True)
-    json.dump(res, open(os.path.join(A.out, 'grt.json'), 'w'), indent=1)
+if __name__ == '__main__':
+    res = {}
+    painters = A.painters.split(',')
+    for spec in A.pics:
+        name, rest = spec.split('='); pc, pd = rest.split(':')
+        img, dn = load(pc, pd)
+        H, W = dn.shape
+        Wl = A.W if W / H > A.W / (A.W * 9 / 16) else (A.W * 9 / 16) * W / H
+        sig = shift_px(dn, A.D, A.D, A.pn, A.outer, A.inner, W / Wl)       # px at theta = 45 deg; f = tan(theta)
+        res[name] = {}
+        for deg in [float(x) for x in A.deg.split(',')]:
+            f = np.tan(np.radians(deg))
+            hole = occluded(dn, sig, f) | occluded(dn, sig, -f)
+            key = '%g' % deg; res[name][key] = {'holePct': float(100 * hole.mean())}
+            if hole.sum() < 50: continue
+            Image.fromarray((hole * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_hole.png' % (name, key)))
+            for p in painters:
+                t0 = time.time()
+                if p == 'lama': fill = lama(img, hole)
+                elif p == 'pp': fill = pushpull(img, ~hole)
+                elif p == 'pp_far': fill = pushpull(img, far_seed(dn, hole))
+                comp = img.copy(); comp[hole] = fill[hole]
+                Image.fromarray((np.clip(comp, 0, 1) * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_%s.png' % (name, key, p)))
+                res[name][key][p] = scores(fill, img, hole); res[name][key][p]['secs'] = round(time.time() - t0, 1)
+                print(name, key, p, {k: round(v, 4) for k, v in res[name][key][p].items()}, 'hole %.2f%%' % res[name][key]['holePct'], flush=True)
+        json.dump(res, open(os.path.join(A.out, 'grt.json'), 'w'), indent=1)

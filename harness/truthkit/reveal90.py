@@ -24,7 +24,8 @@ from reveal import shift_px, scanline_reveal, continuity
 RINGS = [(0, 30), (30, 45), (45, 60), (60, 75), (75, 90)]
 
 
-def band90(dn, W=0.16, D=0.2, pn=0.5, outer=0.24, inner=0.0001, H=None, step=2.0, t=1.05, max_deg=89.0):
+def band90(dn, W=0.16, D=0.2, pn=0.5, outer=0.02, inner=0.04,   # app defaults (moebius.js L2959-2960)
+            H=None, step=2.0, t=1.05, max_deg=89.0):
     ph, pw = dn.shape
     H = H if H is not None else W * 9 / 16
     layer_w = W if pw / ph > W / H else H * pw / ph
@@ -64,8 +65,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--depth', required=True, help='16-bit normalised disparity PNG (1 near, 0 far)')
     ap.add_argument('--W', type=float, default=0.16); ap.add_argument('--D', type=float, default=0.2)
-    ap.add_argument('--pn', type=float, default=0.5); ap.add_argument('--outer', type=float, default=0.24)
-    ap.add_argument('--inner', type=float, default=0.0001); ap.add_argument('--step', type=float, default=2.0)
+    ap.add_argument('--pn', type=float, default=0.5); ap.add_argument('--outer', type=float, default=0.02)
+    ap.add_argument('--inner', type=float, default=0.04); ap.add_argument('--step', type=float, default=2.0)
     ap.add_argument('--out', default=None)
     A = ap.parse_args()
     from PIL import Image

@@ -77,7 +77,8 @@ def lookup(s, u, v, z):
     zz = np.stack([dep0[s][v0, u0], dep0[s][v0, u0 + 1], dep0[s][v0 + 1, u0], dep0[s][v0 + 1, u0 + 1]], -1)
     cl = clean[s][v0, u0] & clean[s][v0, u0 + 1] & clean[s][v0 + 1, u0] & clean[s][v0 + 1, u0 + 1]
     lo = zz.min(-1) * (1 - F16); hi = zz.max(-1) * (1 + F16)
-    ok &= cl & (z >= lo) & (z <= hi)
+    one = zz.max(-1) <= zz.min(-1) * 1.05                       # footprint is one surface (join ratio), else the range spans an edge
+    ok &= cl & one & (z >= lo) & (z <= hi)
     c = (rgb[s][v0, u0] * (1 - fu) * (1 - fv) + rgb[s][v0, u0 + 1] * fu * (1 - fv) +
          rgb[s][v0 + 1, u0] * (1 - fu) * fv + rgb[s][v0 + 1, u0 + 1] * fu * fv)
     return ok, c
