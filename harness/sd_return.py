@@ -25,7 +25,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('bundle'); ap.add_argument('out'
 ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type=int, default=768); ap.add_argument('--seed', type=int, default=1234)
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
 ap.add_argument('--depth', action='store_true')
-ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints takes in the silhouette's colour fringe, measured per texel; N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
+ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints is widened evenly by the picture's silhouette colour fringe (its 90th percentile run, measured); N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
 ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
@@ -34,7 +34,7 @@ img = rd(img_name).convert('RGB'); pw, ph = img.size
 mask = np.asarray(rd('plane_mask_inpaint.png').convert('L')) > 127
 mask_app = mask.copy()
 
-def fringe(mask, rgb, dq):
+def fringe(mask, rgb, dq, runs=False):
     """The silhouette's colour fringe (S62 §12): walking out from the hole's edge along its normal, the run of texels
     whose colour is nearer the occluder's own (2 texels inside the hole) than the background's (10-12 texels out),
     where the hole's edge is an occluder's silhouette (nearer inside than out) with a colour contrast across it. The
@@ -42,7 +42,7 @@ def fringe(mask, rgb, dq):
     from scipy.ndimage import binary_dilation, gaussian_filter, distance_transform_edt
     H, W = mask.shape; rgb = rgb.astype(np.float64)
     dist = distance_transform_edt(~mask); gy, gx = np.gradient(gaussian_filter(dist, 1.0)); n = np.hypot(gx, gy) + 1e-9; gx /= n; gy /= n
-    out = np.zeros_like(mask); ys, xs = np.nonzero(binary_dilation(mask) & ~mask)
+    out = np.zeros_like(mask); R = []; ys, xs = np.nonzero(binary_dilation(mask) & ~mask)
     for y, x in zip(ys, xs):
         P = []
         for k in range(-2, 13):
@@ -54,14 +54,23 @@ def fringe(mask, rgb, dq):
         if not mask[yi, xi] or not dq[yi, xi] > dq[y, x]: continue
         cO = np.mean([rgb[q] for q in P[0:2]], 0); cB = np.mean([rgb[q] for q in P[12:15]], 0)
         if np.linalg.norm(cO - cB) < 24: continue                     # 24/255 over RGB: no visible contrast to measure
+        k = 0
         for q in P[2:12]:
-            if np.linalg.norm(rgb[q] - cO) < np.linalg.norm(rgb[q] - cB): out[q] = True
+            if np.linalg.norm(rgb[q] - cO) < np.linalg.norm(rgb[q] - cB): out[q] = True; k += 1
             else: break
-    return out
+        R.append(k)
+    return (out, np.array(R)) if runs else out
 
 if A.grow == 'auto':
     src_rgb = np.asarray(rd('plane_source_color.png').convert('RGB')); src_d = np.asarray(rd('plane_source_depth16.png')).astype(np.float64); src_d /= 65535.0 if src_d.max() > 255 else 255.0
-    fr = fringe(mask, src_rgb, src_d); mask = mask | fr; GROW = {'auto': int(fr.sum())}
+    # widened EVENLY by the picture's own fringe (the 90th percentile of the per-texel runs): widening only where a fringe
+    # was measured kept the silhouette's jagged outline and the troll's lace came back heavier (3 759 texels added); an
+    # even widening rounds the outline off, and SD stops reading the removed figure in the mask's shape
+    fr, runs = fringe(mask, src_rgb, src_d, runs=True); gN = int(np.ceil(np.percentile(runs, 90))) if len(runs) else 0
+    if gN > 0:
+        from scipy.ndimage import binary_dilation
+        mask = binary_dilation(mask, iterations=gN)
+    GROW = {'auto': gN, 'fringeP50': float(np.percentile(runs, 50)) if len(runs) else 0, 'samples': len(runs)}
 elif int(A.grow) > 0:
     from scipy.ndimage import binary_dilation
     mask = binary_dilation(mask, iterations=int(A.grow)); GROW = int(A.grow)
@@ -126,7 +135,9 @@ if 'plane_plate2_mask.png' in names and 'plane_plate2_color.png' in names and 'p
         img2 = out.copy(); img2[m2] = c2[m2]
         d2 = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); d2 = d2 / (65535.0 if d2.max() > 255 else 255.0)
         g2 = m2.copy()
-        if A.grow == 'auto': g2 = m2 | fringe(m2, img2, d2)
+        if A.grow == 'auto' and GROW['auto'] > 0:
+            from scipy.ndimage import binary_dilation
+            g2 = binary_dilation(m2, iterations=GROW['auto'])
         elif int(A.grow) > 0:
             from scipy.ndimage import binary_dilation
             g2 = binary_dilation(m2, iterations=int(A.grow))
