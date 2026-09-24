@@ -675,6 +675,7 @@ function bgRetearPlate(pl, rl, pw, ph, hole, has2) {
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
     const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0, sky = 0, bridged = 0;
     const backstop = (A, B, C) => { if (!hole) return false; const V = [A, B, C]; let nearFill = Infinity, any = false;
+        if (hole[A] && hole[B] && hole[C] && !(skyOn && (pl[A] < sq || pl[B] < sq || pl[C] < sq))) return true;   // fill to fill: bridged even where plate 2 lies behind (its own edge tears there too)
         for (const v of V) { if (has2 && has2[v]) return false; if (skyOn && pl[v] < sq) return false; if (hole[v]) { any = true; if (pl[v] < nearFill) nearFill = pl[v]; } }
         if (!any) return false;
         for (const v of V) if (!hole[v] && pl[v] > nearFill) return false;   // a corner nearer than the fill: the foreground's edge
@@ -950,8 +951,35 @@ function bgSourceHole(o) {
     const ex = o.D * Math.tan(fadeH), ppm = pw / o.layerW;
     const s = new Float64Array(N); for (let i = 0; i < N; i++) { const ze = rl.zeAt(dQ[i]); s[i] = (rl.sky >= 0 && dQ[i] < rl.sky) ? -ex * ppm : ex * (o.D - ze) / ze * ppm; }   // sky moves by the plane-at-infinity law (S2c): z/(D-z) -> -1
     const joined = (i, j) => rl.joinedIdx(i, j, dQ, pw);
+    // S62 §10: THE MESH AS THE RENDERER DRAWS IT. Two triangles per cell, (i, i+pw, i+1) and (i+pw, i+pw+1, i+1), each kept
+    // only where the rim law joins all three of its edges (bgRetearPlate's t3; the app's foreground index is exactly this,
+    // checked triangle for triangle on the troll); a texel in no kept triangle is drawn nowhere. A screen point is covered
+    // when it lies inside a kept triangle, edges included; nearest wins. §8/§9 drew each texel's quad as its bounding box,
+    // which covers sheared cells the renderer leaves open and draws lone texels it never draws: the checks saw gaps closed
+    // that the screen showed open (the troll: about ten times the see-through the boxes predicted).
+    const meshTris = (dep, J) => { const T = new Uint8Array(N);
+        for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; const b = i + pw, d = i + 1, c = i + pw + 1;
+            if (dep[b] < 0 || dep[d] < 0 || !J(b, d)) continue;
+            if (dep[i] >= 0 && J(i, b) && J(i, d)) T[i] |= 1;
+            if (dep[c] >= 0 && J(b, c) && J(d, c)) T[i] |= 2; }
+        return T; };
+    const triVerts = (tag) => { const i = tag >> 1; return (tag & 1) ? [i + pw, i + pw + 1, i + 1] : [i, i + pw, i + 1]; };
+    const drawMesh = (dep, S, T, hx, hy, zb, id, far) => { zb.fill(-1);
+        const tri = (a, b, c, tag) => {
+            const ax = a % pw, ay = (a - ax) / pw, bx = b % pw, by = (b - bx) / pw, cx = c % pw, cy = (c - cx) / pw;
+            const Ax = ax + S[a] * hx, Ay = ay + S[a] * hy, Bx = bx + S[b] * hx, By = by + S[b] * hy, Cx = cx + S[c] * hx, Cy = cy + S[c] * hy;
+            const area = (Bx - Ax) * (Cy - Ay) - (By - Ay) * (Cx - Ax); if (area === 0) return; const sg = area > 0 ? 1 : -1, eps = 1e-7;
+            const x0 = Math.max(0, Math.ceil(Math.min(Ax, Bx, Cx) - eps)), x1 = Math.min(pw - 1, Math.floor(Math.max(Ax, Bx, Cx) + eps));
+            const y0 = Math.max(0, Math.ceil(Math.min(Ay, By, Cy) - eps)), y1 = Math.min(ph - 1, Math.floor(Math.max(Ay, By, Cy) + eps));
+            const dz = far ? Math.min(dep[a], dep[b], dep[c]) : Math.max(dep[a], dep[b], dep[c]);
+            for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
+                if (sg * ((Bx - Ax) * (yy - Ay) - (By - Ay) * (xx - Ax)) < -eps) continue;
+                if (sg * ((Cx - Bx) * (yy - By) - (Cy - By) * (xx - Bx)) < -eps) continue;
+                if (sg * ((Ax - Cx) * (yy - Cy) - (Ay - Cy) * (xx - Cx)) < -eps) continue;
+                const q = yy * pw + xx; if (far ? (zb[q] < 0 || dz < zb[q]) : dz > zb[q]) { zb[q] = dz; if (id) id[q] = tag; } } };
+        for (let i = 0; i < N - pw; i++) { const t = T[i]; if (!t) continue; if (t & 1) tri(i, i + pw, i + 1, 2 * i); if (t & 2) tri(i + pw, i + pw + 1, i + 1, 2 * i + 1); } };
     // rims as runs of torn steps, both axes
-    const R = new Float64Array(N), F = new Float64Array(N).fill(Infinity), rampF = new Float64Array(N).fill(-Infinity);
+    const R = new Float64Array(N), F = new Float64Array(N).fill(Infinity), rampF = new Float64Array(N).fill(-Infinity), Fx = new Int32Array(N).fill(-1);   // Fx: the rim's far texel
     for (const ax of [0, 1]) {
         const L = ax === 1 ? pw : ph, NL = ax === 1 ? ph : pw, at = ax === 1 ? ((l, k) => l * pw + k) : ((l, k) => k * pw + l);
         const torn = new Uint8Array(L - 1);
@@ -964,7 +992,7 @@ function bgSourceHole(o) {
                     if (!ok(k)) { k++; continue; }
                     let x1 = k; while (x1 + 1 < L - 1 && ok(x1 + 1)) x1++;
                     const near = at(l, down ? k : x1 + 1), far = at(l, down ? x1 + 1 : k), r = s[near] - s[far], f = dQ[far];
-                    if (r > R[near]) { R[near] = r; F[near] = f; }
+                    if (r > R[near]) { R[near] = r; F[near] = f; Fx[near] = far; }
                     for (let kk = k + 1; kk <= x1; kk++) { const i = at(l, kk); if (f > rampF[i]) rampF[i] = f; }   // the blur itself
                     k = x1 + 1;
                 }
@@ -1021,8 +1049,7 @@ function bgSourceHole(o) {
     // Kit truth (env45 scope, hole vs the exact hidden set; shown trim below included): S2 precision 0.37 at recall 0.998;
     // S15 0.59 at 0.874 (weighted 0.903; the loss is the tree's own inside, which its own mesh covers at every pose).
     { const tS = Date.now(), zb = new Float32Array(N), sb = new Float32Array(N), dem = new Uint8Array(N); let nCand = 0; for (let i = 0; i < N; i++) if (hole[i]) nCand++;
-      const jR = new Uint8Array(N), jD = new Uint8Array(N);
-      for (let i = 0; i < N; i++) { const x = i % pw; if (x < pw - 1 && joined(i, i + 1)) jR[i] = 1; if (i < N - pw && joined(i, i + pw)) jD[i] = 1; }
+      const TF = meshTris(dQ, joined), idF = new Int32Array(N);
       // P0: one depth membrane on the candidate hole, pinned at every neighbour behind it by two steps (no rounds, no
       // consensus): enough to know how each candidate texel would move.
       const P0 = Float32Array.from(dQ); { const di = [], idx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (hole[i]) { idx[i] = di.length; di.push(i); }
@@ -1038,31 +1065,16 @@ function bgSourceHole(o) {
           for (let t = 0; t < M; t++) if (!anch[lab[t]]) { fix[t] = 1; val[t] = dQ[di[t]]; } }
         if (M) { const r0 = bgMGSolve(nN, st0, li, new Float64Array(li.length).fill(1), fix, [val], xy, 1e-6).outs[0]; for (let t = 0; t < M; t++) P0[di[t]] = r0[t]; } }
       const sP = new Float64Array(N); for (let i = 0; i < N; i++) { if (!hole[i]) { sP[i] = s[i]; continue; } const ze = rl.zeAt(P0[i]); sP[i] = (rl.sky >= 0 && P0[i] < rl.sky) ? -ex * ppm : ex * (o.D - ze) / ze * ppm; }
-      const pR = new Uint8Array(N), pD = new Uint8Array(N), pz = new Float32Array(N), pid = new Int32Array(N);
-      for (let i = 0; i < N; i++) { const x = i % pw; if (x < pw - 1 && rl.joinedIdx(i, i + 1, P0, pw)) pR[i] = 1; if (i < N - pw && rl.joinedIdx(i, i + pw, P0, pw)) pD[i] = 1; }
+      const TP = meshTris(P0, (i, j) => rl.joinedIdx(i, j, P0, pw)), pz = new Float32Array(N), pid = new Int32Array(N);
       const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]; let nGap = 0;
       for (const [ux, uy] of dirs) for (const m of [0.25, 0.5, 0.75, 1]) {
-        const hx = ux * m, hy = uy * m * env; zb.fill(-1);
-        for (let i = 0; i < N; i++) {   // the source mesh at this pose: each texel moved by its own shift, stretched to the texels it is joined to; nearest wins
-          const x = i % pw, y = (i - x) / pw, X = x + s[i] * hx, Y = y + s[i] * hy;
-          let x0 = X, x1 = X, y0 = Y, y1 = Y;
-          if (jR[i]) { const X2 = x + 1 + s[i + 1] * hx, Y2 = y + s[i + 1] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          if (jD[i]) { const X2 = x + s[i + pw] * hx, Y2 = y + 1 + s[i + pw] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          const ax = Math.max(0, Math.round(x0)), bx = Math.min(pw - 1, Math.round(x1)), ay = Math.max(0, Math.round(y0)), by = Math.min(ph - 1, Math.round(y1));
-          const d = dQ[i]; for (let yy = ay; yy <= by; yy++) for (let xx = ax; xx <= bx; xx++) { const c = yy * pw + xx; if (d > zb[c]) { zb[c] = d; sb[c] = s[i]; } }
-        }
+        const hx = ux * m, hy = uy * m * env;
+        drawMesh(dQ, s, TF, hx, hy, zb, idF);   // the source mesh at this pose, as the renderer draws it
+        for (let c = 0; c < N; c++) if (zb[c] >= 0) sb[c] = s[triVerts(idF[c])[0]];
         // the plate at this pose, drawn the same way (P0: the quick fill in the candidate hole, the source elsewhere); every
-        // screen pixel the source mesh leaves uncovered shows the plate texel drawn there, and that texel is SEEN
-        pz.fill(-1);
-        for (let i = 0; i < N; i++) {
-          const x = i % pw, y = (i - x) / pw, X = x + sP[i] * hx, Y = y + sP[i] * hy;
-          let x0 = X, x1 = X, y0 = Y, y1 = Y;
-          if (pR[i]) { const X2 = x + 1 + sP[i + 1] * hx, Y2 = y + sP[i + 1] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          if (pD[i]) { const X2 = x + sP[i + pw] * hx, Y2 = y + 1 + sP[i + pw] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          const ax = Math.max(0, Math.round(x0)), bx = Math.min(pw - 1, Math.round(x1)), ay = Math.max(0, Math.round(y0)), by = Math.min(ph - 1, Math.round(y1));
-          const d = P0[i]; for (let yy = ay; yy <= by; yy++) for (let xx = ax; xx <= bx; xx++) { const c = yy * pw + xx; if (d > pz[c]) { pz[c] = d; pid[c] = i; } }
-        }
-        for (let c = 0; c < N; c++) { if (zb[c] >= 0) continue; if (pz[c] >= 0 && P0[pid[c]] < dQ[pid[c]] - 2 * step) dem[pid[c]] = 1; }   // the texel P0 draws in each gap, if it is not its own source
+        // screen pixel the source mesh leaves uncovered shows the plate triangle drawn there, and its texels are SEEN
+        drawMesh(P0, sP, TP, hx, hy, pz, pid);
+        for (let c = 0; c < N; c++) { if (zb[c] >= 0 || pz[c] < 0) continue; for (const v of triVerts(pid[c])) if (P0[v] < dQ[v] - 2 * step) dem[v] = 1; }   // unless a texel is its own source
         // every uncovered screen pixel inside the frame shows the plate; the surface on the gap's FAR side (the farther of the
         // first covered pixels either way along h) is what continues there, and the plate texel it shows is g - s_far*h, if
         // that texel lies in front of the far side by two steps (else it is the far surface itself, drawn by the source mesh)
@@ -1085,6 +1097,7 @@ function bgSourceHole(o) {
         const nearRim = dem[i] && dRim[i] <= RS;   // within an ink run of ANY rim (not only the reach's origin): a thin gap (a staff, an arm across a body) is all rim
         if (2 * sum < area && !nearRim) hole[i] = 0; else nSeen++; }
       st.seen = { candidates: nCand, kept: nSeen, gapPx: nGap, poses: 32, ms: Date.now() - tS }; }
+    const demanded = hole.slice();   // what some pose shows (the rescue below)
     const ph0 = bgPinholeFilledMask(hole, dQ, pw, ph, step); hole = ph0.mask; st.rampInHole = nRamp; st.pinholes = ph0.holes; st.pinholesJoined = ph0.joined;
     // the membrane, rounds until every hole texel's fill lies behind its own source depth by two steps
     const TOL = (typeof o.tol === 'number') ? o.tol : 1e-10, NB = [[0, 1], [0, -1], [1, 0], [-1, 0]];
@@ -1253,6 +1266,16 @@ function bgSourceHole(o) {
     { const w = { depth: new Float64Array(N), soft: res.softT }; for (let t = 0; t < res.di.length; t++) w.depth[res.di[t]] = res.U[0][t]; res = solve(hole, [0, 1, 2, 3], w); }
     const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
     for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
+    // RESCUE (S62 §10). A texel some pose shows, which the not-behind rounds gave back to its source because the fill
+    // there came out in front of it (the far side's pins along its rim were outvoted by another surface's), leaves the
+    // gap it was demanded for open: nothing is drawn there (the troll: a 28-texel band behind a 0.17 -> 0.22 rim, open at
+    // head-right). It takes its own rim's far side instead: the depth the reach carried to it (the surface the gap shows,
+    // continued as it is at the rim) and that texel's colour, when that lies behind its source by two steps.
+    let nRescue = 0;
+    for (let i = 0; i < N; i++) { if (!demanded[i] || hole[i]) continue; const f = Fc[i]; if (!(f < dQ[i] - 2 * step)) continue;
+        const k = Pc[i] >= 0 ? Fx[Pc[i]] : -1; hole[i] = 1; plate[i] = f; const cc = k >= 0 ? pinColour(k) : [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]];
+        for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, cc[c]))); nRescue++; }
+    st.rescued = nRescue;
     let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
     // the second layer (§7): in a split component the farthest surface continues behind the nearer parts, one membrane over
     // the whole component pinned at that surface's own pins; a texel of a nearer part carries it where it lies behind that
@@ -1297,20 +1320,13 @@ function bgSourceHole(o) {
     // ink-line scale, as the seen vote) so the outline is not the pose sampling's.
     { const tS = Date.now(), RSm = WASH_RUN;
       const shf = (d) => { if (rl.sky >= 0 && d < rl.sky) return -ex * ppm; const ze = rl.zeAt(d); return ex * (o.D - ze) / ze * ppm; };
-      const prep = (dep) => { const S = new Float64Array(N), R = new Uint8Array(N), Dn = new Uint8Array(N);
-        for (let i = 0; i < N; i++) { if (dep[i] < 0) continue; S[i] = shf(dep[i]); const x = i % pw;
-          if (x < pw - 1 && dep[i + 1] >= 0 && rl.joinedIdx(i, i + 1, dep, pw)) R[i] = 1; if (i < N - pw && dep[i + pw] >= 0 && rl.joinedIdx(i, i + pw, dep, pw)) Dn[i] = 1; }
-        return { dep, S, R, Dn }; };
-      const draw = (L, hx, hy, zb, id) => { zb.fill(-1); const { dep, S, R, Dn } = L;
-        for (let i = 0; i < N; i++) { if (dep[i] < 0) continue; const x = i % pw, y = (i - x) / pw, X = x + S[i] * hx, Y = y + S[i] * hy; let x0 = X, x1 = X, y0 = Y, y1 = Y;
-          if (R[i]) { const X2 = x + 1 + S[i + 1] * hx, Y2 = y + S[i + 1] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          if (Dn[i]) { const X2 = x + S[i + pw] * hx, Y2 = y + 1 + S[i + pw] * hy; if (X2 < x0) x0 = X2; if (X2 > x1) x1 = X2; if (Y2 < y0) y0 = Y2; if (Y2 > y1) y1 = Y2; }
-          const ax = Math.max(0, Math.round(x0)), bx = Math.min(pw - 1, Math.round(x1)), ay = Math.max(0, Math.round(y0)), by = Math.min(ph - 1, Math.round(y1)), d = dep[i];
-          for (let yy = ay; yy <= by; yy++) for (let xx = ax; xx <= bx; xx++) { const c = yy * pw + xx; if (d > zb[c]) { zb[c] = d; if (id) id[c] = i; } } } };
+      const prep = (dep) => { const S = new Float64Array(N); for (let i = 0; i < N; i++) if (dep[i] >= 0) S[i] = shf(dep[i]);
+        return { dep, S, T: meshTris(dep, (i, j) => rl.joinedIdx(i, j, dep, pw)) }; };
+      const draw = (L, hx, hy, zb, id) => drawMesh(L.dep, L.S, L.T, hx, hy, zb, id);
       const LF = prep(dQ), L1 = prep(plate); let L2 = null;
       if (has2) { const d2 = new Float32Array(N).fill(-1); for (let i = 0; i < N; i++) if (has2[i]) d2[i] = plate2[i]; L2 = prep(d2); }
       const zf = new Float32Array(N), z1 = new Float32Array(N), z2 = new Float32Array(N), i1 = new Int32Array(N), i2 = new Int32Array(N), sh1 = new Uint8Array(N), sh2 = new Uint8Array(N);
-      const mark = (L, sh, i) => { sh[i] = 1; if (L.R[i]) sh[i + 1] = 1; if (L.Dn[i]) sh[i + pw] = 1; };   // the quad's corners: removing one would remove the quad
+      const mark = (L, sh, tag) => { for (const v of triVerts(tag)) sh[v] = 1; };   // the triangle's corners: removing one would remove it
       for (const [ux, uy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) for (const m of [0.25, 0.5, 0.75, 1]) {
         const hx = ux * m, hy = uy * m * env; draw(LF, hx, hy, zf, null); draw(L1, hx, hy, z1, i1); if (L2) draw(L2, hx, hy, z2, i2);
         for (let c = 0; c < N; c++) { if (zf[c] >= 0) continue; const a1 = z1[c], a2 = L2 ? z2[c] : -1; if (a1 >= 0 && a1 >= a2) mark(L1, sh1, i1[c]); else if (a2 >= 0) mark(L2, sh2, i2[c]); } }
@@ -1322,6 +1338,59 @@ function bgSourceHole(o) {
       if (has2) { const d2n = near(sh2); for (let i = 0; i < N; i++) if (has2[i] && d2n[i] > RSm) { has2[i] = 0; plate2[i] = plate[i]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c]; n2--; cut2++; } }
       nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
       st.shown = { cut: cut1, cut2, ms: Date.now() - tS }; }
+    // PATCH (S62 §10). A texel in the hole is not yet a pixel covered: the plate is drawn only where its own triangles are
+    // kept, and at the hole's outline the last triangle (two fill corners, one foreground corner) tears; a texel the vote
+    // or the rounds left out leaves a gap no plate reaches. Measured on the troll at texel resolution, those were all the
+    // see-through left (1 113 px of 1 500 at head-left; 1 227 of 1 743 at head-right). So the final plate is drawn at the
+    // envelope's outer poses as the renderer draws it (the foreground; plate 1 torn by the rim law but for the backstop
+    // bridges, bgRetearPlate; plate 2 where it exists, bgSourcePlate2), and at every pixel inside a gap (a surface on both
+    // sides along h) that none of them covers, the plate triangle that belongs there (the farthest, with every triangle
+    // drawn) gets its missing corners: each takes the fill of the nearest hole texel along the shortest path from the hole
+    // (within WASH_RUN) through texels in front of that fill by two steps, so the plate never stands in front of the picture
+    // at rest. No re-solve: the corners are few. Two passes. Troll, texel resolution, interior see-through over 8 outer
+    // poses (with the rescue and the fill-to-fill bridge): 345 px without the patch, 204 with it.
+    { const tP = Date.now(); let added = 0, passes = 0, open0 = -1, open1 = 0;
+      const shfP = (d) => { if (rl.sky >= 0 && d < rl.sky) return -ex * ppm; const ze = rl.zeAt(d); return ex * (o.D - ze) / ze * ppm; };
+      const TFg = meshTris(dQ, joined), TA = new Uint8Array(N).fill(3), zf = new Float32Array(N), z1 = new Float32Array(N), z2 = new Float32Array(N), zA = new Float32Array(N), iA = new Int32Array(N);
+      for (; passes < 2; passes++) {
+        const S1 = new Float64Array(N); for (let i = 0; i < N; i++) S1[i] = shfP(plate[i]);
+        const j1 = (i, j) => rl.joinedIdx(i, j, plate, pw);
+        const bridge = (A, B, C) => { if (hole[A] && hole[B] && hole[C] && !(rl.sky >= 0 && (plate[A] < rl.sky || plate[B] < rl.sky || plate[C] < rl.sky))) return true; let nf = Infinity, any = false; for (const v of [A, B, C]) { if (has2 && has2[v]) return false; if (rl.sky >= 0 && plate[v] < rl.sky) return false; if (hole[v]) { any = true; if (plate[v] < nf) nf = plate[v]; } }
+            if (!any) return false; for (const v of [A, B, C]) if (!hole[v] && plate[v] > nf) return false; return true; };
+        const T1 = new Uint8Array(N); for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; const b = i + pw, d = i + 1, c = i + pw + 1;
+            const ok = (A, B, C) => !(rl.sky >= 0 && plate[A] < rl.sky && plate[B] < rl.sky && plate[C] < rl.sky) && ((j1(A, B) && j1(B, C) && j1(A, C)) || bridge(A, B, C));
+            if (ok(i, b, d)) T1[i] |= 1; if (ok(b, c, d)) T1[i] |= 2; }
+        let D2 = null, S2 = null, T2 = null;
+        if (has2) { D2 = Float32Array.from(plate2); S2 = new Float64Array(N); for (let i = 0; i < N; i++) S2[i] = shfP(D2[i]); const j2 = (i, j) => rl.joinedIdx(i, j, D2, pw);
+            T2 = new Uint8Array(N); for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; const b = i + pw, d = i + 1, c = i + pw + 1;
+                const ok = (A, B, C) => (has2[A] || has2[B] || has2[C]) && !(rl.sky >= 0 && D2[A] < rl.sky && D2[B] < rl.sky && D2[C] < rl.sky) && j2(A, B) && j2(B, C) && j2(A, C);
+                if (ok(i, b, d)) T2[i] |= 1; if (ok(b, c, d)) T2[i] |= 2; } }
+        const want = new Uint8Array(N); let nOpen = 0;
+        for (const [ux, uy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) for (const m of [0.5, 1]) {   // half and full envelope: on the troll the same pixels as all four magnitudes (204 px left either way), in half the time
+          const hx = ux * m, hy = uy * m * env, hl = Math.hypot(hx, hy), sx = hx / hl, sy = hy / hl;
+          drawMesh(dQ, s, TFg, hx, hy, zf, null); drawMesh(plate, S1, T1, hx, hy, z1, null); if (T2) drawMesh(D2, S2, T2, hx, hy, z2, null);
+          drawMesh(plate, S1, TA, hx, hy, zA, iA, true);
+          const cov = (q) => zf[q] >= 0 || z1[q] >= 0 || (T2 && z2[q] >= 0);
+          for (let c = 0; c < N; c++) { if (cov(c) || zA[c] < 0) continue; const gx = c % pw, gy = (c - gx) / pw; let sides = 0;
+            for (const sg of [1, -1]) for (let k = 1; k < 4 * pw; k++) { const qx = Math.round(gx + sg * sx * k), qy = Math.round(gy + sg * sy * k); if (qx < 0 || qx >= pw || qy < 0 || qy >= ph) break; if (cov(qy * pw + qx)) { sides++; break; } }
+            if (sides < 2) continue; nOpen++; for (const v of triVerts(iA[c])) if (!hole[v]) want[v] = 1; } }
+        if (open0 < 0) open0 = nOpen; open1 = nOpen;
+        // the missing corners take the fill of the nearest hole texel, along the shortest path from the hole (within
+        // WASH_RUN texels) through texels whose source lies in front of that fill by two steps; the path joins the hole
+        // with them, so the plate reaches them without a tear of its own
+        let nw = 0; for (let i = 0; i < N; i++) if (want[i]) nw++; if (!nw) break;
+        const dist = new Uint8Array(N).fill(255), par = new Int32Array(N).fill(-1), fillV = new Float32Array(N), src = new Int32Array(N).fill(-1), q = new Int32Array(N); let qh = 0, qt = 0;
+        for (let i = 0; i < N; i++) if (hole[i]) { dist[i] = 0; fillV[i] = plate[i]; src[i] = i; q[qt++] = i; }
+        while (qh < qt) { const i = q[qh++]; if (dist[i] >= WASH_RUN) continue; const x = i % pw;
+          for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) {
+            if (j < 0 || dist[j] !== 255 || !(fillV[i] < dQ[j] - 2 * step)) continue; dist[j] = dist[i] + 1; par[j] = i; fillV[j] = fillV[i]; src[j] = src[i]; q[qt++] = j; } }
+        let grew = 0;
+        for (let i = 0; i < N; i++) { if (!want[i] || hole[i] || dist[i] === 255) continue;
+          for (let v = i; v >= 0 && !hole[v]; v = par[v]) { const k = src[v]; hole[v] = 1; plate[v] = fillV[v]; for (let c = 0; c < 3; c++) wash[3 * v + c] = wash[3 * k + c];
+            if (plate2) plate2[v] = plate[v]; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * v + c] = wash[3 * v + c]; grew++; } }
+        added += grew; if (!grew) break; }
+      nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
+      st.patch = { added, passes, openBefore: open0, openAfter: open1, ms: Date.now() - tP }; }
     st.secondLayerTexels = n2; st.msSurfaces = msSurf;
     const far = Float32Array.from(dQ); let nFar = 0;
     for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }

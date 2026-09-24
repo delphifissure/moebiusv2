@@ -35,7 +35,7 @@ const WT = path.resolve(__dirname, '..');
     // EVAL='<js>': run in the page after the bake (a diagnostic switch); its return value is recorded
     const evalOut = process.env.EVAL ? await page.evaluate((js) => { try { return JSON.parse(JSON.stringify(eval(js))); } catch (e) { return 'EVAL error: ' + e.message; } }, process.env.EVAL) : null;
     const grab = async (x, y) => page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }, [x, y]);
-    const poses = [['rest', 0, 0.008], ['R42', 0.18, 0.008], ['L42', -0.18, 0.008], ['RU', 0.18, 0.1], ['LD', -0.18, -0.1]];
+    const poses = process.env.POSES ? JSON.parse(process.env.POSES) : [['rest', 0, 0.008], ['R42', 0.18, 0.008], ['L42', -0.18, 0.008], ['RU', 0.18, 0.1], ['LD', -0.18, -0.1]];
     const out = { bakeMs, eval: evalOut, stats: await page.evaluate(() => window._qbSourceHole), poses: {} };
     for (const [n, x, y] of poses) { fs.writeFileSync(path.join(OUT, n + '.png'), Buffer.from(await grab(x, y), 'base64')); }
     const py = `
