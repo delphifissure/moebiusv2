@@ -26,8 +26,9 @@ ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
 ap.add_argument('--depth', action='store_true')
 ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints is widened evenly by the picture's silhouette colour fringe (its 90th percentile run, measured); N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
-ap.add_argument('--painter', default='sd', choices=['sd', 'lama', 'lama+sd'], help="sd: SD 1.5 inpainting from the wash; lama: LaMa (continues the surroundings, invents nothing); lama+sd: LaMa's fill refined by SD at --refine strength")
-ap.add_argument('--refine', type=float, default=0.5, help='lama+sd: the strength of the SD refinement over the LaMa fill (0 = LaMa as is, 1 = SD from scratch)')
+ap.add_argument('--painter', default='sd', choices=['sd', 'lama', 'lama+sd', 'wash+sd'], help="sd: SD 1.5 inpainting from noise over the hole; lama: LaMa (continues the surroundings, invents nothing); lama+sd: LaMa's fill refined by SD at --refine strength; wash+sd: SD started from the bundle's own wash in the hole, noised to --refine strength (DiffuEraser's prior injection, with our wash as the prior)")
+ap.add_argument('--sdmask', default='asis', choices=['asis', 'hull', 'blob'], help="asis: SD is shown the hole as it is; hull: each hole component's convex hull; blob: the hole widened by its own largest inscribed radius (the half-width of its thickest part), which turns a figure-shaped hole into a blob. hull and blob: the mask SD sees no longer has the occluder's outline (MiniMax-Remover: a mask in an object's shape makes a diffusion model regrow that object). Colour is still written on the hole only")
+ap.add_argument('--refine', type=float, default=0.5, help='lama+sd / wash+sd: the strength of the SD refinement over the LaMa fill (0 = LaMa as is, 1 = SD from scratch)')
 ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
@@ -110,9 +111,36 @@ def paint(image, m, depth, seed):
     if A.painter == 'lama+sd':
         base = image.copy(); lf = lama_fill(image, m); base[m] = lf[m]
         return paint_sd(base, m, depth, seed, A.refine)
+    if A.painter == 'wash+sd': return paint_sd(image, m, depth, seed, A.refine)   # the image already carries the wash in the hole
     return paint_sd(image, m, depth, seed, 1.0)
+def blob_mask(m):
+    # widened by the hole's largest inscribed radius (the maximum distance-to-edge inside the hole, i.e. the half-width of
+    # its thickest part): a figure-shaped hole becomes a blob about as wide as the figure's trunk, so its outline no longer
+    # reads as a figure (MiniMax-Remover App. 7). The median ridge half-width (5 px on the starwatcher) left the figure intact
+    from scipy.ndimage import distance_transform_edt
+    w = float(distance_transform_edt(m).max()) if m.any() else 0.0
+    BLOBW.append(round(w, 2))
+    return m | (distance_transform_edt(~m) <= w) if w > 0 else m
+BLOBW = []
+def hull_mask(m):
+    # each connected component replaced by its convex hull (texels inside the hull polygon)
+    from scipy.ndimage import label, find_objects
+    from scipy.spatial import Delaunay
+    lab, n = label(m); out = m.copy()
+    for k, sl in enumerate(find_objects(lab), 1):
+        ys, xs = np.nonzero(lab[sl] == k)
+        if len(ys) < 3 or ys.min() == ys.max() or xs.min() == xs.max(): continue
+        pts = np.c_[xs, ys].astype(float)
+        try: tri = Delaunay(pts)
+        except Exception: continue
+        gy, gx = np.mgrid[0:lab[sl].shape[0], 0:lab[sl].shape[1]]
+        inside = tri.find_simplex(np.c_[gx.ravel(), gy.ravel()].astype(float)) >= 0
+        out[sl] |= inside.reshape(gy.shape)
+    return out
 def paint_sd(image, m, depth, seed, strength):
     ctl = Image.fromarray(np.round(np.clip(depth, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
+    if A.sdmask == 'hull': m = hull_mask(m)
+    elif A.sdmask == 'blob': m = blob_mask(m)
     r = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(image).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((m * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
              control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=strength, width=W, height=H).images[0]
     return np.asarray(r.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
@@ -145,7 +173,7 @@ else:
     sd_full = paint(p1c, mask, ctl16, A.seed); out = p1c.copy(); out[mask] = sd_full[mask]   # colour on the mask only (the app enforces it too)
 Image.fromarray(out).save(os.path.join(A.out, 'return_band_color.png'))
 if out2 is not None: Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
-info = {'bundle': A.bundle, 'image': img_name, 'painter': A.painter, 'refine': A.refine if A.painter == 'lama+sd' else None, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
+info = {'bundle': A.bundle, 'image': img_name, 'painter': A.painter, 'refine': A.refine if A.painter in ('lama+sd', 'wash+sd') else None, 'sdmask': A.sdmask, 'blobHalfWidth': BLOBW, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
         'maskTexels': int(mask.sum()), 'appMaskTexels': int(mask_app.sum()), 'grow': GROW, 'sdSecs': round(time.time() - t0)}
 if A.depth:
     t1 = time.time(); B = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff'
