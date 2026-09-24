@@ -543,7 +543,7 @@ def _hills(W, H, crest_y, depth):
     """Ploughed ground (furrows receding to a vanishing point), a near hill whose crest runs across the frame at crest_y,
     a far range of hills above it, sky. The crest is a depth step inside the background: ground-side below, far hills above."""
     prims = []
-    prims.append(Quad([0, -H / 2, -depth / 2], [1, 0, 0], [0, 0, 1], 3 * W, depth / 2 + 0.001,
+    prims.append(Quad([0, -H / 2, -depth / 2 + 0.15], [1, 0, 0], [0, 0, 1], 8 * W, depth / 2 + 0.151,   # runs to z = +0.3 for cameras outside the window
                       lambda p: tex_stripes(p, scale=W * 0.035, c1=(0.55, 0.42, 0.28), c2=(0.42, 0.31, 0.20), axis=0), STUFF, 'ground'))
     ry = crest_y + H / 2 + 0.35 * H                     # the near hill: an ellipsoid sunk into the ground, top at crest_y
     prims.append(Ellipsoid([0.2 * W, crest_y - ry, -1.1 * W], [2.6 * W, ry, 0.45 * W],
@@ -551,7 +551,7 @@ def _hills(W, H, crest_y, depth):
     ry2 = 0.95 * H
     prims.append(Ellipsoid([-0.6 * W, 0.22 * H - ry2, -2.6 * W], [3.2 * W, ry2, 0.6 * W],
                            lambda p: tex_noise(p, scale=W * 0.06, base=(0.45, 0.55, 0.68), amp=0.06, axes=(0, 1)), STUFF, 'hill_far'))
-    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 3 * W, 3 * H,
+    prims.append(Quad([0, 0, -depth], [1, 0, 0], [0, 1, 0], 8 * W, 6 * H,
                       lambda p: tex_noise(p, scale=W * 0.4, base=(0.62, 0.74, 0.92), amp=0.05, axes=(0, 1)), STUFF, 'sky_wall'))
     return prims
 
