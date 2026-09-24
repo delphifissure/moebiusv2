@@ -589,7 +589,7 @@ function bgFinishSourceHole(r, c) {
         for (let i = 0; i < N; i++) { for (let c = 0; c < 3; c++) { d[4 * i + c] = r.wash[3 * i + c]; if (pc && pc.length === 4 * N) pc[4 * i + c] = r.wash[3 * i + c]; } d[4 * i + 3] = 255; }
         cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
     } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
-    let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
+    let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph, r.hole, r.has2); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
     let p2st = null; try { p2st = bgSourcePlate2(r, pw, ph, rl, L); } catch (e2) { console.warn('[S62] plate 2 failed (none):', e2); }
     // sky (§7): a hole part that continues the sky has sky depth, so the plate leaves its triangles to the sky layer
     // (bgRetearPlate); the sky layer takes that part's wash (the sky surface's own colours) where its texture held the
@@ -662,17 +662,30 @@ function bgSourcePlate2(r, pw, ph, rl, L) {
 // the plate's triangle index from a plate depth (source rows): a triangle is kept when the rim law joins all three of its
 // edges on that plate (S2b.4), and an all-sky triangle is left to the sky layer (S2c; drawn twice it would z-fight).
 // Used by the source hole's finish and by the SD return's import, so the plate tears where its NEW depth does.
-function bgRetearPlate(pl, rl, pw, ph) {
+// S62 §10: the plate is the last layer, so it tears only where something lies behind it: plate 2 (a corner carries it) or
+// the sky layer (a corner is sky). A torn triangle with a hole corner whose other corners lie BEHIND the fill (a texel of
+// background seen through a gap in the occluder, which the not-behind rounds gave back to its source; two fill surfaces
+// with no plate 2 between them) is kept: stretched, it lies behind the fill and so behind the foreground, and a tear there
+// opens onto nothing (the troll at head up-right: a sprinkle of one-pixel see-through holes). A torn triangle with a
+// corner NEARER than the fill (the foreground's own depth outside the hole) still tears, or it would smear in front of it.
+// hole/has2 omitted: the rim law alone (as before).
+function bgRetearPlate(pl, rl, pw, ph, hole, has2) {
     const L = mediaLayers[0], gQ = bgLayerMesh.geometry, gp = L.mesh.geometry.parameters, vw = gp.widthSegments + 1, vh = gp.heightSegments + 1;
     const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1), ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
-    const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0, sky = 0;
+    const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0, sky = 0, bridged = 0;
+    const backstop = (A, B, C) => { if (!hole) return false; const V = [A, B, C]; let nearFill = Infinity, any = false;
+        for (const v of V) { if (has2 && has2[v]) return false; if (skyOn && pl[v] < sq) return false; if (hole[v]) { any = true; if (pl[v] < nearFill) nearFill = pl[v]; } }
+        if (!any) return false;
+        for (const v of V) if (!hole[v] && pl[v] > nearFill) return false;   // a corner nearer than the fill: the foreground's edge
+        return true; };
     const t3 = (a, b, c) => { const A = ti(a), B = ti(b), C = ti(c);
         if (skyOn && pl[A] < sq && pl[B] < sq && pl[C] < sq) { sky++; return; }
-        if (rl.joinedIdx(A, B, pl, pw) && rl.joinedIdx(B, C, pl, pw) && rl.joinedIdx(A, C, pl, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; } else drop++; };
+        if (rl.joinedIdx(A, B, pl, pw) && rl.joinedIdx(B, C, pl, pw) && rl.joinedIdx(A, C, pl, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; }
+        else if (backstop(A, B, C)) { out[n++] = a; out[n++] = b; out[n++] = c; bridged++; } else drop++; };
     for (let iy = 0; iy < vh - 1; iy++) for (let ix = 0; ix < vw - 1; ix++) { const a = ix + vw * iy, b = ix + vw * (iy + 1), c = ix + 1 + vw * (iy + 1), d = ix + 1 + vw * iy; t3(a, b, d); t3(b, c, d); }
     gQ.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1));
-    return { kept: n / 3, dropped: drop, skyLeftToSkyLayer: sky };
+    return { kept: n / 3, dropped: drop, bridged, skyLeftToSkyLayer: sky };
 }
 
 // S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
@@ -1259,12 +1272,21 @@ function bgSourceHole(o) {
         const fix = new Uint8Array(nR), xy = new Int32Array(2 * nR), v4 = [0, 1, 2, 3].map(() => new Float64Array(nR));
         for (let n = 0; n < nR; n++) { const i = n < Ms ? sub[n] : pins[n - Ms]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0; }
         for (let e = 0; e < pins.length; e++) { const j = pins[e], n = Ms + e; fix[n] = 1; v4[0][n] = dQ[j]; const c3 = pinColour(j); for (let c = 0; c < 3; c++) v4[c + 1][n] = c3[c]; }
-        // a part of the split component with no path to a far pin keeps plate 1 (fixed at it; not a second layer)
-        { const seen = new Uint8Array(nR), q = []; for (let n = Ms; n < nR; n++) { seen[n] = 1; q.push(n); } while (q.length) { const n = q.pop(); for (let k = st0[n]; k < st0[n + 1]; k++) { const m = li[k]; if (!seen[m]) { seen[m] = 1; q.push(m); } } }
+        // S62 §10: what a nearer part reveals past its seam is the part beside it, not only the farthest surface (troll: a
+        // 0.295 patch in the fill beside 0.176 background, with a 0.058 wall farthest; plate 2 at 0.058 slid off and the gap
+        // between the two nearer parts opened onto nothing). So every texel across a seam whose fill lies behind its
+        // neighbour's by two steps also holds plate 2 at its own fill and wash
+        let nSeam = 0;
+        for (let t = 0; t < Ms; t++) { const j = sub[t]; if (fix[t]) continue;
+            for (const i of nbrs(j)) { if (i < 0 || sx[i] < 0 || sx[i] >= Ms || sid[i] === sid[j]) continue;
+                if (plate[j] < plate[i] - 2 * step) { fix[t] = 1; v4[0][t] = plate[j]; for (let c = 0; c < 3; c++) v4[c + 1][t] = wash[3 * j + c]; nSeam++; break; } } }
+        // a part of the split component with no path to a far pin or a seam keeps plate 1 (fixed at it; not a second layer)
+        { const seen = new Uint8Array(nR), q = []; for (let n = Ms; n < nR; n++) { seen[n] = 1; q.push(n); } for (let t = 0; t < Ms; t++) if (fix[t]) { seen[t] = 1; q.push(t); } while (q.length) { const n = q.pop(); for (let k = st0[n]; k < st0[n + 1]; k++) { const m = li[k]; if (!seen[m]) { seen[m] = 1; q.push(m); } } }
           for (let t = 0; t < Ms; t++) if (!seen[t]) { fix[t] = 1; v4[0][t] = plate[sub[t]]; for (let c = 0; c < 3; c++) v4[c + 1][t] = wash[3 * sub[t] + c]; } }
         const U2 = bgMGSolve(nR, st0, li, new Float64Array(li.length).fill(1), fix, v4, xy, TOL).outs;
         plate2 = Float32Array.from(plate); wash2 = Uint8ClampedArray.from(wash); has2 = new Uint8Array(N);
         for (let t = 0; t < Ms; t++) { const i = sub[t]; if (farId.has(sid[i]) || fix[t]) continue; if (U2[0][t] < plate[i] - 2 * step && !(rl.sky >= 0 && U2[0][t] < rl.sky)) { has2[i] = 1; n2++; plate2[i] = U2[0][t]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = Math.round(Math.min(255, Math.max(0, U2[c + 1][t]))); } }
+        st.plate2Seams = nSeam;
         st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
     }
     // SHOWN (S62 §9). The hole was chosen before the fill existed; with the fill in hand, the plates are drawn at the same
@@ -11986,7 +12008,7 @@ window._importPlaneReturn = function (d) {
         const dm = bgLayerMesh.material.uniforms.displacementMap; if (dm && dm.value) dm.value.needsUpdate = true;
         // S62 source mode: the plate was indexed on the hole's own depth (bgFinishSourceHole), so the index is rebuilt on the
         // returned depth with the same rule, and the plate tears where the painted surface does
-        if (window._qbSrcHole) { try { const pl = new Float32Array(N); for (let i = 0; i < N; i++) pl[i] = pF[flip(i)]; st.retear = Object.assign(st.retear || {}, { rebuilt: bgRetearPlate(pl, bgRimLawFor(pw, ph), pw, ph), note: 'source mode: the plate index is rebuilt on the returned depth' }); } catch (eR) { st.retear = Object.assign(st.retear || {}, { rebuildError: String(eR) }); } }
+        if (window._qbSrcHole) { try { const pl = new Float32Array(N); for (let i = 0; i < N; i++) pl[i] = pF[flip(i)]; st.retear = Object.assign(st.retear || {}, { rebuilt: bgRetearPlate(pl, bgRimLawFor(pw, ph), pw, ph, window._qbSrcHole, window._qbPlate2Has || null), note: 'source mode: the plate index is rebuilt on the returned depth' }); } catch (eR) { st.retear = Object.assign(st.retear || {}, { rebuildError: String(eR) }); } }
         // the sibling meshes (plate 2, the ring, the step faces) clone matQ and share this same texture object
         for (const m of (bgLayerMesh.userData.objLayers || [])) { const u = m.material && m.material.uniforms; if (u && u.displacementMap && u.displacementMap.value === (dm && dm.value)) u.displacementMap.value.needsUpdate = true; }
     }

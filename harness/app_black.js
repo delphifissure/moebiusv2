@@ -1,7 +1,7 @@
 // S62 §9: see-through pixels on screen. Bakes one picture in source mode (optionally with a moebius.js variant, MB=<path>)
 // and renders poses over the envelope; a pixel the canvas leaves at alpha 0 inside the rest frame's picture rectangle is
 // see-through (nothing drawn: neither the source mesh, the plates nor the margin). Writes counts and PNGs (see-through red).
-//   COLOR= DEPTH= TAG= [PORT=8099] [MB=<variant moebius.js>] [SEL=...] node harness/app_black.js
+//   COLOR= DEPTH= TAG= [PORT=8099] [MB=<variant moebius.js>] [SEL=...] [EVAL='<js run after the bake>'] node harness/app_black.js
 'use strict';
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
 const H = __dirname, PORT = +(process.env.PORT || 8099); const OUT = path.join(__dirname, 'shots', 'app_black', process.env.TAG || 'x'); fs.mkdirSync(OUT, { recursive: true });
@@ -32,9 +32,11 @@ const WT = path.resolve(__dirname, '..');
     const t0 = Date.now(); await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 1600; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF && !!window._qbSourceHole)) break; await new Promise(r => setTimeout(r, 500)); }
     const bakeMs = Date.now() - t0;
+    // EVAL='<js>': run in the page after the bake (a diagnostic switch); its return value is recorded
+    const evalOut = process.env.EVAL ? await page.evaluate((js) => { try { return JSON.parse(JSON.stringify(eval(js))); } catch (e) { return 'EVAL error: ' + e.message; } }, process.env.EVAL) : null;
     const grab = async (x, y) => page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }, [x, y]);
     const poses = [['rest', 0, 0.008], ['R42', 0.18, 0.008], ['L42', -0.18, 0.008], ['RU', 0.18, 0.1], ['LD', -0.18, -0.1]];
-    const out = { bakeMs, stats: await page.evaluate(() => window._qbSourceHole), poses: {} };
+    const out = { bakeMs, eval: evalOut, stats: await page.evaluate(() => window._qbSourceHole), poses: {} };
     for (const [n, x, y] of poses) { fs.writeFileSync(path.join(OUT, n + '.png'), Buffer.from(await grab(x, y), 'base64')); }
     const py = `
 import numpy as np, json, sys
