@@ -26,6 +26,8 @@ ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
 ap.add_argument('--depth', action='store_true')
 ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints is widened evenly by the picture's silhouette colour fringe (its 90th percentile run, measured); N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
+ap.add_argument('--painter', default='sd', choices=['sd', 'lama', 'lama+sd'], help="sd: SD 1.5 inpainting from the wash; lama: LaMa (continues the surroundings, invents nothing); lama+sd: LaMa's fill refined by SD at --refine strength")
+ap.add_argument('--refine', type=float, default=0.5, help='lama+sd: the strength of the SD refinement over the LaMa fill (0 = LaMa as is, 1 = SD from scratch)')
 ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
@@ -90,10 +92,29 @@ def grown(m):
         from scipy.ndimage import binary_dilation
         return binary_dilation(m, iterations=g)
     return m
+_lama = None
+def lama_fill(image, m):
+    global _lama
+    if _lama is None:
+        from simple_lama_inpainting import SimpleLama
+        _lama = SimpleLama()
+    out = np.asarray(_lama(Image.fromarray(image), Image.fromarray((m * 255).astype(np.uint8))))
+    return out[:image.shape[0], :image.shape[1]].astype(np.uint8)
+# PAINTER (S62 §12): SD 1.5 invents -- an object where a figure-shaped blank sits in a plain (the starwatcher's far pass painted
+# a boat where he stood), lace along a silhouette. LaMa continues what surrounds the mask and invents nothing: clean on the
+# troll's forest and the starwatcher's plain, a dark ghost of the Vermeer's woman where the hole is the whole figure and the
+# table. lama+sd: LaMa's fill, then SD over it at --refine strength -- SD adds texture to a coherent fill instead of
+# inventing into a blank.
 def paint(image, m, depth, seed):
+    if A.painter == 'lama': return lama_fill(image, m)
+    if A.painter == 'lama+sd':
+        base = image.copy(); lf = lama_fill(image, m); base[m] = lf[m]
+        return paint_sd(base, m, depth, seed, A.refine)
+    return paint_sd(image, m, depth, seed, 1.0)
+def paint_sd(image, m, depth, seed, strength):
     ctl = Image.fromarray(np.round(np.clip(depth, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
     r = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(image).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((m * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
-             control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=1.0, width=W, height=H).images[0]
+             control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=strength, width=W, height=H).images[0]
     return np.asarray(r.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
 # SD paints SURFACES, not plates (S62 §12). Where the bundle carries plate 2, plate 1 is not one surface: in the dune's
 # band it holds the far plain, behind the legs the dune continued. Handed over as one picture, that is a leg-shaped island
@@ -124,7 +145,7 @@ else:
     sd_full = paint(p1c, mask, ctl16, A.seed); out = p1c.copy(); out[mask] = sd_full[mask]   # colour on the mask only (the app enforces it too)
 Image.fromarray(out).save(os.path.join(A.out, 'return_band_color.png'))
 if out2 is not None: Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
-info = {'bundle': A.bundle, 'image': img_name, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
+info = {'bundle': A.bundle, 'image': img_name, 'painter': A.painter, 'refine': A.refine if A.painter == 'lama+sd' else None, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
         'maskTexels': int(mask.sum()), 'appMaskTexels': int(mask_app.sum()), 'grow': GROW, 'sdSecs': round(time.time() - t0)}
 if A.depth:
     t1 = time.time(); B = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff'
