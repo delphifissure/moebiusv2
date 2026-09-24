@@ -676,7 +676,11 @@ function bgRetearPlate(pl, rl, pw, ph, hole, has2) {
     const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
     const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0, sky = 0, bridged = 0;
     const backstop = (A, B, C) => { if (!hole) return false; const V = [A, B, C]; let nearFill = Infinity, any = false;
-        if (hole[A] && hole[B] && hole[C] && !(skyOn && (pl[A] < sq || pl[B] < sq || pl[C] < sq))) return true;   // fill to fill: bridged even where plate 2 lies behind (its own edge tears there too)
+        // fill to fill: bridged even where plate 2 lies behind (its own edge tears there too) -- but not across a middle
+        // layer's seam (S62 §12: a middle-surface texel beside the far fill; bridged, it drew the starwatcher's streak from
+        // the dune continued behind his legs, 0.37, to the plain, 0.06; torn, the gap shows plate 2, which goes on across it)
+        const midSeam = has2 && ((has2[A] === 2) + (has2[B] === 2) + (has2[C] === 2)) % 3 !== 0;
+        if (hole[A] && hole[B] && hole[C] && !midSeam && !(skyOn && (pl[A] < sq || pl[B] < sq || pl[C] < sq))) return true;
         for (const v of V) { if (has2 && has2[v]) return false; if (skyOn && pl[v] < sq) return false; if (hole[v]) { any = true; if (pl[v] < nearFill) nearFill = pl[v]; } }
         if (!any) return false;
         for (const v of V) if (!hole[v] && pl[v] > nearFill) return false;   // a corner nearer than the fill: the foreground's edge
@@ -1342,7 +1346,11 @@ function bgSourceHole(o) {
           const fnd = (e) => { while (par[e] !== e) { par[e] = par[par[e]]; e = par[e]; } return e; };
           for (let e = 0; e < nE; e++) { if (kind[e] !== 1) continue; const i = exP[e], x = i % pw;
             for (const j of [x < pw - 1 ? i + 1 : -1, i + pw < N ? i + pw : -1, x < pw - 1 && i + pw < N ? i + pw + 1 : -1, x > 0 && i + pw < N ? i + pw - 1 : -1]) { if (j < 0) continue; const f = ext.get(j); if (f === undefined || kind[f - M] !== 1 || !jS(i, j)) continue; const ra = fnd(e), rb = fnd(f - M); if (ra !== rb) par[ra] = rb; } }
-          for (let e = 0; e < nE; e++) if (kind[e] === 1) gp[e] = fnd(e); }
+          for (let e = 0; e < nE; e++) if (kind[e] === 1) gp[e] = fnd(e);
+          // a group shorter than the ink-line scale (WASH_RUN texels, the seen vote's) is a sliver between leaves no pose
+          // shows long enough to read: it is not continued (its pins say nothing in either channel)
+          const gsz = new Map(); for (let e = 0; e < nE; e++) if (gp[e] >= 0) gsz.set(gp[e], (gsz.get(gp[e]) || 0) + 1);
+          for (let e = 0; e < nE; e++) if (gp[e] >= 0 && gsz.get(gp[e]) < WASH_RUN) { gp[e] = -1; kind[e] = 2; } }
         const gU = new Int32Array(M).fill(-1), bq = []; for (let t = 0; t < M; t++) for (let e = s0[t]; e < s0[t + 1]; e++) { const m2 = lk[e]; if (m2 >= M && kind[m2 - M] === 1) { gU[t] = gp[m2 - M]; bq.push(t); break; } }
         for (let h = 0; h < bq.length; h++) { const t = bq[h]; for (let e = s0[t]; e < s0[t + 1]; e++) { const m2 = lk[e]; if (m2 < M && gU[m2] < 0) { gU[m2] = gU[t]; bq.push(m2); } } }
         const wD = new Float64Array(lk.length), wP = new Float64Array(lk.length);
@@ -1363,7 +1371,7 @@ function bgSourceHole(o) {
         if (!has2) { plate2 = Float32Array.from(plate); wash2 = Uint8ClampedArray.from(wash); has2 = new Uint8Array(N); }
         for (let t = 0; t < M; t++) { const i = J[t]; const f = U[0][t]; if (fx[t]) continue;
           if (!(P[t] > 0.5 && f < dQ[i] - 2 * step && f > plate[i] + 2 * step)) continue;
-          has2[i] = 1; n2++; plate2[i] = plate[i]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c];
+          has2[i] = 2; n2++; plate2[i] = plate[i]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c];   // 2: a middle layer (the bridges below leave its seam torn)
           plate[i] = f; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, U[c + 1][t]))); nMid++; } }
       st.middle = { pins: nPin, region: J.length, texels: nMid, ms: Date.now() - tM }; }
     // SHOWN (S62 §9). The hole was chosen before the fill existed; with the fill in hand, the plates are drawn at the same
@@ -1412,7 +1420,7 @@ function bgSourceHole(o) {
       for (; passes < 2; passes++) {
         const S1 = new Float64Array(N); for (let i = 0; i < N; i++) S1[i] = shfP(plate[i]);
         const j1 = (i, j) => rl.joinedIdx(i, j, plate, pw);
-        const bridge = (A, B, C) => { if (hole[A] && hole[B] && hole[C] && !(rl.sky >= 0 && (plate[A] < rl.sky || plate[B] < rl.sky || plate[C] < rl.sky))) return true; let nf = Infinity, any = false; for (const v of [A, B, C]) { if (has2 && has2[v]) return false; if (rl.sky >= 0 && plate[v] < rl.sky) return false; if (hole[v]) { any = true; if (plate[v] < nf) nf = plate[v]; } }
+        const bridge = (A, B, C) => { const midSeam = has2 && ((has2[A] === 2) + (has2[B] === 2) + (has2[C] === 2)) % 3 !== 0; if (hole[A] && hole[B] && hole[C] && !midSeam && !(rl.sky >= 0 && (plate[A] < rl.sky || plate[B] < rl.sky || plate[C] < rl.sky))) return true; let nf = Infinity, any = false; for (const v of [A, B, C]) { if (has2 && has2[v]) return false; if (rl.sky >= 0 && plate[v] < rl.sky) return false; if (hole[v]) { any = true; if (plate[v] < nf) nf = plate[v]; } }
             if (!any) return false; for (const v of [A, B, C]) if (!hole[v] && plate[v] > nf) return false; return true; };
         const T1 = new Uint8Array(N); for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; const b = i + pw, d = i + 1, c = i + pw + 1;
             const ok = (A, B, C) => !(rl.sky >= 0 && plate[A] < rl.sky && plate[B] < rl.sky && plate[C] < rl.sky) && ((j1(A, B) && j1(B, C) && j1(A, C)) || bridge(A, B, C));
@@ -12584,6 +12592,8 @@ function exportSDBundle() {
                     // gradient measurement of the same field carry independent noise, so the screened solve averages them.
                     returnContract: {
                         files: { 'return_band_color.png': 'RGB at the plate grid, rows top-first: the inpainted colour. Only texels where plane_mask_inpaint is white are read.',
+                                 'return_band2_color.png': 'OPTIONAL (S62 §12), where the bundle carries plane_plate2_mask: RGB at the plate grid, the colour of the SECOND layer (what shows once plate 1 slides past it, e.g. the plain behind the dune continued behind a figure). Paint it on plane_plate2_color with plane_plate2_depth16 as the depth condition. Only texels where plane_plate2_mask is white are read. A returned depth that brings plate 1 level with or behind plate 2 drops those texels from plate 2 (the layers would cross).',
+                                 'maskForThePainter': 'the colour a painter paints may reach past plane_mask_inpaint by the silhouette colour fringe (the run of texels outside the mask whose colour is nearer the occluder than the background; median 0, 90th percentile 3-8 texels on the test pictures): SD continued that fringe as a lace along the troll\'s arms when it was left in. harness/sd_return.py --grow auto measures it per texel. The app reads only inside the mask either way.',
                                  'return_band_depth16.png': 'OPTIONAL 16-bit grey, same convention as plane_plate_depth16 (value/65535 = normalised disparity, 1 near 0 far): the ABSOLUTE depth return. Any constant bias is removed by the app (per-component shift), so it does not need to be aligned.',
                                  'return_band_gradx16.png / return_band_grady16.png': 'OPTIONAL 16-bit grey: the depth GRADIENT in the same units, ENCODED AS (g + 0.5) so 32768 = zero gradient. gx[i] approximates d[i+1] - d[i], gy[i] approximates d[i+pw] - d[i].' },
                         integration: 'min over the band of ||grad d - g||^2 + lam*||d - a||^2, with d = the observed plate depth on the band rim (Dirichlet). `a` is the absolute return after a PER BAND COMPONENT shift that makes each component meet its own visible rim; lam = 1. Depth returns are never pasted: the seam is a boundary condition, so it is exact by construction.',

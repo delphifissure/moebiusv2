@@ -26,7 +26,8 @@ const J = (dep) => (i, j) => rl.joinedIdx(i, j, dep, pw);
 const tris = (keep) => { const T = new Uint8Array(N); for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; if (keep(i, i + pw, i + 1)) T[i] |= 1; if (keep(i + pw, i + pw + 1, i + 1)) T[i] |= 2; } return T; };
 const jF = J(dQ), TF = tris((a, b, c) => jF(a, b) && jF(b, c) && jF(a, c));
 const j1 = J(plate), bridge = (A, B, C) => { if (NOB) return false; const V = [A, B, C]; let nf = Infinity, any = false;
-  if (hole[A] && hole[B] && hole[C] && !(SKY && (plate[A] < sq || plate[B] < sq || plate[C] < sq))) return true;   // fill to fill (§10)
+  const midSeam = ((has2[A] === 2) + (has2[B] === 2) + (has2[C] === 2)) % 3 !== 0;   // a middle layer's seam stays torn (§12)
+  if (hole[A] && hole[B] && hole[C] && !midSeam && !(SKY && (plate[A] < sq || plate[B] < sq || plate[C] < sq))) return true;   // fill to fill (§10)
   for (const v of V) { if (has2[v]) return false; if (SKY && plate[v] < sq) return false; if (hole[v]) { any = true; if (plate[v] < nf) nf = plate[v]; } }
   if (!any) return false; for (const v of V) if (!hole[v] && plate[v] > nf) return false; return true; };
 const T1 = tris((a, b, c) => { if (SKY && plate[a] < sq && plate[b] < sq && plate[c] < sq) return false; return (j1(a, b) && j1(b, c) && j1(a, c)) || bridge(a, b, c); });
