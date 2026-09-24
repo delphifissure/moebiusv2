@@ -56,7 +56,7 @@ const WT = path.resolve(__dirname, '..');
             const { pw, ph } = window._qbSize, N = pw * ph, enc = (a) => { const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
             const ff2 = new Float32Array(N).fill(-1); const h2 = window._qbPlate2Has, p2 = window._qbPlateF2;
             if (h2 && p2) for (let i = 0; i < N; i++) if (h2[i]) ff2[i] = p2[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)];
-            return { meta: { pw, ph, envDeg: 45, mode: 'source' }, 'disocc.u8': enc(Uint8Array.from(window._qbDisocc)), 'farField.f32': enc(Float32Array.from(window._geoFarField)), 'dQ.f32': enc(Float32Array.from(window._qbDQ)),
+            return { meta: { pw, ph, envDeg: 45, mode: 'source', outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, D: Math.abs(camera.position.z - portalPlaneWorldZ), terrariumWidth, terrariumHeight }, 'disocc.u8': enc(Uint8Array.from(window._qbDisocc)), 'farField.f32': enc(Float32Array.from(window._geoFarField)), 'dQ.f32': enc(Float32Array.from(window._qbDQ)),
                      'plateF.f32': enc(Float32Array.from(window._qbPlateF)), 'farField2.f32': enc(ff2) };
         });
         fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(dumps.meta)); for (const k in dumps) if (k !== 'meta') fs.writeFileSync(path.join(OUT, k), Buffer.from(dumps[k], 'base64'));

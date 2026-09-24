@@ -1166,7 +1166,9 @@ function bgSourceHole(o) {
     let plate2 = null, wash2 = null, has2 = null, n2 = 0;
     if (res.surf && res.surf.split) {
         const sv = res.surf, sid = res.sid, farId = new Map();
-        for (const C of sv.cl) if (C && C.length > 1) { let f = C[0]; for (const S of C) if (S.med < f.med) f = S; farId.set(f.id, true); }
+        // the farthest surface that is not sky: the sky layer is already the back of everything (S2c), so a sky surface is
+        // never a second layer; a split whose only farther surface is sky has none
+        for (const C of sv.cl) if (C && C.length > 1) { let f = null; for (const S of C) if (!(rl.sky >= 0 && S.med < rl.sky) && (!f || S.med < f.med)) f = S; if (f) farId.set(f.id, true); }
         const sub = [], sx = new Int32Array(N).fill(-1);
         for (const i of res.di) { const C = sid[i] >= 0 ? sv.list[sid[i]] : null; if (!C) continue; const CC = sv.cl[C.comp]; if (CC && CC.length > 1) { sx[i] = sub.length; sub.push(i); } }
         const Ms = sub.length, pins = []; for (const j of res.pi) if (res.keep[j] && sid[j] >= 0 && farId.has(sid[j]) && !hole[j]) { sx[j] = Ms + pins.length; pins.push(j); }
@@ -1181,8 +1183,7 @@ function bgSourceHole(o) {
           for (let t = 0; t < Ms; t++) if (!seen[t]) { fix[t] = 1; v4[0][t] = plate[sub[t]]; for (let c = 0; c < 3; c++) v4[c + 1][t] = wash[3 * sub[t] + c]; } }
         const U2 = bgMGSolve(nR, st0, li, new Float64Array(li.length).fill(1), fix, v4, xy, TOL).outs;
         plate2 = Float32Array.from(plate); wash2 = Uint8ClampedArray.from(wash); has2 = new Uint8Array(N);
-        for (let t = 0; t < Ms; t++) { const i = sub[t]; if (farId.has(sid[i]) || fix[t]) continue; if (U2[0][t] < plate[i] - 2 * step) { has2[i] = 1; n2++; plate2[i] = U2[0][t]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = Math.round(Math.min(255, Math.max(0, U2[c + 1][t]))); } }
-        { let nf = 0, below = 0, nearT = 0; for (let t = 0; t < Ms; t++) { if (fix[t]) nf++; const i = sub[t]; if (!farId.has(sid[i])) { nearT++; if (U2[0][t] < plate[i]) below++; } } st.dbg2 = { Ms, pins: pins.length, fixedUnreached: nf, nearTexels: nearT, farBelowPlate: below }; }
+        for (let t = 0; t < Ms; t++) { const i = sub[t]; if (farId.has(sid[i]) || fix[t]) continue; if (U2[0][t] < plate[i] - 2 * step && !(rl.sky >= 0 && U2[0][t] < rl.sky)) { has2[i] = 1; n2++; plate2[i] = U2[0][t]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = Math.round(Math.min(255, Math.max(0, U2[c + 1][t]))); } }
         st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
     }
     st.secondLayerTexels = n2; st.msSurfaces = msSurf;
