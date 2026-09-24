@@ -533,7 +533,7 @@ function bgApplySourceHole() {
     const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 }, mesh = bgLayerMesh;
     const finish = (r, where, ms) => {
         if (seq !== window._qbSourceHoleSeq || window._qbDQ !== dQ || bgLayerMesh !== mesh) { console.warn('[S62] a newer bake started while the hole was solving; this result is dropped'); return null; }
-        return bgFinishSourceHole(r, { pw, ph, N, L, rl, t0, where, msSolve: ms });
+        return bgFinishSourceHole(r, { pw, ph, N, L, rl, t0, where, msSolve: ms, step });
     };
     const tS = Date.now();
     console.log('[S62] solving the source-anchored hole (' + pw + 'x' + ph + ')...');
@@ -560,7 +560,7 @@ function bgSourceHoleInWorker(o) {
                     '  window = g.window; currentNormPortalPlane = g.pn; portalPlaneWorldZ = g.pz; camera = { position: { z: g.cz } }; innerVolumeDepth = g.inner; outerVolumeDepth = g.outer;\n' +
                     '  terrariumWidth = g.tw; terrariumHeight = g.th; bgViewFadeEndDeg = g.fadeH; bgViewFadeEndDegV = g.fadeV; _sky = g.sky; _bgRimLaw = null;\n' +
                     '  const rl = bgRimLawFor(m.pw, m.ph); const r = bgSourceHole({ dQ: m.dQ, rgb: m.rgb, pw: m.pw, ph: m.ph, rl, step: m.step, D: m.D, layerW: m.layerW, tol: m.tol });\n' +
-                    '  postMessage({ id: m.id, r }, [r.plate.buffer, r.wash.buffer, r.hole.buffer]);\n' +
+                    '  postMessage({ id: m.id, r }, [r.plate.buffer, r.wash.buffer, r.hole.buffer, r.far.buffer].concat(r.has2 ? [r.plate2.buffer, r.wash2.buffer, r.has2.buffer] : []));\n' +
                     '} catch (err) { postMessage({ id: m.id, error: String((err && err.stack) || err) }); } };';
                 _bgHoleWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
             }
@@ -589,15 +589,16 @@ function bgFinishSourceHole(r, c) {
         for (let i = 0; i < N; i++) { for (let c = 0; c < 3; c++) { d[4 * i + c] = r.wash[3 * i + c]; if (pc && pc.length === 4 * N) pc[4 * i + c] = r.wash[3 * i + c]; } d[4 * i + 3] = 255; }
         cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
     } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
-    let tri = null; try {
-        const gQ = bgLayerMesh.geometry, gp = L.mesh.geometry.parameters, vw = gp.widthSegments + 1, vh = gp.heightSegments + 1;
-        const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1), ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
-        const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0; const pl = r.plate;
-        const t3 = (a, b, c) => { const A = ti(a), B = ti(b), C = ti(c); if (rl.joinedIdx(A, B, pl, pw) && rl.joinedIdx(B, C, pl, pw) && rl.joinedIdx(A, C, pl, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; } else drop++; };
-        for (let iy = 0; iy < vh - 1; iy++) for (let ix = 0; ix < vw - 1; ix++) { const a = ix + vw * iy, b = ix + vw * (iy + 1), c = ix + 1 + vw * (iy + 1), d = ix + 1 + vw * iy; t3(a, b, d); t3(b, c, d); }
-        gQ.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1)); tri = { kept: n / 3, dropped: drop };
-    } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
-    const p2 = bgLayerMesh.userData && bgLayerMesh.userData.plate2; if (p2) p2.visible = false;
+    let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
+    let p2st = null; try { p2st = bgSourcePlate2(r, pw, ph, rl, L); } catch (e2) { console.warn('[S62] plate 2 failed (none):', e2); }
+    // sky (§7): a hole part that continues the sky has sky depth, so the plate leaves its triangles to the sky layer
+    // (bgRetearPlate); the sky layer takes that part's wash (the sky surface's own colours) where its texture held the
+    // column-continued placeholder
+    let nSkyW = 0; const skyM = bgLayerMesh.userData && bgLayerMesh.userData.sky;
+    if (skyM && bgSkyInfOn()) { const sq = bgSkyQ(), mS = skyM.material && skyM.material.uniforms && skyM.material.uniforms.map, im = mS && mS.value && mS.value.image;
+        if (im && im.getContext) { const cc = im.getContext('2d'), id = cc.getImageData(0, 0, pw, ph), d = id.data;
+            for (let i = 0; i < N; i++) if (r.hole[i] && r.plate[i] < sq) { d[4 * i] = r.wash[3 * i]; d[4 * i + 1] = r.wash[3 * i + 1]; d[4 * i + 2] = r.wash[3 * i + 2]; nSkyW++; }
+            if (nSkyW) { cc.putImageData(id, 0, 0); mS.value.needsUpdate = true; window._qbSkyColor = new Uint8ClampedArray(d); } } }
     // the SD bundle's captures, from the new hole (they held the per-line bake's): every hole texel is a placeholder to
     // paint (class 1: no tier), the carriers are the hole, and the per-line captures with no meaning here are cleared
     window._qbDisocc = r.hole; window._qbSrcHole = r.hole; window._qbCarrier = r.hole;
@@ -610,11 +611,68 @@ function bgFinishSourceHole(r, c) {
       if (uQ.u_sdPaint) uQ.u_sdPaint.value = dt;
       if (uF && uF.u_sdPaint) uF.u_sdPaint.value = dt;
       if (window._objHL) { window._objHL.platePaint = dt; window._objHL.fgPaint = dt; } }
-    window._qbBandTier = null; window._qbBandPose = null; window._qbPlateTorn = null; window._qbPlateF2 = null; window._qbPlate2Has = null; window._qbPlateColor2 = null;
-    const st = Object.assign({}, r.stats, { plateTriangles: tri, edges: window._qbEdgeSharpen || null, solvedOn: where, msSolve, msTotal: Date.now() - t0 });
+    window._qbBandTier = null; window._qbBandPose = null; window._qbPlateTorn = null;
+    // the objects (_planeObjects: texels in front of the far field by more than the cliff step, ranked by the hole texels
+    // they own) are measured against the hole's own far field; the per-line fields with no meaning here are cleared
+    window._geoFarField = r.far || null; window._geoFarConf = null; window._geoGround = null;
+    window._qbObjIds = null; window._qbObjInfo = null; window._qbBandCont = null;
+    { let nCl = 0; for (let i = 0; i < N; i++) if (!r.hole[i] && r.plate[i] < window._qbDQ[i] - c.step) nCl++; window._qbCloneCount = nCl; window._qbCloneCountFinal = nCl; }   // outside the hole the plate is the source: 0
+    let objN = null; try { const ob = _planeObjects(true); objN = ob ? ob.objects.length : 0; } catch (eO) { console.warn('[S62] objects failed:', eO); }
+    if (window._objHLSel >= 0 && window._objectHighlight) { try { window._objectHighlight(window._objHLSel); } catch (eH) {} }   // a highlight on: repaint it from the new objects
+    const st = Object.assign({}, r.stats, { objects: objN, plate2: p2st, skyTexelsWashed: nSkyW, plateTriangles: tri, edges: window._qbEdgeSharpen || null, solvedOn: where, msSolve, msTotal: Date.now() - t0 });
     window._qbSourceHole = st; console.log('[S62] source-anchored hole ' + JSON.stringify(st));
     if (typeof render === 'function') { try { render(); } catch (e) {} }
     return st;
+}
+
+// S62 §7: plate 2 from the source hole's second layer (the farthest surface continued behind the nearer parts of a split
+// hole). The same recipe as the per-line plate 2 (S4/S5): a second mesh on the plate grid with its own depth texture and
+// colour, a triangle kept where any corner carries the second layer and the rim law joins its edges on plate 2's depth
+// (texels without it ride on plate 1, so plate 2 bridges plate 1's seams), all-sky triangles left to the sky layer, and
+// every plate-2 texel a placeholder (class 4). Replaces any earlier plate 2; none when no hole was split.
+function bgSourcePlate2(r, pw, ph, rl, L) {
+    const N = pw * ph, old = bgLayerMesh.userData && bgLayerMesh.userData.plate2;
+    if (old) { scene.remove(old); old.geometry.dispose(); try { old.material.dispose(); } catch (e) {} bgLayerMesh.userData.plate2 = null; }
+    window._qbPlateF2 = null; window._qbPlateColor2 = null; window._qbPlate2Has = null;
+    const has2 = r.has2; let n2 = 0; if (has2) for (let i = 0; i < N; i++) if (has2[i]) n2++;
+    if (!n2) return { texels: 0 };
+    const t0 = Date.now(), p2 = r.plate2, flip = (i) => (ph - 1 - ((i / pw) | 0)) * pw + (i % pw);
+    const plateF2 = new Float32Array(N); for (let i = 0; i < N; i++) plateF2[flip(i)] = p2[i];
+    const dt = new THREE.DataTexture(plateF2, pw, ph, THREE.RedFormat, THREE.FloatType); dt.needsUpdate = true; dt.flipY = false; dt.minFilter = THREE.NearestFilter; dt.magFilter = THREE.NearestFilter; dt.generateMipmaps = false;
+    const gp = L.mesh.geometry.parameters, vw = gp.widthSegments + 1, vh = gp.heightSegments + 1;
+    const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1), ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
+    const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
+    const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0;
+    const t3 = (a, b, c) => { const A = ti(a), B = ti(b), C = ti(c); if (!(has2[A] || has2[B] || has2[C])) return; if (skyOn && p2[A] < sq && p2[B] < sq && p2[C] < sq) return;
+        if (rl.joinedIdx(A, B, p2, pw) && rl.joinedIdx(B, C, p2, pw) && rl.joinedIdx(A, C, p2, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; } };
+    for (let iy = 0; iy < vh - 1; iy++) for (let ix = 0; ix < vw - 1; ix++) { const a = ix + vw * iy, b = ix + vw * (iy + 1), c = ix + 1 + vw * (iy + 1), d = ix + 1 + vw * iy; t3(a, b, d); t3(b, c, d); }
+    const g2 = bgLayerMesh.geometry.clone(); g2.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1));
+    const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; const cx = cv.getContext('2d'); const id = cx.createImageData(pw, ph), d = id.data;
+    for (let i = 0; i < N; i++) { d[4 * i] = r.wash2[3 * i]; d[4 * i + 1] = r.wash2[3 * i + 1]; d[4 * i + 2] = r.wash2[3 * i + 2]; d[4 * i + 3] = 255; }
+    cx.putImageData(id, 0, 0); const tex2 = new THREE.CanvasTexture(cv); tex2.minFilter = THREE.LinearFilter; tex2.magFilter = THREE.LinearFilter;
+    if ('colorSpace' in tex2 && L.textures.color && 'colorSpace' in L.textures.color) tex2.colorSpace = L.textures.color.colorSpace;
+    const mat2 = bgLayerMesh.material.clone(); mat2.uniforms.displacementMap.value = dt; mat2.uniforms.map.value = tex2;
+    if (mat2.uniforms.u_sdPaint) { const pf = new Float32Array(N); for (let i = 0; i < N; i++) if (has2[i]) pf[flip(i)] = 4; const pt = new THREE.DataTexture(pf, pw, ph, THREE.RedFormat, THREE.FloatType); pt.needsUpdate = true; pt.flipY = false; pt.minFilter = THREE.NearestFilter; pt.magFilter = THREE.NearestFilter; pt.generateMipmaps = false; mat2.uniforms.u_sdPaint.value = pt; }
+    const m2 = new THREE.Mesh(g2, mat2); m2.position.copy(bgLayerMesh.position); m2.rotation.copy(bgLayerMesh.rotation); m2.scale.copy(bgLayerMesh.scale); m2.renderOrder = bgLayerMesh.renderOrder;
+    m2.visible = bgLayerMesh.visible; scene.add(m2); bgLayerMesh.userData.plate2 = m2;
+    window._qbPlateF2 = plateF2; window._qbPlateColor2 = d.slice(); window._qbPlate2Has = has2;
+    const st = { texels: n2, triangles: n / 3, ms: Date.now() - t0 }; console.log('[S62] plate 2: ' + JSON.stringify(st)); return st;
+}
+
+// the plate's triangle index from a plate depth (source rows): a triangle is kept when the rim law joins all three of its
+// edges on that plate (S2b.4), and an all-sky triangle is left to the sky layer (S2c; drawn twice it would z-fight).
+// Used by the source hole's finish and by the SD return's import, so the plate tears where its NEW depth does.
+function bgRetearPlate(pl, rl, pw, ph) {
+    const L = mediaLayers[0], gQ = bgLayerMesh.geometry, gp = L.mesh.geometry.parameters, vw = gp.widthSegments + 1, vh = gp.heightSegments + 1;
+    const sx = (pw - 1) / (vw - 1), sy = (ph - 1) / (vh - 1), ti = (vi) => Math.round(((vi / vw) | 0) * sy) * pw + Math.round((vi % vw) * sx);
+    const skyOn = bgSkyInfOn(), sq = skyOn ? bgSkyQ() : -1;
+    const out = new Uint32Array((vw - 1) * (vh - 1) * 6); let n = 0, drop = 0, sky = 0;
+    const t3 = (a, b, c) => { const A = ti(a), B = ti(b), C = ti(c);
+        if (skyOn && pl[A] < sq && pl[B] < sq && pl[C] < sq) { sky++; return; }
+        if (rl.joinedIdx(A, B, pl, pw) && rl.joinedIdx(B, C, pl, pw) && rl.joinedIdx(A, C, pl, pw)) { out[n++] = a; out[n++] = b; out[n++] = c; } else drop++; };
+    for (let iy = 0; iy < vh - 1; iy++) for (let ix = 0; ix < vw - 1; ix++) { const a = ix + vw * iy, b = ix + vw * (iy + 1), c = ix + 1 + vw * (iy + 1), d = ix + 1 + vw * iy; t3(a, b, d); t3(b, c, d); }
+    gQ.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1));
+    return { kept: n / 3, dropped: drop, skyLeftToSkyLayer: sky };
 }
 
 // S61 §10: THE INPAINT MASK'S PINHOLES. About 95 % of the enclosed holes in the placeholder set are specks of the occluder
@@ -741,7 +799,8 @@ function bgMGSolve(nN, adjStart, adjList, adjW, fixMask, fixVals, xyB, TOL, x0s)
 function bgRimLawAtStep(rl, step) {
     const tolV = (d) => Math.abs(rl.dispAt(Math.min(1, d + step)) - rl.dispAt(Math.max(0, d - step))) + 1e-9;
     const joinedIdx = (i, j, dQ, pw) => {
-        const dA = dQ[i], dB = dQ[j]; if (rl.joined(dA, dB)) return true;
+        const dA = dQ[i], dB = dQ[j]; if (rl.sky >= 0 && (dA < rl.sky || dB < rl.sky)) return (dA < rl.sky) && (dB < rl.sky);   // S2c: sky joins nothing but sky
+        if (rl.joined(dA, dB)) return true;
         const N2 = dQ.length, xi = i % pw, yi = (i - xi) / pw, xj = j % pw, yj = (j - xj) / pw, dx = xj - xi, dy = yj - yi;
         const a = rl.dispAt(dA), b = rl.dispAt(dB), tol = Math.max(tolV(dA), tolV(dB));
         const xp = xi - dx, yp = yi - dy; if (xp >= 0 && xp < pw && yp >= 0 && (yp * pw + xp) < N2) { const pr = 2 * a - rl.dispAt(dQ[yp * pw + xp]); if (Math.abs(b - pr) <= tol) return true; }
@@ -876,7 +935,7 @@ function bgSourceHole(o) {
     const { dQ, rgb, pw, ph, step } = o, rl = bgRimLawAtStep(o.rl, step), N = pw * ph, t0 = Date.now(), st = { step };
     const fadeH = (typeof bgViewFadeEndDeg === 'number' ? bgViewFadeEndDeg : 45) * Math.PI / 180, env = (typeof bgEnvAspect === 'function') ? bgEnvAspect() : Math.tan(Math.PI / 6);
     const ex = o.D * Math.tan(fadeH), ppm = pw / o.layerW;
-    const s = new Float64Array(N); for (let i = 0; i < N; i++) { const ze = rl.zeAt(dQ[i]); s[i] = ex * (o.D - ze) / ze * ppm; }
+    const s = new Float64Array(N); for (let i = 0; i < N; i++) { const ze = rl.zeAt(dQ[i]); s[i] = (rl.sky >= 0 && dQ[i] < rl.sky) ? -ex * ppm : ex * (o.D - ze) / ze * ppm; }   // sky moves by the plane-at-infinity law (S2c): z/(D-z) -> -1
     const joined = (i, j) => rl.joinedIdx(i, j, dQ, pw);
     // rims as runs of torn steps, both axes
     const R = new Float64Array(N), F = new Float64Array(N).fill(Infinity), rampF = new Float64Array(N).fill(-Infinity);
@@ -923,15 +982,22 @@ function bgSourceHole(o) {
             if (nb > Bud[j] && dQ[j] > Fc[i] + 2 * step && moveOk(y, x, dy, dx)) { Bud[j] = nb; Fc[j] = Fc[i]; push(nb, j); }
         }
     }
+    // the far field (what the object code measures objects against, _planeObjects): the reach again with no budget, so it
+    // covers each occluder whole; a texel takes the far depth of the rim that reaches it first (breadth-first, joined
+    // 4-moves, "in front of that background by two steps"); everything else is its own far side
+    const FF = new Float64Array(N).fill(NaN); { const q = new Int32Array(N); let h = 0, t = 0;
+        for (let i = 0; i < N; i++) if (R[i] > 0) { FF[i] = F[i]; q[t++] = i; }
+        while (h < t) { const i = q[h++], y = (i / pw) | 0, x = i - y * pw;
+            for (const [dy, dx] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) { const j = idxOf(y + dy, x + dx); if (j < 0 || FF[j] === FF[j]) continue; if (dQ[j] > FF[i] + 2 * step && axOk(y, x, dy, dx)) { FF[j] = FF[i]; q[t++] = j; } } } }
     let hole = new Uint8Array(N); let nRamp = 0;
     for (let i = 0; i < N; i++) { const rp = isFinite(rampF[i]) && dQ[i] > rampF[i] + 2 * step; if (Bud[i] >= 0 || rp) hole[i] = 1; if (rp) nRamp++; }
     const ph0 = bgPinholeFilledMask(hole, dQ, pw, ph, step); hole = ph0.mask; st.rampInHole = nRamp; st.pinholes = ph0.holes; st.pinholesJoined = ph0.joined;
     // the membrane, rounds until every hole texel's fill lies behind its own source depth by two steps
     const TOL = (typeof o.tol === 'number') ? o.tol : 1e-10, NB = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-    function comps(mask) {                       // 4-connected components of a mask: label per texel (-1 outside)
+    function comps(mask, sidA) {                 // 4-connected components of a mask: label per texel (-1 outside); sidA: only within one surface
         const lab = new Int32Array(N).fill(-1); let nc = 0; const q = new Int32Array(N);
         for (let s0 = 0; s0 < N; s0++) { if (!mask[s0] || lab[s0] >= 0) continue; let h = 0, t = 0; q[t++] = s0; lab[s0] = nc;
-            while (h < t) { const i = q[h++], x = i % pw; for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) if (j >= 0 && mask[j] && lab[j] < 0) { lab[j] = nc; q[t++] = j; } }
+            while (h < t) { const i = q[h++], x = i % pw; for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) if (j >= 0 && mask[j] && lab[j] < 0 && (!sidA || sidA[j] === sidA[i])) { lab[j] = nc; q[t++] = j; } }
             nc++; }
         return { lab, nc };
     }
@@ -972,22 +1038,74 @@ function bgSourceHole(o) {
         const xS = warm ? [(() => { const x = new Float64Array(nS); for (let t = 0; t < M; t++) x[t] = warm.soft[di[t]]; for (let p = 0; p < P; p++) { x[M + p] = warm.soft[pi[p]]; x[M + P + p] = dQ[pi[p]]; } return x; })()] : null;
         const cs = csr(adjS); const soft = bgMGSolve(nS, cs.st0, cs.li, cs.w, fixS, [valS], xyS, TOL, xS).outs[0];
         const keep = new Uint8Array(N).fill(1); let dropped = 0; for (let p = 0; p < P; p++) if (Math.abs(soft[M + p] - dQ[pi[p]]) > 2 * step) { keep[pi[p]] = 0; dropped++; }
-        // hard: hole texels free, kept pins fixed (only the pairs that pass the lip test link)
+        const tSv = Date.now(); const sv = surfaces(di, lab, nc, pi, pinSet, keep); msSurf += Date.now() - tSv;
+        const sid = sv.sid, rc = sv.split ? comps(hole, sid) : { lab, nc }, rlab = rc.lab, rnc = rc.nc;   // regions: components within one surface
+        // hard: hole texels free, kept pins fixed (only the pairs that pass the lip test link, each part to its own surface)
         const adjH = []; for (let n = 0; n < M + P; n++) adjH.push([]);
-        const hasPin = new Uint8Array(nc);
-        for (let t = 0; t < M; t++) { const i = di[t]; for (const j of nbrs(i)) { if (j < 0) continue; if (hole[j]) adjH[t].push(idx[j]); else if (pinSet[j] && keep[j] && dQ[j] < dQ[i] - 2 * step) { adjH[t].push(pidx[j]); hasPin[lab[i]] = 1; } } }
+        const hasPin = new Uint8Array(rnc);
+        for (let t = 0; t < M; t++) { const i = di[t]; for (const j of nbrs(i)) { if (j < 0) continue; if (hole[j]) { if (sid[j] === sid[i]) adjH[t].push(idx[j]); } else if (pinSet[j] && keep[j] && dQ[j] < dQ[i] - 2 * step && sid[j] === sid[i]) { adjH[t].push(pidx[j]); hasPin[rlab[i]] = 1; } } }
         const fixH = new Uint8Array(M + P), xyH = new Int32Array(2 * (M + P)), vH = [0, 1, 2, 3].map(() => new Float64Array(M + P));
-        for (let t = 0; t < M; t++) { const i = di[t]; xyH[2 * t] = i % pw; xyH[2 * t + 1] = (i / pw) | 0; if (!hasPin[lab[i]]) fixH[t] = 1; }
+        for (let t = 0; t < M; t++) { const i = di[t]; xyH[2 * t] = i % pw; xyH[2 * t + 1] = (i / pw) | 0; if (!hasPin[rlab[i]]) fixH[t] = 1; }
         for (let p = 0; p < P; p++) { const j = pi[p]; xyH[2 * (M + p)] = j % pw; xyH[2 * (M + p) + 1] = (j / pw) | 0; fixH[M + p] = 1; vH[0][M + p] = dQ[j]; const c3 = pinColour(j); for (let c = 0; c < 3; c++) vH[c + 1][M + p] = c3[c]; }
         // a component with no pin: flat at its farthest border texel (depth and colour)
-        const far = new Int32Array(nc).fill(-1);
-        for (let t = 0; t < M; t++) { const i = di[t], c = lab[i]; if (hasPin[c]) continue; for (const j of nbrs(i)) if (j >= 0 && !hole[j] && (far[c] < 0 || dQ[j] < dQ[far[c]])) far[c] = j; }
-        for (let t = 0; t < M; t++) { const c = lab[di[t]]; if (hasPin[c]) continue; const j = far[c]; vH[0][t] = j >= 0 ? dQ[j] : dQ[di[t]]; for (let ch = 0; ch < 3; ch++) vH[ch + 1][t] = j >= 0 ? rgb[3 * j + ch] : rgb[3 * di[t] + ch]; }
+        const far = new Int32Array(rnc).fill(-1);
+        for (let t = 0; t < M; t++) { const i = di[t], c = rlab[i]; if (hasPin[c]) continue; for (const j of nbrs(i)) if (j >= 0 && !hole[j] && (far[c] < 0 || dQ[j] < dQ[far[c]])) far[c] = j; }
+        for (let t = 0; t < M; t++) { const c = rlab[di[t]]; if (hasPin[c]) continue; const j = far[c]; vH[0][t] = j >= 0 ? dQ[j] : dQ[di[t]]; for (let ch = 0; ch < 3; ch++) vH[ch + 1][t] = j >= 0 ? rgb[3 * j + ch] : rgb[3 * di[t] + ch]; }
         const xH = warm ? [(() => { const x = Float64Array.from(vH[0]); for (let t = 0; t < M; t++) if (!fixH[t]) x[t] = warm.depth[di[t]]; return x; })()] : null;
         const ch_ = csr(adjH); const hard = bgMGSolve(M + P, ch_.st0, ch_.li, ch_.w, fixH, chans.map(c => vH[c]), xyH, TOL, xH);
         const softT = new Float64Array(N); for (let t = 0; t < M; t++) softT[di[t]] = soft[t]; for (let p = 0; p < P; p++) softT[pi[p]] = soft[M + p];
-        let noPin = 0; for (let c = 0; c < nc; c++) if (!hasPin[c]) noPin++;
-        return { di, U: hard.outs, softT, keep, info: { pins: P, pinsDropped: dropped, components: nc, componentsNoPin: noPin, iters: hard.iters } };
+        let noPin = 0; for (let c = 0; c < rnc; c++) if (!hasPin[c]) noPin++;
+        return { di, U: hard.outs, softT, keep, sid, surf: sv, pi, info: { pins: P, pinsDropped: dropped, components: nc, componentsNoPin: noPin, componentsSplit: sv.split, iters: hard.iters } };
+    }
+    // S62 §7 SURFACES. The kept pins of a component, in runs (8-adjacent pins the rim law joins: the straight-slope join on
+    // the axes, the ratio test on the diagonals), merged into one surface when their median depths pass the ratio test.
+    // With one surface every texel and pin of the component has the same id and nothing downstream changes. With two or
+    // more (troll: the far wall and a mid-depth surface around one figure; S15: a sign before the hill and the sky), one
+    // membrane would ramp between them, a blend of two surfaces the picture never shows; the component is split by a
+    // random walker instead (Grady 2006): one harmonic per surface, 1 at its own pins and 0 at the others, and each texel
+    // takes the surface whose harmonic is largest. Each part is then filled from its own surface only, and the farthest
+    // surface continues behind the nearer parts as the second layer. Sky is its own surface (the rim law joins sky only
+    // to sky), so a part that continues the sky is sky.
+    function surfaces(di, lab, nc, pi, pinSet, keep) {
+        const sid = new Int32Array(N).fill(-1), pc = new Int32Array(N).fill(-1);
+        for (const i of di) for (const j of nbrs(i)) if (j >= 0 && pinSet[j] && keep[j] && pc[j] < 0) pc[j] = lab[i];
+        const par = new Int32Array(N); const find = (a) => { while (par[a] !== a) { par[a] = par[par[a]]; a = par[a]; } return a; };
+        const kp = []; for (const j of pi) if (pc[j] >= 0) { par[j] = j; kp.push(j); }
+        for (const i of kp) { const x = i % pw, y = (i / pw) | 0;
+            for (const [dy, dx] of [[0, 1], [1, 0], [1, 1], [1, -1]]) { const xx = x + dx, yy = y + dy; if (xx < 0 || xx >= pw || yy >= ph) continue; const j = yy * pw + xx; if (pc[j] !== pc[i]) continue;
+                if ((dy && dx) ? rl.joined(dQ[i], dQ[j]) : rl.joinedIdx(i, j, dQ, pw)) { const a = find(i), b = find(j); if (a !== b) par[a] = b; } } }
+        const runs = new Map(); for (const j of kp) { const r = find(j); let R0 = runs.get(r); if (!R0) { R0 = { c: pc[j], v: [], m: [] }; runs.set(r, R0); } R0.v.push(dQ[j]); R0.m.push(j); }
+        const byC = []; for (let c = 0; c < nc; c++) byC.push([]);
+        for (const R0 of runs.values()) { const v = Float64Array.from(R0.v).sort(); R0.med = v[v.length >> 1]; byC[R0.c].push(R0); }
+        const list = []; let split = 0;
+        const cl = new Array(nc);
+        // a surface seen along fewer than WASH_RUN pins is no wider than an ink line (WASH_RUN is twice the widest measured)
+        // and cannot be told from one: its pins are dropped like the blur's leftovers (keep = 0)
+        for (let c = 0; c < nc; c++) { const rs = byC[c].sort((a, b) => b.m.length - a.m.length); const C0 = [];
+            for (const R0 of rs) { let k = C0.findIndex(S => rl.joined(S.med, R0.med)); if (k < 0) { k = C0.length; C0.push({ med: R0.med, n: 0, runs: [] }); } C0[k].n += R0.m.length; C0[k].runs.push(R0); }
+            const C = []; for (const S of C0) { if (S.n < WASH_RUN && C0.length > 1) { for (const R0 of S.runs) for (const j of R0.m) keep[j] = 0; continue; } S.id = list.length + C.length; C.push(S); for (const R0 of S.runs) for (const j of R0.m) sid[j] = S.id; }
+            for (const S of C) list.push({ comp: c, med: S.med, pins: S.n }); cl[c] = C; if (C.length > 1) split++; }
+        // one surface: the whole component takes it
+        for (const i of di) { const C = cl[lab[i]]; if (C && C.length === 1) sid[i] = C[0].id; }
+        if (!split) return { sid, list, split };
+        // the random walker on the split components: nodes = their hole texels + their kept pins (fixed), one right-hand side per surface rank
+        const K = Math.max(...cl.map(C => C ? C.length : 0)), sub = [], sidx = new Int32Array(N).fill(-1);
+        for (const i of di) { const C = cl[lab[i]]; if (C && C.length > 1) { sidx[i] = sub.length; sub.push(i); } }
+        const Ms = sub.length, pins2 = []; for (const j of kp) { const C = cl[pc[j]]; if (C && C.length > 1) { sidx[j] = Ms + pins2.length; pins2.push(j); } }
+        const nR = Ms + pins2.length, adj = []; for (let n = 0; n < nR; n++) adj.push([]);
+        for (let t = 0; t < Ms; t++) { const i = sub[t]; for (const j of nbrs(i)) { if (j < 0 || sidx[j] < 0) continue; if (hole[j] || dQ[j] < dQ[i] - 2 * step) { adj[t].push(sidx[j]); if (sidx[j] >= Ms) adj[sidx[j]].push(t); } } }
+        const st0 = new Int32Array(nR + 1); for (let n = 0; n < nR; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[nR]); for (let n = 0; n < nR; n++) li.set(adj[n], st0[n]);
+        // K-1 harmonics (they sum to 1, so the last is the remainder); a label needs only the ORDER of the harmonics, so the
+        // solve stops at a relative residual of 1e-4 (the depth membranes run to 1e-8 or finer)
+        const fix = new Uint8Array(nR), xy = new Int32Array(2 * nR), vals = []; for (let k = 0; k < K - 1; k++) vals.push(new Float64Array(nR));
+        for (let n = 0; n < nR; n++) { const i = n < Ms ? sub[n] : pins2[n - Ms]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0; }
+        for (let e = 0; e < pins2.length; e++) { const j = pins2[e], n = Ms + e, C = cl[pc[j]]; fix[n] = 1; const k = C.findIndex(S => S.id === sid[j]); if (k >= 0 && k < K - 1) vals[k][n] = 1; }
+        const U = bgMGSolve(nR, st0, li, new Float64Array(li.length).fill(1), fix, vals, xy, 1e-4).outs;
+        for (let t = 0; t < Ms; t++) { const i = sub[t], C = cl[lab[i]]; let kb = 0, ub = -Infinity, rest = 1;
+            for (let k = 0; k < C.length; k++) { const u = k < K - 1 ? U[k][t] : rest; if (k < K - 1) rest -= U[k][t];
+                if (u > ub) { ub = u; kb = k; } }
+            sid[i] = C[kb].id; }
+        return { sid, list, split, cl };
     }
     // the rounds. A global round solves depth only, warm-started from the last. After it, the texels dropped are few and
     // the fill changes only near them, so LOCAL rounds follow: the hole texels in small boxes around the dropped ones are
@@ -995,10 +1113,10 @@ function bgSourceHole(o) {
     // held at the current fill, the same pins, the same rule; repeat until nothing drops. Then a global round checks the
     // whole hole again (new drops -> more local rounds). The boxes are 33x33 texels around each drop, merged. The last global round decides: every hole texel's fill lies
     // behind its own source depth by two steps, and the fill is a true membrane on the final hole.
-    let rounds = 0, localRounds = 0, left = 0, res, warm = null;
+    let rounds = 0, localRounds = 0, left = 0, res, warm = null, msSurf = 0;
     const depthNow = new Float64Array(N);
     const RL = 32;   // the local box's half-width in texels: a changed boundary moves a membrane mostly within a few of its own widths
-    const localSolve = (drops, keep) => {
+    const localSolve = (drops, keep, sid) => {
         const inR = new Uint8Array(N);                                             // the union of the boxes around each drop
         for (const i of drops) { const x = i % pw, y = (i / pw) | 0; for (let yy = Math.max(0, y - RL); yy <= Math.min(ph - 1, y + RL); yy++) for (let xx = Math.max(0, x - RL); xx <= Math.min(pw - 1, x + RL); xx++) inR[yy * pw + xx] = 1; }
         const reg = []; const ridx = new Int32Array(N).fill(-1);
@@ -1007,6 +1125,7 @@ function bgSourceHole(o) {
         const extra = [], eidx = new Map(); const ext = (j) => { let k = eidx.get(j); if (k === undefined) { k = M + extra.length; eidx.set(j, k); extra.push(j); } return k; };
         const adj = []; for (let t = 0; t < M; t++) adj.push([]);
         for (let t = 0; t < M; t++) { const i = reg[t]; for (const j of nbrs(i)) { if (j < 0) continue;
+            if (sid[j] >= 0 && sid[j] !== sid[i]) continue;                                           // another surface's part or pin (§7)
             if (ridx[j] >= 0) adj[t].push(ridx[j]);
             else if (hole[j]) adj[t].push(ext(j));                                                    // held at the current fill
             else if (keep[j] && dQ[j] < dQ[i] - 2 * step) adj[t].push(ext(j)); } }                    // a pin
@@ -1032,7 +1151,7 @@ function bgSourceHole(o) {
         if (!drops.length) break;
         while (drops.length) {
             for (const i of drops) hole[i] = 0; left += drops.length;
-            const tL = Date.now(); drops = localSolve(drops, res.keep); localRounds++;
+            const tL = Date.now(); drops = localSolve(drops, res.keep, res.sid); localRounds++;
             if (o.trace) o.trace.push({ round: localRounds, global: false, ms: Date.now() - tL, dropped: drops.length });
         }
         warm = { depth: Float64Array.from(depthNow), soft: res.softT };
@@ -1041,8 +1160,36 @@ function bgSourceHole(o) {
     const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
     for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
     let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
-    Object.assign(st, res.info, { hole: nh, notBehindLeftHole: left, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
-    return { plate, wash, hole, stats: st };
+    // the second layer (§7): in a split component the farthest surface continues behind the nearer parts, one membrane over
+    // the whole component pinned at that surface's own pins; a texel of a nearer part carries it where it lies behind that
+    // part's fill by two steps (what shows once the nearer continuation has slid past, S4's arrival order in 2-D)
+    let plate2 = null, wash2 = null, has2 = null, n2 = 0;
+    if (res.surf && res.surf.split) {
+        const sv = res.surf, sid = res.sid, farId = new Map();
+        for (const C of sv.cl) if (C && C.length > 1) { let f = C[0]; for (const S of C) if (S.med < f.med) f = S; farId.set(f.id, true); }
+        const sub = [], sx = new Int32Array(N).fill(-1);
+        for (const i of res.di) { const C = sid[i] >= 0 ? sv.list[sid[i]] : null; if (!C) continue; const CC = sv.cl[C.comp]; if (CC && CC.length > 1) { sx[i] = sub.length; sub.push(i); } }
+        const Ms = sub.length, pins = []; for (const j of res.pi) if (res.keep[j] && sid[j] >= 0 && farId.has(sid[j]) && !hole[j]) { sx[j] = Ms + pins.length; pins.push(j); }
+        const nR = Ms + pins.length, adj = []; for (let n = 0; n < nR; n++) adj.push([]);
+        for (let t = 0; t < Ms; t++) { const i = sub[t]; for (const j of nbrs(i)) { if (j < 0 || sx[j] < 0) continue; if (sx[j] < Ms || dQ[j] < dQ[i] - 2 * step) { adj[t].push(sx[j]); if (sx[j] >= Ms) adj[sx[j]].push(t); } } }
+        const st0 = new Int32Array(nR + 1); for (let n = 0; n < nR; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[nR]); for (let n = 0; n < nR; n++) li.set(adj[n], st0[n]);
+        const fix = new Uint8Array(nR), xy = new Int32Array(2 * nR), v4 = [0, 1, 2, 3].map(() => new Float64Array(nR));
+        for (let n = 0; n < nR; n++) { const i = n < Ms ? sub[n] : pins[n - Ms]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0; }
+        for (let e = 0; e < pins.length; e++) { const j = pins[e], n = Ms + e; fix[n] = 1; v4[0][n] = dQ[j]; const c3 = pinColour(j); for (let c = 0; c < 3; c++) v4[c + 1][n] = c3[c]; }
+        // a part of the split component with no path to a far pin keeps plate 1 (fixed at it; not a second layer)
+        { const seen = new Uint8Array(nR), q = []; for (let n = Ms; n < nR; n++) { seen[n] = 1; q.push(n); } while (q.length) { const n = q.pop(); for (let k = st0[n]; k < st0[n + 1]; k++) { const m = li[k]; if (!seen[m]) { seen[m] = 1; q.push(m); } } }
+          for (let t = 0; t < Ms; t++) if (!seen[t]) { fix[t] = 1; v4[0][t] = plate[sub[t]]; for (let c = 0; c < 3; c++) v4[c + 1][t] = wash[3 * sub[t] + c]; } }
+        const U2 = bgMGSolve(nR, st0, li, new Float64Array(li.length).fill(1), fix, v4, xy, TOL).outs;
+        plate2 = Float32Array.from(plate); wash2 = Uint8ClampedArray.from(wash); has2 = new Uint8Array(N);
+        for (let t = 0; t < Ms; t++) { const i = sub[t]; if (farId.has(sid[i]) || fix[t]) continue; if (U2[0][t] < plate[i] - 2 * step) { has2[i] = 1; n2++; plate2[i] = U2[0][t]; for (let c = 0; c < 3; c++) wash2[3 * i + c] = Math.round(Math.min(255, Math.max(0, U2[c + 1][t]))); } }
+        { let nf = 0, below = 0, nearT = 0; for (let t = 0; t < Ms; t++) { if (fix[t]) nf++; const i = sub[t]; if (!farId.has(sid[i])) { nearT++; if (U2[0][t] < plate[i]) below++; } } st.dbg2 = { Ms, pins: pins.length, fixedUnreached: nf, nearTexels: nearT, farBelowPlate: below }; }
+        st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
+    }
+    st.secondLayerTexels = n2; st.msSurfaces = msSurf;
+    const far = Float32Array.from(dQ); let nFar = 0;
+    for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }
+    Object.assign(st, res.info, { hole: nh, farFieldTexels: nFar, notBehindLeftHole: left, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
+    return { plate, wash, hole, far, plate2, wash2, has2, stats: st };
 }
 
 function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
@@ -1160,7 +1307,7 @@ function bgRimLawFor(pwArg, phArg) {
         if (xn >= 0 && xn < pw2 && yn >= 0 && (yn * pw2 + xn) < N2) { const pr = 2 * b - dispAt(dQ[yn * pw2 + xn]); if (Math.abs(a - pr) <= tol) return true; }
         return false;
     };
-    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, tolAtG, q, qg };
+    _bgRimLaw = { key, t, gmin, hfov, D, zeAt, joined, joinedIdx, dispAt, tolAt, tolAtG, q, qg, sky: skyOn ? sq : -1 };   // sky: the sky threshold (-1 = sky at infinity off)
     console.log('[S2b] rim law: t = ' + t.toFixed(4) + ' (hfov ' + (hfov * 180 / Math.PI).toFixed(1) + ' deg / ' + pwv + ' px, g_min ' + gmin + ' deg); eye distance spans ' + ze[0].toFixed(4) + '..' + ze[N].toFixed(4) + ' (ratio ' + (ze[0] / ze[N]).toFixed(3) + ')');
     return _bgRimLaw;
 }
@@ -10911,12 +11058,12 @@ function _planeObjects(force) {
     // content they cause), not by area, so a hill in front of the sky ranks below the tree; components with no band texel
     // hide nothing inside the envelope and are not exported.
     const sz = window._qbSize, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF, ff = window._geoFarField;
-    if (!sz || !dQ || !dis || !pF || !ff) return null;
+    if (!sz || !dQ || !dis || !pF) return null;
     const pw = sz.pw, ph = sz.ph, N = pw * ph;
-    if (ff.length !== N) return null;
     // S28: an external object map (SAM 2.1 masks imported through _setObjectIds / Import object masks) replaces the depth-only
     // objects for everything downstream (export, object view, layer import, highlight) as long as it fits this plate grid
     if (window._extObj && window._extObj.ids && window._extObj.ids.length === N && force !== 'depth') { window._qbObjIds = window._extObj.ids; window._qbObjInfo = window._extObj.objects; window._qbObjOverflow = 0; window._qbObjNoDemand = 0; return { ids: window._extObj.ids, objects: window._extObj.objects, source: window._extObj.source }; }
+    if (!ff || ff.length !== N) return null;   // (after the external map: a SAM map needs no far field)
     if (!force && window._qbObjIds && window._qbObjInfo && window._qbObjIds.length === N) return { ids: window._qbObjIds, objects: window._qbObjInfo };
     const pS = new Float32Array(N); for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) pS[y * pw + x] = pF[(ph - 1 - y) * pw + x];
     const TOLB = (typeof fgTearStep === 'number' && fgTearStep > 0) ? fgTearStep : 0.06;
@@ -11722,6 +11869,9 @@ window._importPlaneReturn = function (d) {
         } catch (eT) { st.retear = { error: String(eT) }; }
         for (let i = 0; i < N; i++) if (band[i]) pF[flip(i)] = sol.d[i];
         const dm = bgLayerMesh.material.uniforms.displacementMap; if (dm && dm.value) dm.value.needsUpdate = true;
+        // S62 source mode: the plate was indexed on the hole's own depth (bgFinishSourceHole), so the index is rebuilt on the
+        // returned depth with the same rule, and the plate tears where the painted surface does
+        if (window._qbSrcHole) { try { const pl = new Float32Array(N); for (let i = 0; i < N; i++) pl[i] = pF[flip(i)]; st.retear = Object.assign(st.retear || {}, { rebuilt: bgRetearPlate(pl, bgRimLawFor(pw, ph), pw, ph), note: 'source mode: the plate index is rebuilt on the returned depth' }); } catch (eR) { st.retear = Object.assign(st.retear || {}, { rebuildError: String(eR) }); } }
         // the sibling meshes (plate 2, the ring, the step faces) clone matQ and share this same texture object
         for (const m of (bgLayerMesh.userData.objLayers || [])) { const u = m.material && m.material.uniforms; if (u && u.displacementMap && u.displacementMap.value === (dm && dm.value)) u.displacementMap.value.needsUpdate = true; }
     }
@@ -12071,7 +12221,7 @@ function exportSDBundle() {
                     depth: { convention: 'normalised disparity d in [0,1] (1 = near, 0 = far); the app maps d to view depth with outerVolumeDepth / innerVolumeDepth / currentNormPortalPlane (the portal depth law)', outerVolumeDepth: (typeof outerVolumeDepth === 'number') ? outerVolumeDepth : null, innerVolumeDepth: (typeof innerVolumeDepth === 'number') ? innerVolumeDepth : null, currentNormPortalPlane: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : null,
                              sourceGrid: window._qbSrcGrid ?? null, sourceNoiseSigma: window._qbSrcNoise ?? null, visibleStep: window._qbVisStep ?? null, effectiveQuantum: window._qbSrcQuantum ?? null, skyThreshold: skyOn ? sq : null },
                     envelope: { halfAngleHDeg: bgViewFadeEndDeg, halfAngleVDeg: (typeof bgViewFadeEndDegV === 'number') ? bgViewFadeEndDegV : null, aspect: bgEnvAspect(), eyeDistanceD: Dm, terrarium: [terrariumWidth, terrariumHeight] },
-                    groundPlane: window._geoGround || null, bandTierDeg: window._bandTierDeg || 0,
+                    groundPlane: window._geoGround || null, bandTierDeg: (window._srcHole ? 0 : (window._bandTierDeg || 0)),
                     counts: { band: cnt(dis), carriers: cnt(car), placeholders: cnt(paint), paintClass1: cnt(paint, (v) => v === 1), bandOutsideTier: cnt(paint, (v) => v === 2), carrierOnly: cnt(paint, (v) => v === 3), plate2: has2 ? cnt(has2) : 0, sky: skyOn ? cnt(dQ, (v) => v < sq) : 0, torn: cnt(window._qbPlateTorn), clones: window._qbCloneCount ?? null },
                     placeholderClasses: { 1: 'paint: synthesised colour uncovered inside the tier (or no tier)', 2: 'band outside the tier: synthesised, the wash may stay', 3: 'carrier-only: synthesised for continuity, never demanded', 4: 'plate 2 (its own files)' },
                     liveView: 'SD regions: cyan = class 1, blue = 2, teal = 3, magenta = plate 2, orange = beyond the frame, backdrop = uncovered',
@@ -15656,18 +15806,19 @@ function bgBuildBackgroundLayerCore() {
         // Identical look, zero flicker, zero per-frame cost, sub-second.
         window._bgQuickBaked = false;   // set true only by the quick branch below
         if (typeof bgQuickBake !== 'undefined' && bgQuickBake) {
-            const tQ0 = Date.now();
+            const tQ0 = Date.now(); console.log('[QUICK-BAKE] start');
             const dImgQ = L.textures.depth.image2d || L.textures.depth.image || (L.elements && L.elements.depth);
             const pw = dImgQ.naturalWidth || dImgQ.width, ph = dImgQ.naturalHeight || dImgQ.height;
             const cvQ = document.createElement('canvas'); cvQ.width = pw; cvQ.height = ph;
             const cxQ = cvQ.getContext('2d', { willReadFrequently: true });
-            cxQ.drawImage(dImgQ, 0, 0, pw, ph);
-            const dpxQ = cxQ.getImageData(0, 0, pw, ph).data;
+            // the 8-bit readback, only when the 8-bit path needs it: with a 16-bit depth it was drawn and thrown away, and
+            // the canvas readback cost 7 s of a starwatcher bake under SwiftShader (S62 §6)
+            let dpxQ = null; const dpxQf = () => { if (!dpxQ) { cxQ.drawImage(dImgQ, 0, 0, pw, ph); dpxQ = cxQ.getImageData(0, 0, pw, ph).data; } return dpxQ; };
             const PNq = pw * ph;
             const dQ = new Float32Array(PNq);
             if (L._depth16 && L._depth16.w === pw && L._depth16.h === ph) {
                 dQ.set(L._depth16.data);                        // A99: float ingest, 65535 levels
-                console.log('[QUICK-BAKE] a99: depth read at 16-bit precision (quantum 1/65535)');
+                console.log('[QUICK-BAKE] a99: depth read at 16-bit precision (quantum 1/65535) (' + (Date.now() - tQ0) + ' ms into the bake)');
                 // S61: the colour-guided ramp collapse, on the 16-bit path the old collapse never reached (panel 'ramps';
                 // window._rampColour 1 = strong / v1, 2 = safe / v2; off by default until the live pass)
                 if (window._rampColour === 1 || window._rampColour === 2) {
@@ -15684,7 +15835,7 @@ function bgBuildBackgroundLayerCore() {
                     } catch (eR) { console.warn('[S61] ramp collapse failed, raw depth kept:', eR); }
                 }
             } else {
-                for (let i = 0; i < PNq; i++) dQ[i] = dpxQ[i*4] / 255;
+                { const px = dpxQf(); for (let i = 0; i < PNq; i++) dQ[i] = px[i*4] / 255; }
             }
             // A86 DEQUANTIZE — the source depth is an 8-BIT PNG: every
             // smooth slope arrives as a staircase of exact 1/255 terraces
@@ -15804,10 +15955,15 @@ function bgBuildBackgroundLayerCore() {
                     const lutE = bgShiftLUTFor(pw, ph), stepE = 1 / Math.max(1e-6, Math.max(Math.abs(lutE.m0), Math.abs(lutE.m1)));
                     const es = bgEdgeSharpen(dQ, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE);
                     const ink = bgInkAdopt(es.out, rgbE, pw, ph, bgRimLawFor(pw, ph), stepE); dQ.set(ink.out);
+                    if (es.stats.changed || ink.stats.adopted) dqDirty = true;   // the foreground renders the depth the hole is built on
                     window._qbEdgeSharpen = Object.assign({ ms: Date.now() - t0e, ink: ink.stats }, es.stats);
                     console.log('[S62] occlusion edges sharpened: ' + JSON.stringify(window._qbEdgeSharpen));
                 } catch (eE) { console.warn('[S62] edge sharpening failed, the depth stands as loaded:', eE); }
             }
+            // S62: in source mode the per-line background (band, plugs, far side, wash, plate 2, step faces, clamps, the
+            // plate's own tear, the post-bake fill) is skipped: bgApplySourceHole replaces all of it. Kept: the depth prep
+            // that builds dQ, the foreground and its tear, the plate's mesh/material/textures, the sky layer, the margin.
+            const _srcOnly = !!window._srcHole && bgFarRuleOn();
             // A127b PRINT k. k is the screen displacement in SOURCE TEXELS
             // between the near and far ends of the depth range, at the rim of
             // the supported cone. Nearly every open thread in this arc is one
@@ -16348,7 +16504,7 @@ function bgBuildBackgroundLayerCore() {
             // neighbouring plate (the far surface continues under the ink).
             // A final sandwich pass seals 1-2px slivers (the ribbon
             // highlight between its two outlines).
-            if (_dirPlateOn && L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
+            if (!_srcOnly && _dirPlateOn && L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) {
                 const strokeC = L._strokeMask;
                 const passesC = Math.max(3, Math.round(5 * pw / 1200));
                 let addedC = 0;
@@ -16456,8 +16612,8 @@ function bgBuildBackgroundLayerCore() {
             // ground at the base, sky at the head, transition at the occluded
             // horizon. No per-image constant. A detached occluder (glider) has
             // sky both below and above, so it stays at sky depth.
-            if (window._plugConeDepth) {
-                // plateF stays = plateQ (cone floor)
+            if (window._plugConeDepth || _srcOnly) {
+                // plateF stays = plateQ (cone floor); S62 source mode: the hole replaces it
             } else if (window._plugGroundUp) {
                 // A59e GROUND-CONTINUATION FLUSH DEPTH (opt-in). The surface behind
                 // a grounded occluder is the GROUND it stands on continuing up to
@@ -16659,7 +16815,7 @@ function bgBuildBackgroundLayerCore() {
             let inkDT = null;
             const washSrc = (L._washInkMask && L._washInkW === pw && L._washInkH === ph) ? L._washInkMask
                           : (L._strokeMask && L._strokeMaskW === pw && L._strokeMaskH === ph) ? L._strokeMask : null;
-            if (washSrc) {
+            if (washSrc && !_srcOnly) {
                 const sm = washSrc;
                 // A50: the wash runs at CANVAS resolution but the mask is at
                 // SOURCE resolution. Two leaks at 1920+ sources: (a) NEAREST
@@ -16715,7 +16871,7 @@ function bgBuildBackgroundLayerCore() {
                 if ('colorSpace' in inkDT) inkDT.colorSpace = THREE.NoColorSpace;
             }
             // colour wash: the existing one-shot pull-push against the plate depth
-            if (pullPyramidTargets.length >= 2 && pullMaterial && pushMaterial) {
+            if (!_srcOnly && pullPyramidTargets.length >= 2 && pullMaterial && pushMaterial) {
                 postProcessQuad.material = bgColorSeedMaterial;
                 bgColorSeedMaterial.uniforms.tColor.value = L.textures.color;
                 bgColorSeedMaterial.uniforms.tSrcDepth.value = L.textures.depth;
@@ -16803,7 +16959,7 @@ function bgBuildBackgroundLayerCore() {
                         if (g.index.array.length !== g.userData._fullIndex.length)
                             g.setIndex(new THREE.BufferAttribute(g.userData._fullIndex.slice(), 1));
                         console.log('[QUICK-BAKE] FG intact connected mesh (pre-tear disabled by flag)');
-                    } else {
+                    } else if (!(_srcOnly && fgPreTear)) {   // S62 source mode: A212 below does the same rim-law tear
                     const srcI = g.userData._fullIndex;
                     const gp = g.parameters || {};
                     const vw = (gp.widthSegments || 0) + 1, vh = (gp.heightSegments || 0) + 1;
@@ -17003,6 +17159,13 @@ function bgBuildBackgroundLayerCore() {
             // outer ring takes those colours as Dirichlet values and the interior is the harmonic membrane between
             // them (Perez, Gangnet & Blake 2003), so the fill is smooth in 2D and made only of far-surface colours.
             let platePaintDT = null;   // C: the placeholder class texture (flipped rows like maskF); null -> the band (maskDT) stands in
+            if (_srcOnly) {   // S62: a canvas the hole's wash is written into (the source until then); S3 and A215 are skipped by it
+                const cImgS = (L.elements && L.elements.color) || L.textures.color.image;
+                const cvS = document.createElement('canvas'); cvS.width = pw; cvS.height = ph; const cxS = cvS.getContext('2d', { willReadFrequently: true }); cxS.drawImage(cImgS, 0, 0, pw, ph);
+                plateColorTex = new THREE.CanvasTexture(cvS); plateColorTex.minFilter = THREE.LinearFilter; plateColorTex.magFilter = THREE.LinearFilter;
+                if ('colorSpace' in plateColorTex && L.textures.color && 'colorSpace' in L.textures.color) plateColorTex.colorSpace = L.textures.color.colorSpace;
+                if (window._plugSweepCapture) window._qbPlateColor = cxS.getImageData(0, 0, pw, ph).data.slice();
+            }
             if (!plateColorTex && bgFarRuleOn() && window._geoFarRim && window._geoFarRim.j && window._geoFarRim.j.length === 2 * PNq) {
                 try {
                     const tPC0 = Date.now(); const FR = window._geoFarRim;
@@ -17628,6 +17791,7 @@ function bgBuildBackgroundLayerCore() {
                 gQ.setIndex(new THREE.BufferAttribute(L.mesh.geometry.userData._fullIndex.slice(), 1));
                 gQ.userData = {};
                 console.log('[QUICK-BAKE] plate geometry decoupled from pre-torn FG (full index restored)');
+                if (!_srcOnly) {
                 // A87 PLATE TEAR AT ITS OWN CLIFFS. A50 restored the FULL
                 // index because the plate must not inherit the FG's holes
                 // (lifted ink strokes are cliffs; the plate re-drew the
@@ -18065,6 +18229,7 @@ function bgBuildBackgroundLayerCore() {
                                     (100 * dropP / Math.max(1, srcP.length / 3)).toFixed(2) + '% of the plate)');
                     }
                 }
+                }   // S62 !_srcOnly: the plate's clamps and its own tear (the hole's finish rebuilds the index)
             }
             // ================================================================
             // A214 THE PLUG-VISIBILITY CONTRACT
@@ -18567,7 +18732,7 @@ function bgBuildBackgroundLayerCore() {
             if (bgLayerMesh.userData && bgLayerMesh.userData.back) { bgLayerMesh.userData.back.visible = bgLayerMesh.visible; scene.add(bgLayerMesh.userData.back); }   // A257 object backs
             window._sdMaskTex = maskDT;
             window._bgQuickBaked = true;
-            try { bgPostBakeFill(); } catch (ePF) { console.warn('[S61] post-bake fill failed; the bake stands as it was:', ePF); }
+            if (!_srcOnly) try { bgPostBakeFill(); } catch (ePF) { console.warn('[S61] post-bake fill failed; the bake stands as it was:', ePF); }
             try { bgApplySourceHole(); } catch (eSH) { console.warn('[S62] source-anchored hole failed; the bake stands as it was:', eSH); }
             // ---- A212 THE QUICK FOREGROUND IS PRE-TORN TOO ----
             // The v1 FG pre-tear lives BELOW quick's return in this function, so
@@ -21901,7 +22066,14 @@ function _wireDebugSheetControls() {
                 // S62: the source-anchored hole needs one quick bake (the foreground mesh and its tears, the plate mesh and
                 // textures) and replaces the whole plate after it; the per-line pipeline (a pass-1 bake, the far field, the
                 // 17x5 sweep, the band, a pass-2 bake) would only be thrown away
-                if (window._srcHole) { try { window._plugSweepCapture = true; bgQuickBake = true; buildBackgroundLayer(); } catch (e) { console.error('[S62] source bake failed:', e); } }
+                if (window._srcHole) { try {
+                    // an earlier per-line bake's fields must not reach this one (_plugGeoBand clears the same at its start)
+                    for (const k of ['_plugRegion', '_bandReplace', '_carrierReplace', '_carrier2Replace', '_geoRef', '_geoFarField', '_geoGateField', '_geoObsDepth', '_geoObsCount', '_extraDemand',
+                                     '_qbPlatePaint', '_qbPlate2Has', '_qbSkyColor', '_qbMargin', '_qbObjIds', '_qbObjInfo', '_qbBandCont', '_qbBandTier', '_qbBandPose', '_qbPlateTorn', '_qbPlateF2', '_qbPlateColor2',
+                                     '_geoLipDeep', '_geoLipNear', '_geoLipSpread', '_geoKind', '_geoProv', '_geoClass', '_geoPost', '_geoRampDrop', '_geoLipBoundField',
+                                     '_geoFarKind', '_geoFarAxis', '_geoHorizon', '_geoFarRim', '_geoFarRimJ', '_geoFarRimW', '_geoFarField2', '_geoFarRim2', '_geoStepRims', '_geoSelfMirror',
+                                     '_geoFarConf', '_geoFarCandA', '_geoFarCandB', '_geoFarCandBoth', '_geoGround']) window[k] = null;
+                    window._plugCarve = false; window._plugSweepCapture = true; bgQuickBake = true; buildBackgroundLayer(); } catch (e) { console.error('[S62] source bake failed:', e); } }
                 else { try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true }); } catch (e) { console.error('[S6] plane bake failed:', e); } }
                 window._bgUserBuiltOnce = true; hideBuildOverlay();
             }, 30)));

@@ -2,7 +2,7 @@
 //   (1) the worker's plate / hole / wash against bgSourceHole run on the main thread on the same inputs (must be identical),
 //   (2) how long the page stopped drawing while the hole solved (a 50 ms heartbeat's largest gap, worker vs main thread),
 //   (3) the SD-regions tint reads the hole (u_sdPaint texels set == hole texels), with a screenshot at yaw +42.
-//   COLOR= DEPTH= TAG= [PORT=8099] [NOWORKER=1] node harness/srchole_worker_check.js
+//   COLOR= DEPTH= TAG= [PORT=8099] [NOWORKER=1] [SEL='{"bgPlateSkySel":"on"}'] [BUNDLE=1] [RETURN=<dir>] node harness/srchole_worker_check.js
 'use strict';
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
 const H = __dirname, PORT = +(process.env.PORT || 8099); const OUT = path.join(__dirname, 'shots', 'srchole_worker', process.env.TAG || 'x'); fs.mkdirSync(OUT, { recursive: true });
@@ -17,17 +17,18 @@ const WT = path.resolve(__dirname, '..');
     page.on('console', m => { const t = m.text(); if (/\[S62\]/.test(t)) logs.push(t.slice(0, 600)); });
     page.on('pageerror', e => logs.push('PAGEERR ' + e.message.slice(0, 300)));
     await page.goto('http://localhost:' + PORT + '/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
-    for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
-    await page.evaluate((noW) => {
+    for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth && mediaLayers[0]._depth16); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
+    await page.evaluate(([noW, sel]) => {
         try { localStorage.clear(); } catch (e) {}
         if (noW) window.Worker = undefined;
+        if (sel.__depth) { const dm = sel.__depth; if (dm.outer !== undefined) outerVolumeDepth = dm.outer; if (dm.inner !== undefined) innerVolumeDepth = dm.inner; if (dm.pn !== undefined) currentNormPortalPlane = dm.pn; delete sel.__depth; }
         const fS = bgSourceHoleInWorker, fF = bgFinishSourceHole;
         bgSourceHoleInWorker = function (o) { window._tSolve0 = performance.now(); return fS(o); };
         bgFinishSourceHole = function (r, c) { window._tSolve1 = performance.now(); return fF(r, c); };
         window._hb = []; setInterval(() => window._hb.push(performance.now()), 50);
         window._tl = []; for (const k of ['log', 'warn']) { const f = console[k].bind(console); console[k] = (...a) => { try { window._tl.push([performance.now(), String(a[0]).slice(0, 90)]); } catch (e) {} return f(...a); }; }
-        for (const [id, v] of [['bgPlateHoleSel', 'source'], ['bgPlateRampSel', 'off']]) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } }
-    }, !!process.env.NOWORKER);
+        for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, sel))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } }
+    }, [!!process.env.NOWORKER, Object.assign(JSON.parse(process.env.SEL || '{}'), process.env.DEPTH_OUTER ? { __depth: { outer: +process.env.DEPTH_OUTER, inner: +(process.env.DEPTH_INNER || 0.0001), pn: +(process.env.DEPTH_PN || 0.5) } } : {})]);
     const t0 = Date.now(); await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 1600; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF && !!window._qbSourceHole)) break; await new Promise(r => setTimeout(r, 500)); }
     const bakeMs = Date.now() - t0;
@@ -50,11 +51,39 @@ const WT = path.resolve(__dirname, '..');
         return { gaps, stats: window._qbSourceHole, frozenMsWhileSolving: Math.round(gap), frozenMsWholeBake: Math.round(gapAll), msMainThreadSolve: Math.round(msMain),
                  vsMainThread: { holeTexelsDiffering: dh, plateTexelsDiffering: dp, washTexelsDiffering: dw, hole: nh }, sdPaint: { texels: np, differingFromHole: pdiff, fgShares: fgSame } };
     });
+    if (process.env.DUMP) {   // DUMP=1: the arrays truthkit/check_app_band.py scores (a257_probe's names and row orders)
+        const dumps = await page.evaluate(() => {
+            const { pw, ph } = window._qbSize, N = pw * ph, enc = (a) => { const u8 = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+            const ff2 = new Float32Array(N).fill(-1); const h2 = window._qbPlate2Has, p2 = window._qbPlateF2;
+            if (h2 && p2) for (let i = 0; i < N; i++) if (h2[i]) ff2[i] = p2[(ph - 1 - ((i / pw) | 0)) * pw + (i % pw)];
+            return { meta: { pw, ph, envDeg: 45, mode: 'source' }, 'disocc.u8': enc(Uint8Array.from(window._qbDisocc)), 'farField.f32': enc(Float32Array.from(window._geoFarField)), 'dQ.f32': enc(Float32Array.from(window._qbDQ)),
+                     'plateF.f32': enc(Float32Array.from(window._qbPlateF)), 'farField2.f32': enc(ff2) };
+        });
+        fs.writeFileSync(path.join(OUT, 'meta.json'), JSON.stringify(dumps.meta)); for (const k in dumps) if (k !== 'meta') fs.writeFileSync(path.join(OUT, k), Buffer.from(dumps[k], 'base64'));
+    }
     const shot = async (name) => { const b64 = await page.evaluate(() => { updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }); fs.writeFileSync(path.join(OUT, name), Buffer.from(b64, 'base64')); };
     await page.evaluate(() => { isSweeping = true; camera.position.set(0.180, 0.008, 0.2); });
     await shot('yawR42.png');
+    await page.evaluate(() => { camera.position.set(-0.180, 0.008, 0.2); }); await shot('yawL42.png'); await page.evaluate(() => { camera.position.set(0.180, 0.008, 0.2); });
+    if (process.env.RETURN) {   // RETURN=<dir with return_band_*.png>: the SD return imported on this bake (the round trip), shots after
+        const files = {}; for (const n of fs.readdirSync(process.env.RETURN)) if (/^return_band_.*\.png$/.test(n)) files[n] = fs.readFileSync(path.join(process.env.RETURN, n)).toString('base64');
+        res.returnImport = await page.evaluate(async (files) => {
+            const fl = []; for (const n in files) { const b = Uint8Array.from(atob(files[n]), (c) => c.charCodeAt(0)); fl.push(new File([b], n, { type: 'image/png' })); }
+            try { const st = await window._importPlaneReturnFiles(fl); return JSON.parse(JSON.stringify(st || null)); } catch (e) { return { error: String(e) }; }
+        }, files);
+        for (const [n, x] of [['yawR42', 0.180], ['yawL42', -0.180], ['rest', 0]]) { await page.evaluate((x) => { isSweeping = true; camera.position.set(x, 0.008, 0.2); }, x); await shot('ret_' + n + '.png'); }
+        await page.evaluate(() => { isSweeping = true; camera.position.set(0.180, 0.008, 0.2); });
+    }
     await page.evaluate(() => { const c = document.getElementById('sdRegionsChk'); c.checked = true; c.dispatchEvent(new Event('change')); });
     await shot('yawR42_sdregions.png');
+    if (process.env.BUNDLE) {   // BUNDLE=1: the SD bundle at rest -> bundle.zip + atlas_lint
+        await page.evaluate(() => { const c = document.getElementById('sdRegionsChk'); c.checked = false; c.dispatchEvent(new Event('change')); isSweeping = true; camera.position.set(0, 0, 0.2); });
+        const zb = await page.evaluate(() => { const ra = window.alert; window.alert = () => {}; let href = null; const rc = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { href = this.href; };
+            let threw = null; try { exportSDBundle(); } catch (e) { threw = String(e); } HTMLAnchorElement.prototype.click = rc; window.alert = ra; return { threw, b64: href ? href.split(',')[1] : null }; });
+        if (zb.b64) { const BZ = path.join(OUT, 'bundle.zip'); fs.writeFileSync(BZ, Buffer.from(zb.b64, 'base64'));
+            const lint = require('child_process').spawnSync('python3', [path.join(H, 'atlas_lint.py'), BZ], { encoding: 'utf8' }); fs.writeFileSync(path.join(OUT, 'lint.json'), lint.stdout); res.lint = lint.stdout.replace(/\s+/g, ' ').slice(0, 700); }
+        else res.bundleError = zb.threw || 'no bundle';
+    }
     const rep = Object.assign({ bakeMs, noWorker: !!process.env.NOWORKER }, res, { logs });
     fs.writeFileSync(path.join(OUT, 'check.json'), JSON.stringify(rep, null, 1)); console.log(JSON.stringify(Object.assign({}, rep, { logs: logs.slice(-4) })).slice(0, 3000));
     await browser.close(); srv.kill();
