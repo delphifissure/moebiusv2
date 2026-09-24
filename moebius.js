@@ -22376,7 +22376,7 @@ function _wireDebugSheetControls() {
         // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
         // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
         // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
-        const defaults = { far: 'plane', fill: 'wash', margin: 'off', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'perline', pinholes: 'asbaked' };
+        const defaults = { far: 'plane', fill: 'wash', margin: 'auto', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'perline', pinholes: 'asbaked' };
         // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
         // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
         // failure the versioning exists to prevent.
@@ -22390,7 +22390,10 @@ function _wireDebugSheetControls() {
             window._tearLaw = plane ? 'rim' : undefined; window._farRule = plane ? 'plane' : undefined;
             window._skyInf = (plane && opt.sky === 'on') ? 1 : 0;
             window._selfSample = plane && opt.fill === 'mirror';
-            window._plugMargin = opt.margin === 'window' ? 1 : (opt.margin === 'picture' ? 2 : 0);
+            // margin 'auto' (the default): the picture margin in source mode, where the frame's edge otherwise opens onto nothing
+            // at the envelope's corners (S62 §12: sunflowers 18 000-30 000 uncovered px per corner pose -> 330-410, S2 57 000 -> 0),
+            // none with the per-line hole (as before)
+            window._plugMargin = opt.margin === 'window' ? 1 : (opt.margin === 'picture' || (opt.margin === 'auto' && plane && opt.hole === 'source') ? 2 : 0);
             window._stepFaces = plane && opt.faces === 'on';
             window._bandTierDeg = opt.band === 'all' ? 0 : parseFloat(opt.band) || 0;
             window._plateStretchInner = plane && (opt.seams === 'stretched' || opt.seams === 'all');   // note §9: the plate's internal seams drawn stretched; the rim stays torn
