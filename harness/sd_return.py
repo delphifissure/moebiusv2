@@ -25,7 +25,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('bundle'); ap.add_argument('out'
 ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type=int, default=768); ap.add_argument('--seed', type=int, default=1234)
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
 ap.add_argument('--depth', action='store_true')
-ap.add_argument('--grow', type=int, default=0, help='widen the mask SD paints by this many texels (the app still reads the bundle mask only)')
+ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints takes in the silhouette's colour fringe, measured per texel; N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
 ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
@@ -33,9 +33,39 @@ img_name = 'plane_color_occluder_removed.png' if (A.image == 'occluder_removed' 
 img = rd(img_name).convert('RGB'); pw, ph = img.size
 mask = np.asarray(rd('plane_mask_inpaint.png').convert('L')) > 127
 mask_app = mask.copy()
-if A.grow > 0:
+
+def fringe(mask, rgb, dq):
+    """The silhouette's colour fringe (S62 §12): walking out from the hole's edge along its normal, the run of texels
+    whose colour is nearer the occluder's own (2 texels inside the hole) than the background's (10-12 texels out),
+    where the hole's edge is an occluder's silhouette (nearer inside than out) with a colour contrast across it. The
+    troll's lace along the arms was SD continuing that fringe as an outline; the run is measured, not chosen."""
+    from scipy.ndimage import binary_dilation, gaussian_filter, distance_transform_edt
+    H, W = mask.shape; rgb = rgb.astype(np.float64)
+    dist = distance_transform_edt(~mask); gy, gx = np.gradient(gaussian_filter(dist, 1.0)); n = np.hypot(gx, gy) + 1e-9; gx /= n; gy /= n
+    out = np.zeros_like(mask); ys, xs = np.nonzero(binary_dilation(mask) & ~mask)
+    for y, x in zip(ys, xs):
+        P = []
+        for k in range(-2, 13):
+            yy, xx = int(round(y + k * gy[y, x])), int(round(x + k * gx[y, x]))
+            if not (0 <= yy < H and 0 <= xx < W): break
+            P.append((yy, xx))
+        if len(P) < 15: continue
+        yi, xi = P[0]
+        if not mask[yi, xi] or not dq[yi, xi] > dq[y, x]: continue
+        cO = np.mean([rgb[q] for q in P[0:2]], 0); cB = np.mean([rgb[q] for q in P[12:15]], 0)
+        if np.linalg.norm(cO - cB) < 24: continue                     # 24/255 over RGB: no visible contrast to measure
+        for q in P[2:12]:
+            if np.linalg.norm(rgb[q] - cO) < np.linalg.norm(rgb[q] - cB): out[q] = True
+            else: break
+    return out
+
+if A.grow == 'auto':
+    src_rgb = np.asarray(rd('plane_source_color.png').convert('RGB')); src_d = np.asarray(rd('plane_source_depth16.png')).astype(np.float64); src_d /= 65535.0 if src_d.max() > 255 else 255.0
+    fr = fringe(mask, src_rgb, src_d); mask = mask | fr; GROW = {'auto': int(fr.sum())}
+elif int(A.grow) > 0:
     from scipy.ndimage import binary_dilation
-    mask = binary_dilation(mask, iterations=A.grow)
+    mask = binary_dilation(mask, iterations=int(A.grow)); GROW = int(A.grow)
+else: GROW = 0
 ctl16 = np.asarray(rd('plane_plate_depth16.png')).astype(np.float64); ctl16 = ctl16 / (65535.0 if ctl16.max() > 255 else 255.0)
 s = A.long / max(pw, ph); W, H = int(round(pw * s / 8) * 8), int(round(ph * s / 8) * 8)
 import torch
@@ -53,7 +83,7 @@ sd_full = np.asarray(res.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
 out = np.asarray(img).copy(); out[mask] = sd_full[mask]                      # colour on the mask only (the app enforces it too)
 Image.fromarray(out).save(os.path.join(A.out, 'return_band_color.png'))
 info = {'bundle': A.bundle, 'image': img_name, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
-        'maskTexels': int(mask.sum()), 'sdSecs': round(time.time() - t0)}
+        'maskTexels': int(mask.sum()), 'appMaskTexels': int(mask_app.sum()), 'grow': GROW, 'sdSecs': round(time.time() - t0)}
 if A.depth:
     t1 = time.time(); B = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff'
     sys.path.insert(0, f'{B}/Depth-Anything-3/src'); from depth_anything_3.api import DepthAnything3
@@ -94,11 +124,12 @@ if 'plane_plate2_mask.png' in names and 'plane_plate2_color.png' in names and 'p
     if m2.any():
         t2 = time.time(); c2 = np.asarray(rd('plane_plate2_color.png').convert('RGB'))
         img2 = out.copy(); img2[m2] = c2[m2]
-        g2 = m2.copy()
-        if A.grow > 0:
-            from scipy.ndimage import binary_dilation
-            g2 = binary_dilation(m2, iterations=A.grow)
         d2 = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); d2 = d2 / (65535.0 if d2.max() > 255 else 255.0)
+        g2 = m2.copy()
+        if A.grow == 'auto': g2 = m2 | fringe(m2, img2, d2)
+        elif int(A.grow) > 0:
+            from scipy.ndimage import binary_dilation
+            g2 = binary_dilation(m2, iterations=int(A.grow))
         ctl2 = Image.fromarray(np.round(np.clip(d2, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
         res2 = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(img2).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((g2 * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
                     control_image=ctl2, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(A.seed + 1), strength=1.0, width=W, height=H).images[0]
