@@ -58,7 +58,7 @@ if (process.env.DIAG) { const all = tris(() => true), zz = new Float32Array(N).f
     for (let yy = y0; yy <= y1; yy++) for (let xx = x0; xx <= x1; xx++) {
       if (sg * ((Bx - Ax) * (yy - Ay) - (By - Ay) * (xx - Ax)) < -eps || sg * ((Cx - Bx) * (yy - By) - (Cy - By) * (xx - Bx)) < -eps || sg * ((Ax - Cx) * (yy - Cy) - (Ay - Cy) * (xx - Cx)) < -eps) continue;
       const q = yy * pw + xx; if (idd[q] < 0 || dz < zz[q]) { zz[q] = dz; idd[q] = tag; } } };
-  for (let i = 0; i < N - pw; i++) { tri(i, i + pw, i + 1, 2 * i); tri(i + pw, i + pw + 1, i + 1, 2 * i + 1); }
+  for (let i = 0; i < N - pw; i++) { if (i % pw === pw - 1) continue; tri(i, i + pw, i + 1, 2 * i); tri(i + pw, i + pw + 1, i + 1, 2 * i + 1); }
   const tv = (t) => { const i = t >> 1; return (t & 1) ? [i + pw, i + pw + 1, i + 1] : [i, i + pw, i + 1]; };
   const cls = {}; for (let c = 0; c < N; c++) { if (!im[c]) continue; const t = idd[c]; let k;
     if (t < 0) k = 'no plate triangle at all'; else { const V = tv(t), nh = V.filter(v => hole[v]).length, n2 = V.filter(v => has2[v]).length;

@@ -1386,6 +1386,27 @@ function bgSourceHole(o) {
         added += grew; if (!grew) break; }
       nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
       st.patch = { added, passes, openBefore: open0, openAfter: open1, ms: Date.now() - tP }; }
+    // PINHOLES AGAIN (S62 §10b). bgPinholeFilledMask ran before the rounds, the shown trim and the patch; those leave new
+    // enclosed islands of source inside the hole, and the ones at the occluder's own depth (the rule's criterion: within two
+    // steps of the source around them) are pieces of the object standing inside the painted background -- in the SD mask, a
+    // fragment of the figure kept unpainted inside its own disocclusion (troll: 42 pinholes, a median of 0 steps from the
+    // fill, the largest 193 texels, against 18 before the trims). The rule runs again on the final hole; a texel it joins
+    // takes the harmonic continuation of the fill and wash around it (it is behind the object, which covers it at rest),
+    // when that lies behind its source by two steps.
+    { const tJ = Date.now(), pm = bgPinholeFilledMask(hole, dQ, pw, ph, step), J = []; const jx = new Int32Array(N).fill(-1);
+      for (let i = 0; i < N; i++) if (pm.mask[i] && !hole[i]) { jx[i] = J.length; J.push(i); }
+      let nJ = 0;
+      if (J.length) { const M = J.length, ext = new Map(), exP = [], adj = []; for (let t = 0; t < M; t++) adj.push([]);
+        for (let t = 0; t < M; t++) for (const j of nbrs(J[t])) { if (j < 0) continue; if (jx[j] >= 0) adj[t].push(jx[j]); else if (hole[j]) { let k = ext.get(j); if (k === undefined) { k = M + exP.length; ext.set(j, k); exP.push(j); } adj[t].push(k); } }
+        const nN = M + exP.length; while (adj.length < nN) adj.push([]);
+        const st0 = new Int32Array(nN + 1); for (let n = 0; n < nN; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[nN]); for (let n = 0; n < nN; n++) li.set(adj[n], st0[n]);
+        const fix = new Uint8Array(nN), xy = new Int32Array(2 * nN), v4 = [0, 1, 2, 3].map(() => new Float64Array(nN));
+        for (let n = 0; n < nN; n++) { const i = n < M ? J[n] : exP[n - M]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0; if (n >= M) { fix[n] = 1; v4[0][n] = plate[i]; for (let c = 0; c < 3; c++) v4[c + 1][n] = wash[3 * i + c]; } }
+        const U = bgMGSolve(nN, st0, li, new Float64Array(li.length).fill(1), fix, v4, xy, 1e-6).outs;
+        for (let t = 0; t < M; t++) { const i = J[t]; if (!(U[0][t] < dQ[i] - 2 * step)) continue; hole[i] = 1; plate[i] = U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, U[c + 1][t])));
+          if (plate2) plate2[i] = plate[i]; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c]; nJ++; } }
+      nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
+      st.pinholesLate = { joined: nJ, candidates: J.length, ms: Date.now() - tJ }; }
     st.secondLayerTexels = n2; st.msSurfaces = msSurf;
     const far = Float32Array.from(dQ); let nFar = 0;
     for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }
