@@ -15,7 +15,7 @@ CPU works (no GPU here): SD 1.5 inpainting + control_v11f1p_sd15_depth at the wo
 result resized back to the bundle's grid.
 
   python3 sd_return.py <bundle.zip> <out dir> [--steps 20] [--long 768] [--seed 1234] [--prompt "..."] [--depth]
-Writes return_band_color.png (+ return_band_depth16.png), sd_return.json.
+Writes return_band_color.png (+ return_band_depth16.png), return_band2_color.png where the bundle has plate 2, sd_return.json.
 """
 import sys, os, io, json, time, zipfile, argparse
 import numpy as np
@@ -85,4 +85,25 @@ if A.depth:
     for nm, g in (('return_band_gradx16.png', gx), ('return_band_grady16.png', gy)):
         Image.fromarray(np.round(np.clip(g + 0.5, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(A.out, nm))
     info['depth'] = {'model': 'DA3-Mono-Large', 'fit': {'form': form, 'a': float(a), 'b': float(b)}, 'visibleMedianAbsResidual': resid, 'secs': round(time.time() - t1)}
+# THE SECOND LAYER (S62 §12): where the bundle carries plate 2 (plane_plate2_mask: the surface behind a nearer fill, e.g.
+# the plain behind the dune continued behind a figure's legs), a pose that slides plate 1 past shows it, so it is painted
+# too: SD on the first pass's picture with plate 2's own wash in its region, its mask (widened like the first) and plate 2's
+# depth as the condition. Written as return_band2_color.png; the app's import paints plate 2 with it.
+if 'plane_plate2_mask.png' in names and 'plane_plate2_color.png' in names and 'plane_plate2_depth16.png' in names:
+    m2 = np.asarray(rd('plane_plate2_mask.png').convert('L')) > 127
+    if m2.any():
+        t2 = time.time(); c2 = np.asarray(rd('plane_plate2_color.png').convert('RGB'))
+        img2 = out.copy(); img2[m2] = c2[m2]
+        g2 = m2.copy()
+        if A.grow > 0:
+            from scipy.ndimage import binary_dilation
+            g2 = binary_dilation(m2, iterations=A.grow)
+        d2 = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); d2 = d2 / (65535.0 if d2.max() > 255 else 255.0)
+        ctl2 = Image.fromarray(np.round(np.clip(d2, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
+        res2 = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(img2).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((g2 * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
+                    control_image=ctl2, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(A.seed + 1), strength=1.0, width=W, height=H).images[0]
+        sd2 = np.asarray(res2.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
+        out2 = img2.copy(); out2[g2] = sd2[g2]
+        Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
+        info['layer2'] = {'maskTexels': int(m2.sum()), 'sdSecs': round(time.time() - t2)}
 json.dump(info, open(os.path.join(A.out, 'sd_return.json'), 'w'), indent=1); print(json.dumps(info))

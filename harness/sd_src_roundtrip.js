@@ -50,7 +50,7 @@ const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], 
     } else {
         const RD = path.join(OUT, process.env.RET || 'return'), PFX = (process.env.RET && process.env.RET !== 'return') ? process.env.RET.replace(/^return_?/, '') + '_' : '';
         if (!process.env.NOBEFORE) for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, PFX + 'before_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));   // NOBEFORE=1: a second return on the same bake
-        const files = fs.readdirSync(RD).filter(f => /^return_band_.*\.png$/.test(f)).map(f => [f, fs.readFileSync(path.join(RD, f)).toString('base64')]);
+        const files = fs.readdirSync(RD).filter(f => /^return_band2?_.*\.png$/.test(f)).map(f => [f, fs.readFileSync(path.join(RD, f)).toString('base64')]);
         const st = await page.evaluate(async (files) => {
             const F = files.map(([n, b]) => { const s = atob(b), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new File([a], n, { type: 'image/png' }); });
             const r = await window._importPlaneReturnFiles(F); return r ? JSON.parse(JSON.stringify(r, (k, v) => (v && v.length > 64 && typeof v !== 'string') ? '[array]' : v)) : null;

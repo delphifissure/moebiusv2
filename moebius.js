@@ -590,6 +590,7 @@ function bgFinishSourceHole(r, c) {
         cc.putImageData(id, 0, 0); mp.value.needsUpdate = true;
     } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
     let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph, r.hole, r.has2); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
+    window._qbSrcCtx = { rl, L };   // S62 §12: the import rebuilds plate 2 with these
     let p2st = null; try { p2st = bgSourcePlate2(r, pw, ph, rl, L); } catch (e2) { console.warn('[S62] plate 2 failed (none):', e2); }
     // sky (§7): a hole part that continues the sky has sky depth, so the plate leaves its triangles to the sky layer
     // (bgRetearPlate); the sky layer takes that part's wash (the sky surface's own colours) where its texture held the
@@ -12216,6 +12217,26 @@ window._importPlaneReturn = function (d) {
             if (window._qbPlateColor && window._qbPlateColor.length === 4 * N) for (let i = 0; i < N; i++) if (band[i]) { window._qbPlateColor[i * 4] = dd[i * 4]; window._qbPlateColor[i * 4 + 1] = dd[i * 4 + 1]; window._qbPlateColor[i * 4 + 2] = dd[i * 4 + 2]; }
         } else st.colour = { skipped: 'the plate is rendering from a render target, not its own colour canvas (no plane colour pass on this bake)' };
     }
+    // ---- the second layer (S62 §12) ----
+    // ORDER: a returned depth moves plate 1, and a second-layer texel is one only while it lies behind plate 1 by two
+    // visible steps (the rule that made it); one the return has brought level with or in front of plate 1 would cross it
+    // on screen, so it leaves plate 2. COLOUR: return_band2_color.png paints plate 2 where it exists (SD's pass on
+    // plane_plate2_color / plane_plate2_mask); without it plate 2 keeps its wash.
+    if (window._qbSrcHole && window._qbPlate2Has && window._qbPlateF2 && window._qbSrcCtx) {
+        const has2 = window._qbPlate2Has, pF2 = window._qbPlateF2, q2 = (window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255, c2 = window._qbPlateColor2;
+        let dropped = 0, n2c = 0;
+        if (d.depth || d.gx || d.gy) for (let i = 0; i < N; i++) if (has2[i]) { const k = flip(i); if (!(pF2[k] < pF[k] - 2 * q2)) { has2[i] = 0; dropped++; } }
+        if (d.color2 && c2 && (d.color2.length === 4 * N || d.color2.length === 3 * N)) { const s4 = d.color2.length === 4 * N ? 4 : 3;
+            for (let i = 0; i < N; i++) if (has2[i]) { for (let c = 0; c < 3; c++) c2[4 * i + c] = d.color2[i * s4 + c]; n2c++; } }
+        if (dropped || n2c) { try {
+            const r2 = { has2, plate2: new Float32Array(N), wash2: new Uint8ClampedArray(3 * N) };
+            for (let i = 0; i < N; i++) { r2.plate2[i] = pF2[flip(i)]; for (let c = 0; c < 3; c++) r2.wash2[3 * i + c] = c2 ? c2[4 * i + c] : 0; }
+            bgSourcePlate2(r2, pw, ph, window._qbSrcCtx.rl, window._qbSrcCtx.L);
+            if (dropped) { const pl = new Float32Array(N); for (let i = 0; i < N; i++) pl[i] = pF[flip(i)]; bgRetearPlate(pl, window._qbSrcCtx.rl, pw, ph, window._qbSrcHole, window._qbPlate2Has); }
+        } catch (e2) { st.layer2Error = String(e2); } }
+        let left = 0; for (let i = 0; i < N; i++) if (has2[i]) left++;
+        st.layer2 = { droppedByOrder: dropped, colourTexels: n2c, texels: left };
+    }
     window._qbReturnStat = st;
     console.log('[Sprint 25] plane return ' + JSON.stringify(st));
     if (typeof render === 'function') { try { render(); } catch (e) {} }
@@ -12225,6 +12246,7 @@ window._importPlaneReturnFiles = async function (files) {   // return_band_color
     if (!(window._bgQuickBaked && window._qbSize)) return null;
     const pw = window._qbSize.pw, ph = window._qbSize.ph, N = pw * ph; const got = {};
     for (const f of files) {
+        if (/^return_band2_colou?r\.png$/i.test(f.name)) { got.color2 = await _pngToRgba(f, pw, ph); continue; }   // S62 §12: plate 2's colour
         const m = /^return_band_(color|colour|depth16|gradx16|grady16)\.png$/i.exec(f.name);
         if (!m) { console.warn('[Sprint 25] skipped ' + f.name + ' (expected return_band_color.png / _depth16.png / _gradx16.png / _grady16.png)'); continue; }
         const k = /col/i.test(m[1]) ? 'color' : m[1].toLowerCase();
@@ -12236,7 +12258,7 @@ window._importPlaneReturnFiles = async function (files) {   // return_band_color
         // gradients are carried as (g + 0.5): a gradient is signed and a PNG is not
         if (k === 'depth16') got.depth = a; else { for (let i = 0; i < N; i++) a[i] -= 0.5; got[k === 'gradx16' ? 'gx' : 'gy'] = a; }
     }
-    if (!(got.color || got.depth || got.gx || got.gy)) return null;
+    if (!(got.color || got.color2 || got.depth || got.gx || got.gy)) return null;
     return window._importPlaneReturn(got);
 };
 async function importPlaneReturn() {
