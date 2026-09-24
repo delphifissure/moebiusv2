@@ -1041,15 +1041,13 @@ function bgSourceHole(o) {
     // texel's screen place x + s_far*h uncovered inside the frame (s_far: the shift of the background its rim reveals). The
     // ground under a box is covered by the ground itself at every pose, and leaves the hole. Poses: 8 directions x 4
     // magnitudes over the envelope rectangle (the gaps open with |h|, so the ring of poses bounds what any pose shows).
-    // Two demands, united (S62 §9): the far side's guess g - s_far*h, and the texel a quick fill P0 actually draws in the gap.
-    // The far-side guess alone missed texels wherever the fill moves differently from the gap's far side (a long gap whose far
-    // end is another surface): the troll at +42 showed through both layers in 20 spots (334 px interior at 572 px wide), at
-    // head-up-right in 34 (823 px); with both demands 6 (23 px) and 22 (98 px). Either demand keeps a texel only if it lies
-    // in front of what it would show by two steps: a texel whose own source IS that surface is drawn there by the source mesh.
-    // Kit truth (env45 scope, hole vs the exact hidden set; shown trim below included): S2 precision 0.37 at recall 0.998;
-    // S15 0.59 at 0.874 (weighted 0.903; the loss is the tree's own inside, which its own mesh covers at every pose).
-    { const tS = Date.now(), zb = new Float32Array(N), sb = new Float32Array(N), dem = new Uint8Array(N); let nCand = 0; for (let i = 0; i < N; i++) if (hole[i]) nCand++;
-      const TF = meshTris(dQ, joined), idF = new Int32Array(N);
+    // The demand (S62 §9-§10): the texel a quick fill P0 actually draws in each gap, if it is not its own source. §8 guessed
+    // instead that the surface on a gap's far side continues across it (the plate texel shown is g - s_far*h); the guess
+    // missed wherever the fill moves differently from the gap's far side (the troll: 20 see-through spots at +42) and, on a
+    // grazing ground, where every row moves differently, it drew stripes of false demand beside each object (S15). Kit
+    // truth and texel-resolution see-through for this and the passes below are in S62 §10.
+    { const tS = Date.now(), zb = new Float32Array(N), dem = new Uint8Array(N); let nCand = 0; for (let i = 0; i < N; i++) if (hole[i]) nCand++;
+      const TF = meshTris(dQ, joined);
       // P0: one depth membrane on the candidate hole, pinned at every neighbour behind it by two steps (no rounds, no
       // consensus): enough to know how each candidate texel would move.
       const P0 = Float32Array.from(dQ); { const di = [], idx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (hole[i]) { idx[i] = di.length; di.push(i); }
@@ -1069,21 +1067,12 @@ function bgSourceHole(o) {
       const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]; let nGap = 0;
       for (const [ux, uy] of dirs) for (const m of [0.25, 0.5, 0.75, 1]) {
         const hx = ux * m, hy = uy * m * env;
-        drawMesh(dQ, s, TF, hx, hy, zb, idF);   // the source mesh at this pose, as the renderer draws it
-        for (let c = 0; c < N; c++) if (zb[c] >= 0) sb[c] = s[triVerts(idF[c])[0]];
+        drawMesh(dQ, s, TF, hx, hy, zb, null);   // the source mesh at this pose, as the renderer draws it
         // the plate at this pose, drawn the same way (P0: the quick fill in the candidate hole, the source elsewhere); every
         // screen pixel the source mesh leaves uncovered shows the plate triangle drawn there, and its texels are SEEN
         drawMesh(P0, sP, TP, hx, hy, pz, pid);
         for (let c = 0; c < N; c++) { if (zb[c] >= 0 || pz[c] < 0) continue; for (const v of triVerts(pid[c])) if (P0[v] < dQ[v] - 2 * step) dem[v] = 1; }   // unless a texel is its own source
-        // every uncovered screen pixel inside the frame shows the plate; the surface on the gap's FAR side (the farther of the
-        // first covered pixels either way along h) is what continues there, and the plate texel it shows is g - s_far*h, if
-        // that texel lies in front of the far side by two steps (else it is the far surface itself, drawn by the source mesh)
-        const hl = Math.hypot(hx, hy), sx = hx / hl, sy = hy / hl;
-        // a disocclusion gap has a surface on BOTH sides along h; an uncovered band at the frame's edge (content shifted in from
-        // beyond the picture) is the outpaint margin, not a reveal, and demands nothing here
-        for (let c = 0; c < N; c++) { if (zb[c] >= 0) continue; nGap++; const gx = c % pw, gy = (c - gx) / pw; let best = -1, bd = Infinity, sides = 0;
-          for (const sg of [1, -1]) for (let k = 1; k < 4 * pw; k++) { const qx = Math.round(gx + sg * sx * k), qy = Math.round(gy + sg * sy * k); if (qx < 0 || qx >= pw || qy < 0 || qy >= ph) break; const q = qy * pw + qx; if (zb[q] >= 0) { sides++; if (zb[q] < bd) { bd = zb[q]; best = q; } break; } }
-          if (sides < 2) continue; const sF = sb[best], xx = Math.round(gx - sF * hx), yy = Math.round(gy - sF * hy); if (xx >= 0 && xx < pw && yy >= 0 && yy < ph && dQ[yy * pw + xx] > bd + 2 * step) dem[yy * pw + xx] = 1; }
+        for (let c = 0; c < N; c++) if (zb[c] < 0) nGap++;
       }
       // the seen set's outline carries the map's column-to-column noise and the pose sampling; a majority over a square of
       // side 2*WASH_RUN+1 (the ink-line scale below which a mask detail cannot be told from a line) smooths it
@@ -1266,16 +1255,6 @@ function bgSourceHole(o) {
     { const w = { depth: new Float64Array(N), soft: res.softT }; for (let t = 0; t < res.di.length; t++) w.depth[res.di[t]] = res.U[0][t]; res = solve(hole, [0, 1, 2, 3], w); }
     const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
     for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
-    // RESCUE (S62 §10). A texel some pose shows, which the not-behind rounds gave back to its source because the fill
-    // there came out in front of it (the far side's pins along its rim were outvoted by another surface's), leaves the
-    // gap it was demanded for open: nothing is drawn there (the troll: a 28-texel band behind a 0.17 -> 0.22 rim, open at
-    // head-right). It takes its own rim's far side instead: the depth the reach carried to it (the surface the gap shows,
-    // continued as it is at the rim) and that texel's colour, when that lies behind its source by two steps.
-    let nRescue = 0;
-    for (let i = 0; i < N; i++) { if (!demanded[i] || hole[i]) continue; const f = Fc[i]; if (!(f < dQ[i] - 2 * step)) continue;
-        const k = Pc[i] >= 0 ? Fx[Pc[i]] : -1; hole[i] = 1; plate[i] = f; const cc = k >= 0 ? pinColour(k) : [rgb[3 * i], rgb[3 * i + 1], rgb[3 * i + 2]];
-        for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, cc[c]))); nRescue++; }
-    st.rescued = nRescue;
     let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
     // the second layer (§7): in a split component the farthest surface continues behind the nearer parts, one membrane over
     // the whole component pinned at that surface's own pins; a texel of a nearer part carries it where it lies behind that
@@ -1349,7 +1328,9 @@ function bgSourceHole(o) {
     // (within WASH_RUN) through texels in front of that fill by two steps, so the plate never stands in front of the picture
     // at rest. No re-solve: the corners are few. Two passes. Troll, texel resolution, interior see-through over 8 outer
     // poses (with the rescue and the fill-to-fill bridge): 345 px without the patch, 204 with it.
-    { const tP = Date.now(); let added = 0, passes = 0, open0 = -1, open1 = 0;
+    // (With the sky at infinity on, the sky layer lies behind everything: a gap shows sky, never nothing, and there is
+    // nothing for this pass to close.)
+    if (!(rl.sky >= 0)) { const tP = Date.now(); let added = 0, passes = 0, open0 = -1, open1 = 0;
       const shfP = (d) => { if (rl.sky >= 0 && d < rl.sky) return -ex * ppm; const ze = rl.zeAt(d); return ex * (o.D - ze) / ze * ppm; };
       const TFg = meshTris(dQ, joined), TA = new Uint8Array(N).fill(3), zf = new Float32Array(N), z1 = new Float32Array(N), z2 = new Float32Array(N), zA = new Float32Array(N), iA = new Int32Array(N);
       for (; passes < 2; passes++) {
@@ -1385,6 +1366,20 @@ function bgSourceHole(o) {
           for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) {
             if (j < 0 || dist[j] !== 255 || !(fillV[i] < dQ[j] - 2 * step)) continue; dist[j] = dist[i] + 1; par[j] = i; fillV[j] = fillV[i]; src[j] = src[i]; q[qt++] = j; } }
         let grew = 0;
+        // a missing corner the reach came to (a demanded texel the not-behind rounds gave back, because the fill there
+        // came out in front of it: the far side's pins along its rim were outvoted by another surface's) takes its own
+        // rim's far side: the depth the reach carried to it and that texel's colour (the troll: a 28-texel band behind a
+        // 0.17 -> 0.22 rim, open at head-right). Only where a pose shows the gap: the far-side guess's false demands (the
+        // ground stripes beside a trunk) stay with the rounds, which gave them back rightly.
+        for (let i = 0; i < N; i++) { if (!want[i] || hole[i] || !demanded[i]) continue; const f = Fc[i]; if (!(f < dQ[i] - 2 * step)) continue;
+          const k = Pc[i] >= 0 ? Fx[Pc[i]] : -1, cc = k >= 0 ? pinColour(k) : [wash[3 * i], wash[3 * i + 1], wash[3 * i + 2]];
+          // the seed and the band it belongs to: the connected demanded texels the rounds gave back whose far side joins
+          // this one's (the same rim's reveal, row after row)
+          const fl = [i]; hole[i] = 1;
+          while (fl.length) { const v = fl.pop(), fv = Fc[v], kv = Pc[v] >= 0 ? Fx[Pc[v]] : -1, cv = kv >= 0 ? pinColour(kv) : cc; plate[v] = fv;
+            for (let c = 0; c < 3; c++) wash[3 * v + c] = Math.round(Math.min(255, Math.max(0, cv[c]))); if (plate2) plate2[v] = fv; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * v + c] = wash[3 * v + c]; grew++;
+            const x = v % pw; for (const j of [x > 0 ? v - 1 : -1, x < pw - 1 ? v + 1 : -1, v >= pw ? v - pw : -1, v < N - pw ? v + pw : -1]) {
+              if (j < 0 || hole[j] || !demanded[j] || !(Fc[j] < dQ[j] - 2 * step) || !rl.joined(Fc[j], fv)) continue; hole[j] = 1; fl.push(j); } } }
         for (let i = 0; i < N; i++) { if (!want[i] || hole[i] || dist[i] === 255) continue;
           for (let v = i; v >= 0 && !hole[v]; v = par[v]) { const k = src[v]; hole[v] = 1; plate[v] = fillV[v]; for (let c = 0; c < 3; c++) wash[3 * v + c] = wash[3 * k + c];
             if (plate2) plate2[v] = plate[v]; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * v + c] = wash[3 * v + c]; grew++; } }
