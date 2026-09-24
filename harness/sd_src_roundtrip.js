@@ -3,7 +3,7 @@
 //   MODE=view    [RET=<return dir name, default 'return'>] bake again, render the wide poses (before), import <out>/return/return_band_*.png through the app's own
 //                _importPlaneReturnFiles (the "Import plane return" button's path), render the same poses (after)
 // Between the two: python3 harness/sd_return.py <out>/bundle.zip <out>/return [--depth]
-//   COLOR= DEPTH= TAG= MODE=export|view [PORT=8099] [MB=<variant moebius.js>] [SEL=...] node harness/sd_src_roundtrip.js
+//   COLOR= DEPTH= TAG= MODE=export|view [PORT=8099] [MB=<variant moebius.js>] [SEL=...] [NOBEFORE=1] node harness/sd_src_roundtrip.js
 // Output: harness/shots/sd_src/<TAG>/{bundle.zip, before_<pose>.png, after_<pose>.png, view.json}
 'use strict';
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
@@ -49,7 +49,7 @@ const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], 
         console.log(JSON.stringify({ bundle: path.join(OUT, 'bundle.zip'), bytes: bytes.length, hole: stats && stats.hole, bakeMs }));
     } else {
         const RD = path.join(OUT, process.env.RET || 'return'), PFX = (process.env.RET && process.env.RET !== 'return') ? process.env.RET.replace(/^return_?/, '') + '_' : '';
-        for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, PFX + 'before_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));
+        if (!process.env.NOBEFORE) for (const [n, x, y] of POSES) fs.writeFileSync(path.join(OUT, PFX + 'before_' + n + '.png'), Buffer.from(await grab(x, y), 'base64'));   // NOBEFORE=1: a second return on the same bake
         const files = fs.readdirSync(RD).filter(f => /^return_band_.*\.png$/.test(f)).map(f => [f, fs.readFileSync(path.join(RD, f)).toString('base64')]);
         const st = await page.evaluate(async (files) => {
             const F = files.map(([n, b]) => { const s = atob(b), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new File([a], n, { type: 'image/png' }); });
