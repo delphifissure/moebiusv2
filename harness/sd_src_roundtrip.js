@@ -21,7 +21,7 @@ const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], 
     const srv = spawn('node', ['scratch_server.js'], { cwd: H, stdio: 'ignore', env: Object.assign({}, process.env, { PORT: String(PORT) }) }); await new Promise(r => setTimeout(r, 1500));
     { const r = await fetch('http://localhost:' + PORT + '/__root').then(x => x.text()).catch(() => ''); if (r !== H) { console.error('ABORT: port ' + PORT + ' is served from ' + (r.slice(0, 80) || 'nothing') + ', not this tree (' + H + ')'); srv.kill(); process.exit(4); } }
     const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell', headless: true, args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-    const page = await browser.newPage({ viewport: { width: 1368, height: 770 } }); const logs = [];
+    const page = await browser.newPage({ viewport: { width: +(process.env.VW || 912), height: +(process.env.VH || 513) } }); const logs = [];
     page.on('console', m => { const t = m.text(); if (/\[S62\]|\[Sprint 25\]|SD-BUNDLE|return/i.test(t)) logs.push(t.slice(0, 400)); });
     page.on('pageerror', e => logs.push('PAGEERR ' + e.message.slice(0, 300)));
     await page.goto('http://localhost:' + PORT + '/' + PAGE, { waitUntil: 'load', timeout: 90000 });
