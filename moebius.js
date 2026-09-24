@@ -977,7 +977,7 @@ function bgSourceHole(o) {
                 if (sg * ((Cx - Bx) * (yy - By) - (Cy - By) * (xx - Bx)) < -eps) continue;
                 if (sg * ((Ax - Cx) * (yy - Cy) - (Ay - Cy) * (xx - Cx)) < -eps) continue;
                 const q = yy * pw + xx; if (far ? (zb[q] < 0 || dz < zb[q]) : dz > zb[q]) { zb[q] = dz; if (id) id[q] = tag; } } };
-        for (let i = 0; i < N - pw; i++) { const t = T[i]; if (!t) continue; if (t & 1) tri(i, i + pw, i + 1, 2 * i); if (t & 2) tri(i + pw, i + pw + 1, i + 1, 2 * i + 1); } };
+        for (let i = 0; i < N - pw; i++) { const t = T[i]; if (!t || i % pw === pw - 1) continue; if (t & 1) tri(i, i + pw, i + 1, 2 * i); if (t & 2) tri(i + pw, i + pw + 1, i + 1, 2 * i + 1); } };
     // rims as runs of torn steps, both axes
     const R = new Float64Array(N), F = new Float64Array(N).fill(Infinity), rampF = new Float64Array(N).fill(-Infinity), Fx = new Int32Array(N).fill(-1);   // Fx: the rim's far texel
     for (const ax of [0, 1]) {
@@ -1239,6 +1239,7 @@ function bgSourceHole(o) {
         const out = []; for (let t = 0; t < M; t++) { const i = reg[t]; depthNow[i] = r[t]; if (r[t] > dQ[i] - 2 * step) out.push(i); }
         return out;
     };
+    const GLOBAL_ROUNDS = 4;
     for (;;) {
         const tR = Date.now(); res = solve(hole, [0], warm); rounds++;
         for (let t = 0; t < res.di.length; t++) depthNow[res.di[t]] = res.U[0][t];
@@ -1251,10 +1252,15 @@ function bgSourceHole(o) {
             if (o.trace) o.trace.push({ round: localRounds, global: false, ms: Date.now() - tL, dropped: drops.length });
         }
         warm = { depth: Float64Array.from(depthNow), soft: res.softT };
+        // four global rounds, then stop: past the second, each re-solve gives back a few dozen texels (troll: 3053, 127, 73,
+        // 59, then 59 .. 21 over ten more rounds, 2.4 s each, a third of the solve). Stopping after four and sending any
+        // texel the final solve leaves in front of its source back to it (below) gives the same see-through, pinholes and
+        // clones on all five bench pictures; stopping after two cost the Vermeer 491 px of see-through.
+        if (rounds >= GLOBAL_ROUNDS) break;
     }
     { const w = { depth: new Float64Array(N), soft: res.softT }; for (let t = 0; t < res.di.length; t++) w.depth[res.di[t]] = res.U[0][t]; res = solve(hole, [0, 1, 2, 3], w); }
     const plate = Float32Array.from(dQ), wash = Uint8ClampedArray.from(rgb);
-    for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
+    let nBack = 0; for (let t = 0; t < res.di.length; t++) { const i = res.di[t]; if (!(res.U[0][t] < dQ[i] - 2 * step)) { hole[i] = 0; nBack++; continue; } plate[i] = res.U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, res.U[c + 1][t]))); }
     let nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
     // the second layer (§7): in a split component the farthest surface continues behind the nearer parts, one membrane over
     // the whole component pinned at that surface's own pins; a texel of a nearer part carries it where it lies behind that
@@ -1333,6 +1339,7 @@ function bgSourceHole(o) {
     if (!(rl.sky >= 0)) { const tP = Date.now(); let added = 0, passes = 0, open0 = -1, open1 = 0;
       const shfP = (d) => { if (rl.sky >= 0 && d < rl.sky) return -ex * ppm; const ze = rl.zeAt(d); return ex * (o.D - ze) / ze * ppm; };
       const TFg = meshTris(dQ, joined), TA = new Uint8Array(N).fill(3), zf = new Float32Array(N), z1 = new Float32Array(N), z2 = new Float32Array(N), zA = new Float32Array(N), iA = new Int32Array(N);
+      const pAdd = new Uint8Array(N), edg = new Uint8Array(N);
       for (; passes < 2; passes++) {
         const S1 = new Float64Array(N); for (let i = 0; i < N; i++) S1[i] = shfP(plate[i]);
         const j1 = (i, j) => rl.joinedIdx(i, j, plate, pw);
@@ -1352,9 +1359,19 @@ function bgSourceHole(o) {
           drawMesh(dQ, s, TFg, hx, hy, zf, null); drawMesh(plate, S1, T1, hx, hy, z1, null); if (T2) drawMesh(D2, S2, T2, hx, hy, z2, null);
           drawMesh(plate, S1, TA, hx, hy, zA, iA, true);
           const cov = (q) => zf[q] >= 0 || z1[q] >= 0 || (T2 && z2[q] >= 0);
-          for (let c = 0; c < N; c++) { if (cov(c) || zA[c] < 0) continue; const gx = c % pw, gy = (c - gx) / pw; let sides = 0;
-            for (const sg of [1, -1]) for (let k = 1; k < 4 * pw; k++) { const qx = Math.round(gx + sg * sx * k), qy = Math.round(gy + sg * sy * k); if (qx < 0 || qx >= pw || qy < 0 || qy >= ph) break; if (cov(qy * pw + qx)) { sides++; break; } }
-            if (sides < 2) continue; nOpen++; for (const v of triVerts(iA[c])) if (!hole[v]) want[v] = 1; } }
+          // a gap is an uncovered pixel not connected to the frame's edge through uncovered pixels: what is connected is the
+          // band the picture leaves as it slides, content from beyond the frame (outpaint), not a hole's to fill. (The walk
+          // along h this replaced let a diagonal pose's bottom band pass as a gap wherever the walk met the foreground
+          // first: starwatcher, 18 000 texels of plain carried down through the near ridge to the frame's bottom edge.)
+          { const q = []; edg.fill(0); for (let c = 0; c < N; c++) { const x = c % pw, y = (c - x) / pw; if (!cov(c) && (x === 0 || y === 0 || x === pw - 1 || y === ph - 1)) { edg[c] = 1; q.push(c); } }
+            while (q.length) { const c = q.pop(), x = c % pw; for (const j of [x > 0 ? c - 1 : -1, x < pw - 1 ? c + 1 : -1, c >= pw ? c - pw : -1, c < N - pw ? c + pw : -1]) if (j >= 0 && !edg[j] && !cov(j)) { edg[j] = 1; q.push(j); } } }
+          for (let c = 0; c < N; c++) { if (cov(c) || zA[c] < 0 || edg[c]) continue; const gx = c % pw, gy = (c - gx) / pw;
+            nOpen++; const TV = triVerts(iA[c]); for (const v of TV) if (!hole[v] && !want[v]) want[v] = 1;
+            // the texel the fill shows at this pixel: the pixel carried back by the fill's own shift. A gap wider than a
+            // texel (the fill's inner edge slid out from under the figure: the Vermeer at head-left, 12 px on one row) is
+            // closed in one pass only by the texel that belongs there, not by the stretched triangle's corner.
+            for (const v of TV) { if (!hole[v]) continue; const ux = Math.round(gx - S1[v] * hx), uy = Math.round(gy - S1[v] * hy); if (ux < 0 || ux >= pw || uy < 0 || uy >= ph) continue;
+              const u = uy * pw + ux; if (!hole[u] && dQ[u] > plate[v] + 2 * step) want[u] = 2; } } }
         if (open0 < 0) open0 = nOpen; open1 = nOpen;
         // the missing corners take the fill of the nearest hole texel, along the shortest path from the hole (within
         // WASH_RUN texels) through texels whose source lies in front of that fill by two steps; the path joins the hole
@@ -1362,7 +1379,7 @@ function bgSourceHole(o) {
         let nw = 0; for (let i = 0; i < N; i++) if (want[i]) nw++; if (!nw) break;
         const dist = new Uint8Array(N).fill(255), par = new Int32Array(N).fill(-1), fillV = new Float32Array(N), src = new Int32Array(N).fill(-1), q = new Int32Array(N); let qh = 0, qt = 0;
         for (let i = 0; i < N; i++) if (hole[i]) { dist[i] = 0; fillV[i] = plate[i]; src[i] = i; q[qt++] = i; }
-        while (qh < qt) { const i = q[qh++]; if (dist[i] >= WASH_RUN) continue; const x = i % pw;
+        while (qh < qt) { const i = q[qh++]; if (dist[i] >= 254) continue; const x = i % pw;
           for (const j of [x > 0 ? i - 1 : -1, x < pw - 1 ? i + 1 : -1, i >= pw ? i - pw : -1, i < N - pw ? i + pw : -1]) {
             if (j < 0 || dist[j] !== 255 || !(fillV[i] < dQ[j] - 2 * step)) continue; dist[j] = dist[i] + 1; par[j] = i; fillV[j] = fillV[i]; src[j] = src[i]; q[qt++] = j; } }
         let grew = 0;
@@ -1380,12 +1397,34 @@ function bgSourceHole(o) {
             for (let c = 0; c < 3; c++) wash[3 * v + c] = Math.round(Math.min(255, Math.max(0, cv[c]))); if (plate2) plate2[v] = fv; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * v + c] = wash[3 * v + c]; grew++;
             const x = v % pw; for (const j of [x > 0 ? v - 1 : -1, x < pw - 1 ? v + 1 : -1, v >= pw ? v - pw : -1, v < N - pw ? v + pw : -1]) {
               if (j < 0 || hole[j] || !demanded[j] || !(Fc[j] < dQ[j] - 2 * step) || !rl.joined(Fc[j], fv)) continue; hole[j] = 1; fl.push(j); } } }
-        for (let i = 0; i < N; i++) { if (!want[i] || hole[i] || dist[i] === 255) continue;
-          for (let v = i; v >= 0 && !hole[v]; v = par[v]) { const k = src[v]; hole[v] = 1; plate[v] = fillV[v]; for (let c = 0; c < 3; c++) wash[3 * v + c] = wash[3 * k + c];
+        for (let i = 0; i < N; i++) { if (!want[i] || hole[i] || dist[i] === 255 || (want[i] === 1 && dist[i] > WASH_RUN)) continue;
+          for (let v = i; v >= 0 && !hole[v]; v = par[v]) { const k = src[v]; hole[v] = 1; pAdd[v] = 1; plate[v] = fillV[v]; for (let c = 0; c < 3; c++) wash[3 * v + c] = wash[3 * k + c];
             if (plate2) plate2[v] = plate[v]; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * v + c] = wash[3 * v + c]; grew++; } }
         added += grew; if (!grew) break; }
+      // the texels a path added carry the fill of the hole texel they started from, one value down the whole path; beside
+      // each other, paths from different starts differ, which is a wall in the atlas (troll: 16.9 -> 26.3 walls per 1 000
+      // hole texels with the pixel-carried-back texels). They take the harmonic continuation of the fill around them instead
+      // (Dirichlet at the hole texels beside them, free where they meet the source), kept where it lies behind the source by
+      // two steps, as every hole texel must.
+      let nSm = 0; { const J = [], jx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (pAdd[i]) { jx[i] = J.length; J.push(i); }
+        if (J.length) { const M = J.length, ext = new Map(), exP = [], adj = []; for (let t = 0; t < M; t++) adj.push([]);
+          // only across the same surface: two texels are linked where the rim law joins their path values (a hole texel of
+          // another surface beside the path is a seam, not a pin; linking across it drew a ramp between the wall behind the
+          // Vermeer's woman, 0.01, and the fill under the bowl, 0.6: 59 walls per 1 000 hole texels)
+          for (let t = 0; t < M; t++) for (const j of nbrs(J[t])) { if (j < 0 || !rl.joined(plate[J[t]], plate[j])) continue; if (jx[j] >= 0) adj[t].push(jx[j]); else if (hole[j]) { let k = ext.get(j); if (k === undefined) { k = M + exP.length; ext.set(j, k); exP.push(j); } adj[t].push(k); } }
+          const nN = M + exP.length; while (adj.length < nN) adj.push([]);
+          const st0 = new Int32Array(nN + 1); for (let n = 0; n < nN; n++) st0[n + 1] = st0[n] + adj[n].length; const li = new Int32Array(st0[nN]); for (let n = 0; n < nN; n++) li.set(adj[n], st0[n]);
+          const fix = new Uint8Array(nN), xy = new Int32Array(2 * nN), v4 = [0, 1, 2, 3].map(() => new Float64Array(nN));
+          for (let n = 0; n < nN; n++) { const i = n < M ? J[n] : exP[n - M]; xy[2 * n] = i % pw; xy[2 * n + 1] = (i / pw) | 0; v4[0][n] = plate[i]; for (let c = 0; c < 3; c++) v4[c + 1][n] = wash[3 * i + c]; if (n >= M) fix[n] = 1; }
+          // a group with no pin (no joined hole texel beside it) keeps its path values
+          { const lab = new Int32Array(M).fill(-1), anch = []; let nc = 0; for (let s0 = 0; s0 < M; s0++) { if (lab[s0] >= 0) continue; lab[s0] = nc; const q = [s0]; let a0 = false;
+              while (q.length) { const n = q.pop(); for (const m2 of adj[n]) { if (m2 >= M) { a0 = true; continue; } if (lab[m2] < 0) { lab[m2] = nc; q.push(m2); } } } anch.push(a0); nc++; }
+            for (let t = 0; t < M; t++) if (!anch[lab[t]]) fix[t] = 1; }
+          const U = bgMGSolve(nN, st0, li, new Float64Array(li.length).fill(1), fix, v4, xy, 1e-6).outs;
+          for (let t = 0; t < M; t++) { const i = J[t]; if (!(U[0][t] < dQ[i] - 2 * step)) continue; plate[i] = U[0][t]; for (let c = 0; c < 3; c++) wash[3 * i + c] = Math.round(Math.min(255, Math.max(0, U[c + 1][t])));
+            if (plate2) plate2[i] = plate[i]; if (wash2) for (let c = 0; c < 3; c++) wash2[3 * i + c] = wash[3 * i + c]; nSm++; } } }
       nh = 0; for (let i = 0; i < N; i++) if (hole[i]) nh++;
-      st.patch = { added, passes, openBefore: open0, openAfter: open1, ms: Date.now() - tP }; }
+      st.patch = { added, passes, openBefore: open0, openAfter: open1, smoothed: nSm, ms: Date.now() - tP }; }
     // PINHOLES AGAIN (S62 §10b). bgPinholeFilledMask ran before the rounds, the shown trim and the patch; those leave new
     // enclosed islands of source inside the hole, and the ones at the occluder's own depth (the rule's criterion: within two
     // steps of the source around them) are pieces of the object standing inside the painted background -- in the SD mask, a
@@ -1410,7 +1449,7 @@ function bgSourceHole(o) {
     st.secondLayerTexels = n2; st.msSurfaces = msSurf;
     const far = Float32Array.from(dQ); let nFar = 0;
     for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }
-    Object.assign(st, res.info, { hole: nh, farFieldTexels: nFar, notBehindLeftHole: left, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
+    Object.assign(st, res.info, { hole: nh, farFieldTexels: nFar, notBehindLeftHole: left, notBehindAfterFinal: nBack, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
     return { plate, wash, hole, far, plate2, wash2, has2, stats: st };
 }
 
