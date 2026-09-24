@@ -84,13 +84,41 @@ cn = ControlNetModel.from_pretrained('lllyasviel/control_v11f1p_sd15_depth', var
 pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained('stable-diffusion-v1-5/stable-diffusion-inpainting', controlnet=cn, variant='fp16',
                                                                 torch_dtype=torch.float32, safety_checker=None, requires_safety_checker=False)
 pipe.scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config); pipe.set_progress_bar_config(disable=True)
-t0 = time.time()
-ctl = Image.fromarray(np.round(np.clip(ctl16, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
-res = pipe(prompt=A.prompt, negative_prompt=A.negative, image=img.resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((mask * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
-           control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(A.seed), strength=1.0, width=W, height=H).images[0]
-sd_full = np.asarray(res.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
-out = np.asarray(img).copy(); out[mask] = sd_full[mask]                      # colour on the mask only (the app enforces it too)
+def grown(m):
+    g = GROW['auto'] if A.grow == 'auto' else int(A.grow)
+    if g > 0:
+        from scipy.ndimage import binary_dilation
+        return binary_dilation(m, iterations=g)
+    return m
+def paint(image, m, depth, seed):
+    ctl = Image.fromarray(np.round(np.clip(depth, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
+    r = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(image).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((m * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
+             control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=1.0, width=W, height=H).images[0]
+    return np.asarray(r.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
+# SD paints SURFACES, not plates (S62 §12). Where the bundle carries plate 2, plate 1 is not one surface: in the dune's
+# band it holds the far plain, behind the legs the dune continued. Handed over as one picture, that is a leg-shaped island
+# of near dune in a band of far plain, and SD painted an object there (starwatcher, every pose). So two passes, each a
+# picture of one surface:
+#   FAR:  the far surface wherever the hole shows it (plate 1 outside plate 2's texels, plate 2 inside), with its depth;
+#         it gives plate 1 outside plate 2's texels and plate 2 itself;
+#   NEAR: the middle surface: the source picture with only plate 2's texels (where plate 1 is the nearer layer) repainted,
+#         plate 1's depth there and the source depth around; it gives plate 1 on those texels.
+# Without plate 2 the far pass is the only one (as before).
+t0 = time.time(); src_rgb2 = np.asarray(rd('plane_source_color.png').convert('RGB')); src_d2 = np.asarray(rd('plane_source_depth16.png')).astype(np.float64); src_d2 /= 65535.0 if src_d2.max() > 255 else 255.0
+p1c = np.asarray(img).copy(); has2 = np.zeros((ph, pw), bool); out2 = None
+if 'plane_plate2_mask.png' in names and 'plane_plate2_color.png' in names and 'plane_plate2_depth16.png' in names:
+    has2 = (np.asarray(rd('plane_plate2_mask.png').convert('L')) > 127) & mask_app
+if has2.any():
+    p2c = np.asarray(rd('plane_plate2_color.png').convert('RGB')); p2d = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); p2d /= 65535.0 if p2d.max() > 255 else 255.0
+    farImg = p1c.copy(); farImg[has2] = p2c[has2]; farD = ctl16.copy(); farD[has2] = p2d[has2]
+    far = paint(farImg, mask, farD, A.seed); farOut = farImg.copy(); farOut[mask] = far[mask]
+    nearImg = src_rgb2.copy(); nearImg[has2] = p1c[has2]; nearD = src_d2.copy(); nearD[has2] = ctl16[has2]; nm = grown(has2)
+    near = paint(nearImg, nm, nearD, A.seed + 1)
+    out = farOut.copy(); out[has2] = near[has2]; out2 = farOut
+else:
+    sd_full = paint(p1c, mask, ctl16, A.seed); out = p1c.copy(); out[mask] = sd_full[mask]   # colour on the mask only (the app enforces it too)
 Image.fromarray(out).save(os.path.join(A.out, 'return_band_color.png'))
+if out2 is not None: Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
 info = {'bundle': A.bundle, 'image': img_name, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
         'maskTexels': int(mask.sum()), 'appMaskTexels': int(mask_app.sum()), 'grow': GROW, 'sdSecs': round(time.time() - t0)}
 if A.depth:
@@ -124,28 +152,5 @@ if A.depth:
     for nm, g in (('return_band_gradx16.png', gx), ('return_band_grady16.png', gy)):
         Image.fromarray(np.round(np.clip(g + 0.5, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(A.out, nm))
     info['depth'] = {'model': 'DA3-Mono-Large', 'fit': {'form': form, 'a': float(a), 'b': float(b)}, 'visibleMedianAbsResidual': resid, 'secs': round(time.time() - t1)}
-# THE SECOND LAYER (S62 §12): where the bundle carries plate 2 (plane_plate2_mask: the surface behind a nearer fill, e.g.
-# the plain behind the dune continued behind a figure's legs), a pose that slides plate 1 past shows it, so it is painted
-# too: SD on the first pass's picture with plate 2's own wash in its region, its mask (widened like the first) and plate 2's
-# depth as the condition. Written as return_band2_color.png; the app's import paints plate 2 with it.
-if 'plane_plate2_mask.png' in names and 'plane_plate2_color.png' in names and 'plane_plate2_depth16.png' in names:
-    m2 = np.asarray(rd('plane_plate2_mask.png').convert('L')) > 127
-    if m2.any():
-        t2 = time.time(); c2 = np.asarray(rd('plane_plate2_color.png').convert('RGB'))
-        img2 = out.copy(); img2[m2] = c2[m2]
-        d2 = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); d2 = d2 / (65535.0 if d2.max() > 255 else 255.0)
-        g2 = m2.copy()
-        if A.grow == 'auto' and GROW['auto'] > 0:
-            from scipy.ndimage import binary_dilation
-            g2 = binary_dilation(m2, iterations=GROW['auto'])
-        elif int(A.grow) > 0:
-            from scipy.ndimage import binary_dilation
-            g2 = binary_dilation(m2, iterations=int(A.grow))
-        ctl2 = Image.fromarray(np.round(np.clip(d2, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
-        res2 = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(img2).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((g2 * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
-                    control_image=ctl2, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(A.seed + 1), strength=1.0, width=W, height=H).images[0]
-        sd2 = np.asarray(res2.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
-        out2 = img2.copy(); out2[g2] = sd2[g2]
-        Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
-        info['layer2'] = {'maskTexels': int(m2.sum()), 'sdSecs': round(time.time() - t2)}
+if has2.any(): info['layers'] = {'plate2Texels': int(has2.sum()), 'passes': ['far (plate 1 outside plate 2, and plate 2)', 'near (plate 1 on plate 2\'s texels, on the source picture)']}
 json.dump(info, open(os.path.join(A.out, 'sd_return.json'), 'w'), indent=1); print(json.dumps(info))
