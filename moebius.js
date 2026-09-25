@@ -3010,7 +3010,8 @@ function volumeZOffForNormDepth(d) {
     const z0 = (d < pn)
         ? -outerVolumeDepth * (1.0 - smoothstep(0.0, pn, d))
         :  (innerVolumeDepth + popExtra) * smoothstep(pn, 1.0, d);
-    return (window._cutMap === 'C') ? bgCutRemapZ(z0, bgCutState()) : z0;   // S67 §6 mapping C
+    const z1 = bgMetricLawOn() ? bgMetricLawZ(d) : z0;                     // S69: the per-shot metric law under C / Cm
+    return (window._cutMap === 'C') ? bgCutRemapZ(z1, bgCutState()) : z1;   // S67 §6 mapping C
 }
 function volumeWorldZForNormDepth(d) { return portalPlaneWorldZ + volumeZOffForNormDepth(d); }
 let currentLinearDepthTolerance = 0.03;
@@ -4347,6 +4348,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // apertureCropGLSL. Only what is BEHIND u_apertureZ is cropped.
         u_popExtra:       { value: 0.0 },
         u_cutRemap:       { value: new THREE.Vector3(0, 0.2, 0.2) },   // S67 §6 mapping C
+        u_metricLaw:      { value: new THREE.Vector4(0, 1, 0, 0.2) },  // S69 metric depth law
         u_popH:           { value: 0.2 },
         u_popTanTheta:    { value: 1.0 },
         u_popMargin:      { value: 0.0 },
@@ -4932,6 +4934,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // head — same uniforms object, two stages.
         uniform float u_popExtra;      // 0 = no pop-out
         uniform vec3  u_cutRemap;      // S67 §6 mapping C: (on, D_shot, D_true)
+        uniform vec4  u_metricLaw;     // S69: (on, alpha, beta, D) -- the per-shot metric depth law
         uniform float u_popH;          // eye -> portal distance
         uniform float u_popTanTheta;   // tan of the committed cone half-angle
         uniform float u_popMargin;     // one rendered pixel, in world units
@@ -4954,6 +4957,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             displacement = mix(0.0, u_worldInnerVolumeDepth + u_popExtra, t);
         }
         if (u_skyInf > 0.0 && vNormalizedDepth < u_skyQ) displacement = -u_skyInf;   // S2c: sky at infinity
+        if (u_metricLaw.x > 0.5) {   // S69 bgMetricLawZ: z behind the pin plane = D (Z/Z_s - 1), capped at 999 D
+            float qs = u_metricLaw.y * u_portalPlaneDepthNorm + u_metricLaw.z;
+            float q = max(qs / 1000.0, u_metricLaw.y * vNormalizedDepth + u_metricLaw.z);
+            displacement = -min(999.0 * u_metricLaw.w, u_metricLaw.w * (qs / q - 1.0));
+        }
         if (u_cutRemap.x > 0.5) {   // S67 §6 mapping C (bgCutRemapZ): parallax-space remap onto the true-window eye
             float zb = -displacement; float gB = zb / max(1e-6, u_cutRemap.y + zb); float a = u_cutRemap.y / u_cutRemap.z;
             float g = min(0.999, gB < 0.0 ? a * gB : gB * (a + (1.0 - a) * gB));
@@ -12781,7 +12789,7 @@ function exportSDBundle() {
                 } catch (eC) { console.warn('[Sprint 25] context/occluder-removed failed:', eC); }
                 const Dm = Math.abs(((typeof camera !== 'undefined' && camera) ? camera.position.z : 0) - portalPlaneWorldZ);
                 meta.plane = {
-                    nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null,
+                    nativeRes: [pw, ph], rowsTopFirst: true, build: MOEBIUS_BUILD, plateOptions: window._bgPlateOptions || null, sceneScale: window._sceneScale || null,
                     sourceHole: window._srcHole ? { note: 'S62: the source-anchored hole (hole depth: source). The inpaint mask is the hole itself (every texel class 1); the plate depth is the source outside it and a membrane pinned at the flat background inside; the plate colour is the source outside and the wash inside; no plate 2, no tier.', stats: window._qbSourceHole || null } : null,
                     depth: { convention: 'normalised disparity d in [0,1] (1 = near, 0 = far); the app maps d to view depth with outerVolumeDepth / innerVolumeDepth / currentNormPortalPlane (the portal depth law)', outerVolumeDepth: (typeof outerVolumeDepth === 'number') ? outerVolumeDepth : null, innerVolumeDepth: (typeof innerVolumeDepth === 'number') ? innerVolumeDepth : null, currentNormPortalPlane: (typeof currentNormPortalPlane === 'number') ? currentNormPortalPlane : null,
                              sourceGrid: window._qbSrcGrid ?? null, sourceNoiseSigma: window._qbSrcNoise ?? null, visibleStep: window._qbVisStep ?? null, effectiveQuantum: window._qbSrcQuantum ?? null, skyThreshold: skyOn ? sq : null },
@@ -23618,6 +23626,7 @@ function updateCameraAndProjection() {
             if (uniforms.u_embedOffset)     uniforms.u_embedOffset.value     = bgEmbedOffsetNow();
             if (uniforms.u_refEye) uniforms.u_refEye.value.set(0, 0, bgRefEyeZNow());   // A208
             if (uniforms.u_cutRemap) { const cs = bgCutState(); uniforms.u_cutRemap.value.set(cs.remap ? 1 : 0, cs.Dshot, cs.Dtrue); }   // S67 §6
+            if (uniforms.u_metricLaw) { const S = window._sceneScale; if (bgMetricLawOn()) uniforms.u_metricLaw.value.set(1, S.alpha, S.beta, S.D); else uniforms.u_metricLaw.value.x = 0; }   // S69
             bgSyncApertureUniforms(uniforms);   // A171
 
             // --- NEW: Sync Ghost Mesh Uniforms ---
@@ -23675,6 +23684,7 @@ function updateCameraAndProjection() {
             if (u.u_useRayReproject)       u.u_useRayReproject.value        = _rayReprojectNow();
             if (u.u_refEye)                u.u_refEye.value.set(0, 0, bgRefEyeZNow());   // A208
             if (u.u_cutRemap) { const cs = bgCutState(); u.u_cutRemap.value.set(cs.remap ? 1 : 0, cs.Dshot, cs.Dtrue); }   // S67 §6
+            if (u.u_metricLaw) { const S = window._sceneScale; if (bgMetricLawOn()) u.u_metricLaw.value.set(1, S.alpha, S.beta, S.D); else u.u_metricLaw.value.x = 0; }   // S69
             if (_fC && u.u_frameC) { u.u_frameC.value.set(_fC[0], _fC[1]); u.u_frameH.value.set(_fH[0], _fH[1]);
                                      if (u.u_frameZ) u.u_frameZ.value = _fC.z; }   // A210/A210b
         };
@@ -29040,34 +29050,17 @@ function setupStaticControlListeners() {
         });
     }
 
-    // --- Set Scale Button (Unchanged logic) ---
+    // --- Set Scale (S69): hold the view at rest while two points are clicked; presets fill the real length ---
     document.getElementById('setScaleButton')?.addEventListener('click', () => {
-        setScaleModeActive = !setScaleModeActive;
-        const instructionsPanel = document.getElementById('setScaleInstructions');
-        const setScaleButton = document.getElementById('setScaleButton');
-        if (setScaleModeActive) {
-            scaleFirstPoint = null;
-            scaleFirstPointScreen = null;
-            if (setScaleButton) {
-                setScaleButton.textContent = 'Cancel Scale';
-                setScaleButton.style.backgroundColor = '#dc3545';
-            }
-            if (canvasElement) canvasElement.style.cursor = 'crosshair';
-            if (instructionsPanel) {
-                instructionsPanel.style.display = 'block';
-                instructionsPanel.innerHTML = `<h4>Set Scale</h4><p>Click the <strong>first point</strong>...</p>`;
-            }
-        } else {
-            if (setScaleButton) {
-                setScaleButton.textContent = 'Set Scale';
-                setScaleButton.style.backgroundColor = '';
-            }
-            if (canvasElement) canvasElement.style.cursor = 'default';
-            if (instructionsPanel && !instructionsPanel.innerHTML.includes("<h4>Scale Set!</h4>")) {
-                 instructionsPanel.style.display = 'none';
-            }
-        }
+        if (setScaleModeActive) { bgEndScaleMode(); return; }
+        setScaleModeActive = true; _scaleFirst = null;
+        window._scaleHeldLock = !!window._svEyeLock; window._svEyeLock = true;             // the head block leaves the camera alone
+        camera.position.set(0, 0, subjectFocalPlaneWorldZ + dollyRestDistance); updateCameraAndProjection();
+        const btn = document.getElementById('setScaleButton'); if (btn) { btn.textContent = 'Click the first point...'; btn.style.backgroundColor = '#dc3545'; }
+        if (canvasElement) canvasElement.style.cursor = 'crosshair';
     });
+    document.getElementById('scalePreset')?.addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) { const i = document.getElementById('scaleLen'); if (i) i.value = v; } });
+    document.getElementById('scaleClearBtn')?.addEventListener('click', () => { window._sceneScale = { refs: [] }; bgScaleSolve(); });
 
     // --- Camera Intrinsics Inputs (Unchanged logic) ---
     const focalLengthInput = document.getElementById('focalLengthInput');
@@ -29879,94 +29872,100 @@ function handleCanvasMouseUp(event) {
 }
 
 // --- ADD THIS NEW FUNCTION (around line 5227) ---
-function handleCanvasClickForScale(event) {
-    // This is the logic block moved from handleCanvasClick (lines 5410-5472)
-    
-    if (!depthQueryCtx || !canvasElement || !renderer || !camera) return;
-
+// S69 SET SCALE, REBUILT. A reference is a length in the PICTURE (two clicks, at rest, mapped to source pixels) at the
+// clicks' depth, with its real length; the old tool divided by a 3-D distance in the non-metric volume (mixing axes),
+// read only the vertical pixel distance and the render camera's field of view, and its only live effect was the
+// face-tracking scalar (two uncited constants). What sizes fix and what they cannot (S69 §2): each reference gives
+// q = s/S (portal units per metre) = alpha*d + beta with alpha = D*a, beta = D*b (1/Z = a d + b, the depth map's affine
+// disparity); one reference fixes the scale where it stands, two at different depths (or one plus sky, which is
+// infinity) fix the recession; the lens / camera distance D is never fixed by sizes and comes from the shot lens select
+// or the Camera Intrinsics inputs. Result in window._sceneScale; under the C / Cm cut mappings it drives the metric depth
+// law (bgMetricLawZ); nothing else changes.
+let _scaleFirst = null;
+function bgScaleSrcSample(event) {
     const rect = canvasElement.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    const u = x / rect.width;
-    const v_gl = 1.0 - (y / rect.height); // Y is inverted
-
-    const instructionsPanel = document.getElementById('setScaleInstructions');
-    const setScaleButton = document.getElementById('setScaleButton');
-    
-    // This is the core logic
-    const clickedPoint3D = get3DPointFromUV(u, v_gl);
-    if (!clickedPoint3D) {
-        alert("Could not get 3D point. Is a depth map loaded?");
-        return;
-    }
-
-    if (!scaleFirstPoint) {
-        scaleFirstPoint = clickedPoint3D;
-        scaleFirstPointScreen = { x: event.clientX, y: event.clientY };
-        if (setScaleButton) setScaleButton.textContent = 'Click second point...';
-        if (instructionsPanel) instructionsPanel.innerHTML = `<h4>Set Scale</h4><p>Click the <strong>second point</strong> to complete the measurement.</p>`;
-    } else {
-        const virtualDistance = scaleFirstPoint.distanceTo(clickedPoint3D);
-        const realDistanceStr = prompt(`Virtual distance is ${virtualDistance.toFixed(4)}. Enter the real-world distance between these points in METERS:`);
-        const realDistance = parseFloat(realDistanceStr);
-
-        if (!isNaN(realDistance) && realDistance > 0) {
-            metricScaleFactor = realDistance / virtualDistance;
-            // ... (rest of scale/scalar calculation logic) ...
-            const secondPointScreen = { x: event.clientX, y: event.clientY };
-            const pixelDistance = Math.abs(secondPointScreen.y - scaleFirstPointScreen.y);
-            const canvasRect = canvasElement.getBoundingClientRect();
-            const canvasHeightPixels = canvasRect.height;
-            const vFovRad = THREE.MathUtils.degToRad(camera.fov);
-            const apparentAngle = (pixelDistance / canvasHeightPixels) * vFovRad;
-            const estimatedDistance = (realDistance / 2) / Math.tan(apparentAngle / 2);
-            const NATURAL_INTERACTION_DISTANCE_M = 0.7;
-            const BASE_PARALLAX_SENSITIVITY = 3.0;
-            const newScalar = (NATURAL_INTERACTION_DISTANCE_M / estimatedDistance) * BASE_PARALLAX_SENSITIVITY;
-            const clampedScalar = Math.max(0, Math.min(50, newScalar));
-            const scalarSlider = document.getElementById('facetrackingScalarSlider');
-            const scalarInput = document.getElementById('facetrackingScalarInput');
-            const scalarValue = document.getElementById('facetrackingScalarValue');
-            if(scalarSlider && scalarInput && scalarValue) {
-                scalarSlider.value = clampedScalar;
-                scalarInput.value = clampedScalar;
-                scalarValue.textContent = clampedScalar.toFixed(2);
-            }
-            const resultsPanel = document.getElementById('setScaleInstructions');
-            if (resultsPanel) {
-                const realDistanceInches = realDistance * 39.3701;
-                resultsPanel.innerHTML = `
-                    <h4>Scale Set!</h4>
-                    <p>
-                        Real Size: <strong>${realDistance.toFixed(2)} m / ${realDistanceInches.toFixed(1)} in</strong><br>
-                        Est. Distance: <strong>${estimatedDistance.toFixed(1)} m</strong><br>
-                        New Parallax Scalar: <strong>${clampedScalar.toFixed(2)}</strong>
-                    </p>
-                `;
-                resultsPanel.style.display = 'block';
-                setTimeout(() => {
-                    if (resultsPanel) { resultsPanel.style.display = 'none'; }
-                }, 6000);
-            }
-
-        } else {
-            alert("Invalid distance entered. Scale not set.");
-        }
-
-        setScaleModeActive = false;
-        scaleFirstPoint = null;
-        scaleFirstPointScreen = null;
-        if (setScaleButton) {
-            setScaleButton.textContent = 'Set Scale';
-            setScaleButton.style.backgroundColor = '';
-        }
-        if (canvasElement) canvasElement.style.cursor = 'default';
-        if (instructionsPanel && !instructionsPanel.innerHTML.includes("<h4>Scale Set!</h4>")) {
-             instructionsPanel.style.display = 'none';
-        }
-    }
-    // --- End of moved logic block ---
+    const u = (event.clientX - rect.left) / rect.width, v = (event.clientY - rect.top) / rect.height;
+    const sz = window._qbSize, dQ = window._qbDQ, L = mediaLayers && mediaLayers[0];
+    if (!sz || !dQ || !L || !L.mesh) return null;
+    const gp = L.mesh.geometry.parameters, lw = gp.width, lh = gp.height;
+    // at rest the off-axis frustum maps the terrarium rect onto the canvas; the layer sits centred in it
+    const xw = (u - 0.5) * terrariumWidth, yw = (0.5 - v) * terrariumHeight;
+    const su = xw / lw + 0.5, sv = 0.5 - yw / lh;
+    if (su < 0 || su > 1 || sv < 0 || sv > 1) return null;
+    const px = Math.min(sz.pw - 1, Math.max(0, Math.floor(su * sz.pw))), py = Math.min(sz.ph - 1, Math.max(0, Math.floor(sv * sz.ph)));
+    return { su, sv, px: su * sz.pw, py: sv * sz.ph, d: dQ[py * sz.pw + px], layerW: lw, pw: sz.pw, ph: sz.ph };
+}
+function bgScaleLensD(layerW) {
+    if (window._shotD > 0) return { D: window._shotD * layerW / terrariumWidth, src: 'shot lens select' };
+    const f = parseFloat(document.getElementById('focalLengthInput')?.value), sw = parseFloat(document.getElementById('sensorWidthInput')?.value);
+    if (f > 0 && sw > 0) return { D: layerW * f / sw, src: 'Camera Intrinsics (' + f + ' mm on a ' + sw + ' mm sensor)' };
+    return { D: layerW / (2 * Math.tan(Math.PI / 4)), src: 'default 90 deg' };
+}
+function bgScaleSolve() {
+    const S = window._sceneScale || (window._sceneScale = { refs: [] });
+    const refs = S.refs, notes = [];
+    const dQ = window._qbDQ; let sky = false;
+    if (dQ) { const q = bgSkyQ(); let n = 0; for (let i = 0; i < dQ.length; i += 7) if (dQ[i] < q) n++; sky = n > 0; }
+    const pts = refs.map(r => ({ d: r.d, q: r.q, w: 1 }));
+    if (sky) { pts.push({ d: 0, q: 0, w: 1 }); notes.push('sky present: its disparity is infinity'); }
+    const ds = new Set(pts.map(p => p.d.toFixed(4)));
+    let alpha = null, beta = null;
+    if (refs.length === 0) { S.alpha = S.beta = null; S.status = 'no references'; bgScaleReadout(); return S; }
+    if (ds.size >= 2) {
+        let sw = 0, sd = 0, sq = 0, sdd = 0, sdq = 0;
+        for (const p of pts) { sw += p.w; sd += p.w * p.d; sq += p.w * p.q; sdd += p.w * p.d * p.d; sdq += p.w * p.d * p.q; }
+        const den = sw * sdd - sd * sd; alpha = (sw * sdq - sd * sq) / den; beta = (sq - alpha * sd) / sw;
+    } else { alpha = refs[0].q / Math.max(1e-6, refs[0].d); beta = 0; notes.push('one depth only and no sky: ASSUMED the farthest point (d = 0) is at infinity -- wrong indoors; add a second reference at another depth'); }
+    if (!(alpha > 0)) { notes.push('references CONFLICT (nearer is not larger): the first reference alone is used, with d = 0 at infinity'); alpha = refs[0].q / Math.max(1e-6, refs[0].d); beta = 0; }
+    const pn = currentNormPortalPlane, m = alpha * pn + beta;
+    const lens = bgScaleLensD(refs[0].layerW);
+    S.alpha = alpha; S.beta = beta; S.m = m; S.D = lens.D; S.Dsrc = lens.src; S.Zs = lens.D / Math.max(1e-9, m); S.pn = pn; S.sky = sky; S.notes = notes;
+    S.residuals = refs.map(r => (alpha * r.d + beta) / r.q - 1);
+    S.status = 'ok'; bgScaleReadout(); return S;
+}
+function bgScaleReadout() {
+    const el = document.getElementById('scaleReadout'); if (!el) return; const S = window._sceneScale;
+    if (!S || !S.refs || !S.refs.length) { el.innerHTML = 'no references'; return; }
+    if (S.status !== 'ok') { el.innerHTML = S.status; return; }
+    const farZ = S.beta > 1e-9 ? (S.D / S.beta).toFixed(1) + ' m' : 'infinity';
+    el.innerHTML = S.refs.length + ' reference' + (S.refs.length > 1 ? 's' : '') + (S.sky ? ' + sky' : '') +
+        ' &middot; at the subject plane 1 m = ' + (100 * S.m).toFixed(1) + ' cm on the portal' +
+        ' &middot; subject ' + S.Zs.toFixed(2) + ' m from the camera (lens: ' + S.Dsrc + ')' +
+        ' &middot; farthest point ' + farZ +
+        (S.residuals.length > 1 ? ' &middot; residuals ' + S.residuals.map(x => (100 * x).toFixed(0) + '%').join(' ') : '') +
+        (S.notes.length ? '<br>' + S.notes.join('<br>') : '') +
+        ((window._cutMap === 'C' || window._cutMap === 'Cm') ? '<br>drives the metric depth law (cut mapping ' + window._cutMap + ')' : '<br>(drives the geometry under cut mapping C or Cm)');
+}
+// the per-shot metric depth law: z behind the pin plane = D (Z/Z_s - 1), Z/Z_s = (alpha pn + beta)/(alpha d + beta); capped in
+// parallax space at g = z/(D + z) <= 0.999 (C's cap), so infinity stays finite
+function bgMetricLawOn() { const S = window._sceneScale; return !!(S && S.status === 'ok' && (window._cutMap === 'C' || window._cutMap === 'Cm')); }
+function bgMetricLawZ(d) {   // returns the law's zOff sign (+ toward the viewer)
+    const S = window._sceneScale; const qs = S.alpha * S.pn + S.beta, q = Math.max(qs / 1000, S.alpha * d + S.beta);
+    const zb = Math.min(999 * S.D, S.D * (qs / q - 1)); return -zb;
+}
+function handleCanvasClickForScale(event) {
+    const p = bgScaleSrcSample(event);
+    const panel = document.getElementById('setScaleInstructions'), btn = document.getElementById('setScaleButton');
+    if (!p) { if (panel) { panel.style.display = 'block'; panel.innerHTML = '<p>Click on the picture (a bake is needed for the depth).</p>'; } return; }
+    if (!_scaleFirst) { _scaleFirst = p; if (btn) btn.textContent = 'Click the second point...'; return; }
+    const len = parseFloat(document.getElementById('scaleLen')?.value);
+    const a = _scaleFirst, b = p; _scaleFirst = null;
+    const lenPx = Math.hypot(b.px - a.px, b.py - a.py);
+    if (!(len > 0) || lenPx < 2) { if (panel) { panel.style.display = 'block'; panel.innerHTML = '<p>Scale not set: give a real length and two distinct points.</p>'; } bgEndScaleMode(); return; }
+    // one surface? the join ratio 1.05 on the app's distance from the rest eye (reveal.py / grt_eval's test)
+    const Dr = dollyRestDistance, za = Dr - volumeZOffForNormDepth(a.d), zb = Dr - volumeZOffForNormDepth(b.d);
+    const oneSurface = Math.max(za, zb) <= 1.05 * Math.min(za, zb);
+    const s = lenPx * a.layerW / a.pw;                                    // portal units
+    const ref = { d: 0.5 * (a.d + b.d), q: s / len, lenM: len, lenPx, s, layerW: a.layerW, pw: a.pw, oneSurface, preset: document.getElementById('scalePreset')?.value || 'custom' };
+    (window._sceneScale || (window._sceneScale = { refs: [] })).refs.push(ref);
+    bgScaleSolve();
+    if (!oneSurface) { const el = document.getElementById('scaleReadout'); if (el) el.innerHTML += '<br>the last two points are at different depths: the length is foreshortened; prefer two points on one surface'; }
+    bgEndScaleMode();
+}
+function bgEndScaleMode() {
+    setScaleModeActive = false; _scaleFirst = null; window._svEyeLock = window._scaleHeldLock || false; window._scaleHeldLock = undefined;
+    const btn = document.getElementById('setScaleButton'); if (btn) { btn.textContent = 'Set Scale'; btn.style.backgroundColor = ''; }
+    if (canvasElement) canvasElement.style.cursor = 'default';
 }
 // -----------------------------------------------------------------------------
 // --- MAIN APPLICATION ENTRY POINT --------------------------------------------
