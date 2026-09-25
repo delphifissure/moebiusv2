@@ -2,14 +2,14 @@
 // default) builds its band from a 17x5 CPU sweep; bake it at 17x5 (offset-spaced and angle-spaced), 33x9 and 65x17, and
 // compare each band with the densest. (3) what a bake at an 80 x 80 envelope does (the S64 design target short of 90):
 // time, margin, band, errors -- every D*tan(fadeEnd) site at work.
-//   node harness/envelope_bake_check.js           (default picture; ARMS env to choose)
+//   node harness/envelope_bake_check.js           (default picture; ARMS='[...]' JSON to choose arms, OUTJSON=file)
 'use strict';
 const { chromium } = require('playwright-core');
 const { spawn } = require('child_process');
 const fs = require('fs'); const path = require('path');
 const CHROME = '/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell';
 const H = __dirname, WT = path.resolve(__dirname, '..');
-const ARMS = [
+const ARMS = process.env.ARMS ? JSON.parse(process.env.ARMS) : [
     { tag: '45x30 17x5 offset', env: [45, 30], nx: 17, ny: 5, byAngle: false },
     { tag: '45x30 17x5 angle', env: [45, 30], nx: 17, ny: 5, byAngle: true },
     { tag: '45x30 33x9 offset', env: [45, 30], nx: 33, ny: 9, byAngle: false },
@@ -33,33 +33,33 @@ const ARMS = [
     for (const a of ARMS) {
         const r = await page.evaluate(async (a) => {
             window._rayReproject = true;
-            const sel = { bgPlateFarSel: 'plane', bgPlateFillSel: 'wash', bgPlateMarginSel: 'picture', bgPlateFacesSel: 'off', bgPlateBandSel: '35', bgPlateSkySel: 'off', bgPlateSeamSel: 'stretched', bgPlateJoinSel: 'off' };
+            const sel = { bgPlateFarSel: 'plane', bgPlateFillSel: 'wash', bgPlateMarginSel: 'picture', bgPlateFacesSel: 'off', bgPlateBandSel: '35', bgPlateSkySel: 'off', bgPlateSeamSel: 'stretched', bgPlateJoinSel: 'off', bgPlateHoleSel: 'perline' };   // the per-line band is what this measures (source became the panel default)
             for (const id in sel) { const el = document.getElementById(id); if (el) el.value = sel[id]; }
             if (window._applyPlateOptions) window._applyPlateOptions();
             window._plugObjectRule = false; window._plugExtent = null; window._geoLipSeed = false; window._plugBack = false; window._plateFlushExempt = true;
             const m3 = document.getElementById('bgModeSel'); if (m3) m3.value = 'quick'; bgQuickBake = true; window._bgBakeMode = 'quick';
             bgViewFadeEndDeg = a.env[0]; bgViewFadeEndDegV = a.env[1]; if (typeof _bgRimLaw !== 'undefined') _bgRimLaw = null;
-            window._poseByAngle = a.byAngle;
+            window._poseByAngle = a.byAngle; window._bandSweep = a.sweep || null;
             camera.position.set(0, 0, 0.2); updateCameraAndProjection();
             const t0 = Date.now(); let err = null;
             try { window._plugGeoBand({ flush: true, observed: true, gateAPriori: true, nx: a.nx, ny: a.ny }); } catch (e) { err = String(e && e.stack || e).slice(0, 400); }
-            const ms = Date.now() - t0; window._poseByAngle = false;
+            const ms = Date.now() - t0; window._poseByAngle = false; window._bandSweep = null;
             const dis = window._qbDisocc; let n = 0; const idx = [];
             if (dis) for (let i = 0; i < dis.length; i++) if (dis[i]) { n++; idx.push(i); }
             const sz = window._qbSize;
-            return { ms, err, band: n, N: sz ? sz.pw * sz.ph : 0, margin: window._qbMargin || null, idx,
+            return { ms, err, band: n, sweepStats: a.sweep ? window._bandSweepStats : null, N: sz ? sz.pw * sz.ph : 0, margin: window._qbMargin || null, idx,
                      mem: (performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1e6) : null) };
         }, a);
         bands[a.tag] = new Set(r.idx); delete r.idx;
         const row = Object.assign({ tag: a.tag }, r); out.push(row);
-        console.log(a.tag.padEnd(22), 'bake', (r.ms / 1000).toFixed(1) + 's', 'band', r.band, '(' + (100 * r.band / Math.max(1, r.N)).toFixed(2) + '% of plate)', 'margin', JSON.stringify(r.margin), 'heap', r.mem, 'MB', r.err ? 'ERR ' + r.err : '');
+        console.log(a.tag.padEnd(22), r.sweepStats ? JSON.stringify(r.sweepStats) : '', 'bake', (r.ms / 1000).toFixed(1) + 's', 'band', r.band, '(' + (100 * r.band / Math.max(1, r.N)).toFixed(2) + '% of plate)', 'margin', JSON.stringify(r.margin), 'heap', r.mem, 'MB', r.err ? 'ERR ' + r.err : '');
     }
     for (const env of ['45x30', '80x80']) {
-        const ref = ARMS.find(a => a.ref && a.tag.startsWith(env)); const R = bands[ref.tag];
+        const ref = ARMS.find(a => a.ref && a.tag.startsWith(env)); if (!ref) continue; const R = bands[ref.tag];
         for (const a of ARMS.filter(x => x.tag.startsWith(env) && !x.ref)) { const B = bands[a.tag]; let inter = 0; for (const i of B) if (R.has(i)) inter++;
             const row = out.find(o => o.tag === a.tag); row.vsRef = { ref: ref.tag, recall: inter / Math.max(1, R.size), precision: inter / Math.max(1, B.size), onlyHere: B.size - inter, onlyRef: R.size - inter };
             console.log('  ' + a.tag + ' vs ' + ref.tag + ': recall ' + (100 * row.vsRef.recall).toFixed(2) + '%, precision ' + (100 * row.vsRef.precision).toFixed(2) + '%, only here ' + row.vsRef.onlyHere + ', only in ref ' + row.vsRef.onlyRef); }
     }
-    fs.writeFileSync(path.join(H, 'out_envelope_bake_check.json'), JSON.stringify({ arms: out, logs }, null, 1));
+    fs.writeFileSync(path.join(H, process.env.OUTJSON || 'out_envelope_bake_check.json'), JSON.stringify({ arms: out, logs }, null, 1));
     await browser.close(); srv.kill(); process.exit(0);
 })().catch(e => { console.error('ERR', e.stack || e.message); process.exit(1); });

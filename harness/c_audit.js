@@ -26,7 +26,7 @@ const OUT = process.env.OUT || path.join(__dirname, 'shots', 'c_audit', process.
         window._rayReproject = true;
         if (o.depth) { if (o.depth.outer !== undefined) outerVolumeDepth = o.depth.outer; if (o.depth.inner !== undefined) innerVolumeDepth = o.depth.inner; if (o.depth.pn !== undefined) currentNormPortalPlane = o.depth.pn; }
         // the panel's plane recipe (bakePlate): selects -> flags, then the geometric bake
-        const sel = { bgPlateFarSel: 'plane', bgPlateFillSel: 'wash', bgPlateMarginSel: 'picture', bgPlateFacesSel: 'off', bgPlateBandSel: o.tier || '35', bgPlateSkySel: o.sky ? 'on' : 'off', bgPlateSeamSel: 'stretched', bgPlateJoinSel: 'off' };
+        const sel = { bgPlateFarSel: 'plane', bgPlateFillSel: 'wash', bgPlateMarginSel: 'picture', bgPlateFacesSel: 'off', bgPlateBandSel: o.tier || '35', bgPlateSkySel: o.sky ? 'on' : 'off', bgPlateSeamSel: 'stretched', bgPlateJoinSel: 'off', bgPlateHoleSel: 'perline' };   // the per-line band is what this measures (source became the panel default)
         for (const id in sel) { const el = document.getElementById(id); if (el) el.value = sel[id]; }
         if (window._applyPlateOptions) window._applyPlateOptions();
         if (o.flags) for (const f of o.flags) { const [k, v] = f.split('='); window[k] = (v === undefined) ? true : (isNaN(+v) ? v : +v); }
