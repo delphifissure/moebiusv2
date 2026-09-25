@@ -3971,6 +3971,22 @@ document.addEventListener('DOMContentLoaded', function () {
 // The portal mapping needs only the RATIO r = d / d_intended = span0 / span (neither f_px nor the person's IPD enters);
 // metres need f_px (window._resolvedIntrinsics, a148) and are reported, not used. d_intended is captured automatically
 // on the same condition a145 uses for its template: 30 settled detections with the face centred.
+// S67 §6 THE SHOT'S EYE DISTANCE AND THE ANGLE-PRESERVING HEAD GAIN (window._headByAngle, off by default).
+// Each shot is the real scene scaled so the frame at the subject plane fills the portal; the virtual eye sits where the
+// scaled camera sat, the shot's centre of projection D = (W/2)/tan(hfov/2) (dollyDistForFocal is the same law in mm).
+// The viewer's head must reach the virtual eye by the ratio D / D_rest, so a head angle is the same angle in every
+// shot: the camera moves more the longer the lens, the pinned subject stays where (and as large as) the viewer expects,
+// and only the relief and the background re-perspective. Identity when the shot distance is the rest distance.
+function bgShotDistance() {
+    if (typeof dollyZoomActive !== 'undefined' && dollyZoomActive && typeof camera !== 'undefined' && camera) return Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ);
+    return (window._shotD > 0) ? window._shotD : dollyRestDistance;
+}
+window.setShotLens = function (hfovDeg) {   // a cut: the shot's horizontal field of view (null = back to the rest distance)
+    window._shotD = (hfovDeg > 0) ? (terrariumWidth / 2) / Math.tan(hfovDeg * Math.PI / 360) : null;
+    // the eye goes to the shot's distance now (and back to the rest distance when cleared), unless the dolly owns z
+    if (typeof camera !== 'undefined' && camera && !(typeof dollyZoomActive !== 'undefined' && dollyZoomActive)) camera.position.z = subjectFocalPlaneWorldZ + bgShotDistance();
+    console.log('[S67] shot lens ' + (hfovDeg > 0 ? hfovDeg + ' deg -> eye distance ' + window._shotD.toFixed(3) + ' m (gain ' + (window._shotD / dollyRestDistance).toFixed(2) + ')' : 'cleared'));
+};
 const IRIS_M = 0.0117;
 function bgHeadZWanted() { try { return !!window._headZ || /[?&]headz=1/.test(location.search); } catch (e) { return !!window._headZ; } }
 window._headZState = null;
@@ -23288,8 +23304,10 @@ function updateCameraAndProjection() {
         const effectiveDeviationY = currentCombinedY - baselineFaceTrackerOffsetY;
         const camOff = 0.2;
         const lensGain = Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg) / 2);   // A65: 90deg -> 1.0 (identity)
-        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * lensGain;
-        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * lensGain;
+        // S67 §6: under _headByAngle the lens gain (A65's fixed-distance law) gives way to D_shot / D_rest
+        const headGain = window._headByAngle ? bgShotDistance() / dollyRestDistance : lensGain;
+        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * headGain;
+        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * headGain;
 
         let gyroCamX = 0;
         let gyroCamY = 0;
@@ -23312,8 +23330,8 @@ function updateCameraAndProjection() {
             const stablePitchDegEquivalent = stablePitchRad * radianToDegreeFactor;
             const stableRollDegEquivalent = stableRollRad * radianToDegreeFactor;
 
-            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * lensGain;
-            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * lensGain;
+            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * headGain;
+            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * headGain;
         }
 
         // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
@@ -23324,9 +23342,10 @@ function updateCameraAndProjection() {
         // face's image position measures an ANGLE: the eye stays on the ray the viewer is actually on. The ratio is
         // held to the dolly's own range (dollyMin/MaxDistance, the 18-144 mm lens range) so the eye never reaches
         // the glass.
+        if (window._headByAngle && window._shotD > 0 && !dollyZoomActive) camera.position.z = subjectFocalPlaneWorldZ + window._shotD;
         const _hz = window._headZState;
         if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
-            const zBase = dollyZoomActive ? Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ) : dollyRestDistance;
+            const zBase = bgShotDistance();
             const r = Math.min(dollyMaxDistance / zBase, Math.max(dollyMinDistance / zBase, _hz.ratio));
             window._headZBase = zBase; _hz.applied = r;
             camera.position.x *= r; camera.position.y *= r;
