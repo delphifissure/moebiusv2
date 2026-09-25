@@ -9806,6 +9806,44 @@ window._plugSweepBake = function (opts) {
 //   opts.scale  screen cell size in texels (the renderer sweep samples at
 //               1:minif; use the same to compare) | opts.sign  ray sign
 //   opts.plateIdx  Uint8Array (flipped rows): 1 = plate texel exists (carved)
+// S67 §3 / task 97: THE BAND'S POSES FROM THE DATA (window._bandSweep = 'adaptive'; off by default).
+// The band is the union of what the sweep reveals over the envelope. Along any direction from rest the revealed set
+// grows with the eye offset (the premise of the boundary mode, A180 item 9), so the envelope's PERIMETER sees all the
+// interior sees, and a fixed grid misses only what lies BETWEEN its perimeter directions (S67 §3: 17 x 5 held 86.6 % of
+// a 65 x 17 band at 45 x 30, and 65 x 17 had not converged). So: start from the grid's perimeter poses, and between two
+// neighbouring poses insert the midpoint whenever it reveals a texel neither neighbour reveals; recurse on both halves;
+// stop where a midpoint adds nothing. The stopping rule is the data's (zero new texels), not a density. A depth guard
+// (maxDepth, default 6 = 64 subdivisions of one grid interval) only bounds the cost and is reported when reached.
+// Positions are perimeter fractions (fx, fy on the boundary of [-1, 1]^2) placed through bgPoseAxis, so the pose spacing
+// flag applies here as well.
+function bgAdaptivePerimeterPoses(sweepOpts, NX, NY, maxDepth) {
+    maxDepth = maxDepth || 6;
+    const D = Math.max(1e-3, Math.abs(camera.position.z - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
+    const ex = D * Math.tan(((typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45) * Math.PI / 180), asp = bgEnvAspect();
+    // perimeter parameter t in [0, 4): edge k = floor(t) (0 bottom L->R, 1 right B->T, 2 top R->L, 3 left T->B)
+    const frac = (t) => { const k = Math.floor(((t % 4) + 4) % 4), u = (((t % 4) + 4) % 4) - k, a = 2 * u - 1;
+        return k === 0 ? [a, -1] : k === 1 ? [1, a] : k === 2 ? [-a, 1] : [-1, -a]; };
+    const pose = (t) => { const [fx, fy] = frac(t); return [ex * bgPoseAxis(fx, false), ex * asp * bgPoseAxis(fy, true)]; };
+    const ts = []; for (let i = 0; i < NX - 1; i++) ts.push(i / (NX - 1)); for (let j = 0; j < NY - 1; j++) ts.push(1 + j / (NY - 1));
+    for (let i = 0; i < NX - 1; i++) ts.push(2 + i / (NX - 1)); for (let j = 0; j < NY - 1; j++) ts.push(3 + j / (NY - 1));
+    const cache = new Map(); let evals = 0, guardHits = 0, added = 0;
+    const R = (t) => { const k = t.toFixed(9); if (cache.has(k)) return cache.get(k);
+        const r = window._plugCpuSweep(Object.assign({}, sweepOpts, { poses: [pose(t)], observe: false, nx: undefined, ny: undefined, boundary: false }));
+        evals++; const v = r && r.revealTex ? r.revealTex : new Uint8Array(0); cache.set(k, v); return v; };
+    const out = [];
+    const refine = (t0, t1, depth) => {
+        const a = R(t0), b = R(t1), tm = 0.5 * (t0 + t1), m = R(tm); let nNew = 0;
+        for (let i = 0; i < m.length; i++) if (m[i] && !a[i] && !b[i]) { nNew++; break; }
+        if (!nNew) return;
+        if (depth >= maxDepth) { guardHits++; out.push(tm); return; }
+        out.push(tm); added++; refine(t0, tm, depth + 1); refine(tm, t1, depth + 1);
+    };
+    for (let i = 0; i < ts.length; i++) { out.push(ts[i]); refine(ts[i], i + 1 < ts.length ? ts[i + 1] : 4, 0); }
+    const poses = out.sort((p, q) => p - q).map(pose);
+    window._bandSweepStats = { gridPerimeter: ts.length, poses: poses.length, added, evals, guardHits, maxDepth };
+    console.log('[S67] adaptive perimeter: ' + ts.length + ' grid perimeter poses -> ' + poses.length + ' (' + added + ' inserted, ' + evals + ' single-pose sweeps' + (guardHits ? ', depth guard reached ' + guardHits + 'x' : '') + ')');
+    return poses;
+}
 window._plugCpuSweep = function (opts) {
     opts = opts || {};
     const sz = window._qbSize, dQ = window._qbDQ, pF = window._qbPlateF;
@@ -10688,7 +10726,9 @@ window._plugGeoBand = function (opts) {
     }
     if (window._fragTear) { bgQuickBake = true; buildBackgroundLayer(); }         // pass 1b: the fold field under the far-field gate (A244g), band untouched
     const observed = !!opts.observed;
-    let s1 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent });
+    // S67 / task 97: with window._bandSweep = 'adaptive' the three sweeps below take the data-derived perimeter poses
+    const bandPoses = (window._bandSweep === 'adaptive') ? bgAdaptivePerimeterPoses({ revealDemand: true, farField, farField2, objId, extent: window._plugExtent }, NXg, NYg, opts.maxDepth) : undefined;
+    let s1 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: observed, objId, extent: window._plugExtent, poses: bandPoses });
     if (!s1) { console.warn('[A244] CPU sweep unavailable'); return null; }
     let obsStats = null;
     if (observed && s1.obs) {
@@ -10785,7 +10825,7 @@ window._plugGeoBand = function (opts) {
             // the tear gate now reads the observed field: re-bake the fold field under it and re-observe once,
             // so the band is derived under the tear the final bake will use (item: reveal set drift is reported)
             const rev1 = s1.revealTex; bgQuickBake = true; buildBackgroundLayer();
-            const s1b = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: false });
+            const s1b = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, observe: false, poses: bandPoses });
             if (s1b) { let nA = 0, nB2 = 0, nBoth = 0; for (let i = 0; i < N; i++) { if (rev1[i]) nA++; if (s1b.revealTex[i]) nB2++; if (rev1[i] && s1b.revealTex[i]) nBoth++; }
                 obsStats.regateReveal = [nA, nB2, nBoth];
                 console.log('[A246] re-gated reveal set: ' + nA + ' texels under the far-field gate -> ' + nB2 + ' under the observed gate (' + nBoth + ' shared)');
@@ -10849,7 +10889,7 @@ window._plugGeoBand = function (opts) {
     { const h = [0, 0, 0, 0, 0, 0, 0, 0]; for (let i = 0; i < N; i++) h[geoClass[i]]++;
       console.log('[A252] band classes: continuous ' + h[1] + ', ' + (objId ? 'interior ' : '') + 'step ' + h[2] + (objId ? ', extent step ' + h[7] : '') + ', single-lip ' + h[3] + ', fallback ' + h[4] + ', pinhole ' + h[5] + ', dilation ' + h[6] + '; plate pushed deeper than the field after it on ' + nPost + ' band texels (mean ' + (nPost ? (sPost / nPost).toFixed(4) : '0') + ')');
       if (obsStats) { obsStats.classes = h; obsStats.postDeeper = nPost; obsStats.postMean = nPost ? sPost / nPost : 0; } }
-    const s2 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary });
+    const s2 = window._plugCpuSweep({ revealDemand: true, farField, farField2, nx: NXg, ny: NYg, boundary: !!opts.boundary, poses: bandPoses });
     let nRev2 = 0, nOutside = 0; if (s2) for (let i = 0; i < N; i++) { if (s2.revealTex[i]) { nRev2++; if (!window._qbDisocc[i]) nOutside++; } }
     const stats = { pw, ph, poses: s1.poses, observed, obs: obsStats, boundary: !!opts.boundary, rims: nRim, farFieldCycles: mgF.sweeps[0][1], farFieldErr: mgF.residual / 255, farFieldClamped: nClampF, farFieldMs: msF,
                     revealCells: s1.revealIn, revealOutpaint: s1.revealOut, revealTex: nRev, pinholes: nPin,
