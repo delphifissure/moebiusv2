@@ -3007,9 +3007,10 @@ function volumeZOffForNormDepth(d) {
                   mediaLayers[0].mesh.material && mediaLayers[0].mesh.material.uniforms;
         if (u && u.u_popExtra) popExtra = u.u_popExtra.value || 0;
     } catch (e) {}
-    return (d < pn)
+    const z0 = (d < pn)
         ? -outerVolumeDepth * (1.0 - smoothstep(0.0, pn, d))
         :  (innerVolumeDepth + popExtra) * smoothstep(pn, 1.0, d);
+    return (window._cutMap === 'C') ? bgCutRemapZ(z0, bgCutState()) : z0;   // S67 §6 mapping C
 }
 function volumeWorldZForNormDepth(d) { return portalPlaneWorldZ + volumeZOffForNormDepth(d); }
 let currentLinearDepthTolerance = 0.03;
@@ -3981,10 +3982,45 @@ function bgShotDistance() {
     if (typeof dollyZoomActive !== 'undefined' && dollyZoomActive && typeof camera !== 'undefined' && camera) return Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ);
     return (window._shotD > 0) ? window._shotD : dollyRestDistance;
 }
+// S67 §6 THE CUT MAPPING (window._cutMap, the head-tracking panel's "cut mapping" select; user: try them all).
+//   current  today's behaviour (default)
+//   A        head gain D_shot / D_rest, eye at the shot's centre of projection (angle-preserving; the old _headByAngle)
+//   B        eye at the shot's distance, head motion in constant metres (the lens gain, 1 at the default lens)
+//   C        a TRUE WINDOW (rest eye at the viewer's real distance in portal units, D_true = d_face * W / W_portal) with the
+//            depth remapped in parallax space, g_B = z/(D_shot + z), a = D_shot/D_true, g = g_B (a + (1-a) g_B) behind the
+//            glass and a g_B in front (the fold-free variant), z' = D_true g/(1-g): the subject's relief as under A, the
+//            background world-fixed (g -> 1 at infinity) and the lens's depth compression kept in parallax
+//   Cm       the same true window with the depth as it is (the lens look lives in the picture only)
+// (harness/truthkit/cut_check.py: A, B, C, Cm on a 24 / 200 mm cut.) D_true needs the face distance (z tracking, a known
+// focal length) and the portal's physical width (the canvas width times the screen's pixel pitch); without them it is
+// the rest distance. C's remap is applied in the shared displacement law (GLSL) and in volumeZOffForNormDepth (CPU);
+// other private CPU copies of the law (the reveal field, the rim law) do not see it: a trial mode.
+function bgPortalWidthM() {
+    try { const sm = bgScreenMetres(); const full = !!(document.fullscreenElement || document.webkitFullscreenElement);
+          return full ? sm.W : canvasElement.getBoundingClientRect().width * sm.pitch; } catch (e) { return 0; }
+}
+function bgCutState() {
+    const mode = window._cutMap || (window._headByAngle ? 'A' : 'current');
+    const dolly = (typeof dollyZoomActive !== 'undefined' && dollyZoomActive && typeof camera !== 'undefined' && camera);
+    const Drest = dolly ? Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ) : dollyRestDistance;
+    const Dshot = (mode === 'current') ? Drest : ((window._shotD > 0) ? window._shotD : Drest);
+    let Dtrue = Drest;
+    const hz = window._headZState, Wp = bgPortalWidthM();
+    if (hz && hz.fx > 0 && hz.span0 > 0 && Wp > 0) Dtrue = (hz.fx * IPD_M / hz.span0) * terrariumWidth / Wp;
+    const zBase = (mode === 'C' || mode === 'Cm') ? Dtrue : Dshot;
+    const gain = (mode === 'A' || mode === 'C' || mode === 'Cm') ? zBase / dollyRestDistance : null;   // null: the lens gain
+    return { mode, Drest, Dshot, Dtrue, zBase, gain, remap: mode === 'C' };
+}
+function bgCutRemapZ(zOff, st) {   // zOff in the law's sign (+ toward the viewer, - behind the glass)
+    if (!st || !st.remap || !(st.Dshot > 0 && st.Dtrue > 0)) return zOff;
+    const zb = -zOff, gB = zb / Math.max(1e-6, st.Dshot + zb), a = st.Dshot / st.Dtrue;
+    const g = Math.min(0.999, gB < 0 ? a * gB : gB * (a + (1 - a) * gB));
+    return -(st.Dtrue * g / (1 - g));
+}
 window.setShotLens = function (hfovDeg) {   // a cut: the shot's horizontal field of view (null = back to the rest distance)
     window._shotD = (hfovDeg > 0) ? (terrariumWidth / 2) / Math.tan(hfovDeg * Math.PI / 360) : null;
     // the eye goes to the shot's distance now (and back to the rest distance when cleared), unless the dolly owns z
-    if (typeof camera !== 'undefined' && camera && !(typeof dollyZoomActive !== 'undefined' && dollyZoomActive)) camera.position.z = subjectFocalPlaneWorldZ + bgShotDistance();
+    if (typeof camera !== 'undefined' && camera && !(typeof dollyZoomActive !== 'undefined' && dollyZoomActive)) camera.position.z = subjectFocalPlaneWorldZ + bgCutState().zBase;   // 'current' ignores the shot lens (today's behaviour)
     console.log('[S67] shot lens ' + (hfovDeg > 0 ? hfovDeg + ' deg -> eye distance ' + window._shotD.toFixed(3) + ' m (gain ' + (window._shotD / dollyRestDistance).toFixed(2) + ')' : 'cleared'));
 };
 const IRIS_M = 0.0117;
@@ -4310,6 +4346,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // A171: the aperture crop. Off unless the outer matte is absent — see
         // apertureCropGLSL. Only what is BEHIND u_apertureZ is cropped.
         u_popExtra:       { value: 0.0 },
+        u_cutRemap:       { value: new THREE.Vector3(0, 0.2, 0.2) },   // S67 §6 mapping C
         u_popH:           { value: 0.2 },
         u_popTanTheta:    { value: 1.0 },
         u_popMargin:      { value: 0.0 },
@@ -4894,6 +4931,7 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
         // A174: the tapered pop-out. Declared here as well as in the fragment
         // head — same uniforms object, two stages.
         uniform float u_popExtra;      // 0 = no pop-out
+        uniform vec3  u_cutRemap;      // S67 §6 mapping C: (on, D_shot, D_true)
         uniform float u_popH;          // eye -> portal distance
         uniform float u_popTanTheta;   // tan of the committed cone half-angle
         uniform float u_popMargin;     // one rendered pixel, in world units
@@ -4916,6 +4954,11 @@ function createShaderMaterial(mode, mainTexture, depthTextureForMode, alphaTextu
             displacement = mix(0.0, u_worldInnerVolumeDepth + u_popExtra, t);
         }
         if (u_skyInf > 0.0 && vNormalizedDepth < u_skyQ) displacement = -u_skyInf;   // S2c: sky at infinity
+        if (u_cutRemap.x > 0.5) {   // S67 §6 mapping C (bgCutRemapZ): parallax-space remap onto the true-window eye
+            float zb = -displacement; float gB = zb / max(1e-6, u_cutRemap.y + zb); float a = u_cutRemap.y / u_cutRemap.z;
+            float g = min(0.999, gB < 0.0 ? a * gB : gB * (a + (1.0 - a) * gB));
+            displacement = -(u_cutRemap.z * g / (1.0 - g));
+        }
         // A167: a pure translation along z. The volume keeps its depth and the
         // parallax law is untouched; only the plane it hangs from moves.
         float zOff = displacement + displacementBias + u_embedOffset;
@@ -22441,7 +22484,7 @@ function bgBuildBackgroundLayerCore() {
 function buildBackgroundLayer() {
     // S67 §7: the bake reads the eye distance live from camera.position.z (bgShiftLUTFor and the rest); with head-Z the
     // viewer's lean must not become the bake's D -- the bake is made at the rest distance, the lean re-applies next frame.
-    if (bgHeadZWanted() && window._headZBase > 0 && typeof camera !== 'undefined' && camera) camera.position.z = subjectFocalPlaneWorldZ + window._headZBase;
+    if (window._eyeRestZ > 0 && typeof camera !== 'undefined' && camera) camera.position.z = subjectFocalPlaneWorldZ + window._eyeRestZ;
     // A151 EVERY BAKE DROPS THE PREVIOUS BAKE'S SKIRT.
     //
     // The skirt is a quick-path object, but nothing removed it on a REBUILD:
@@ -22675,6 +22718,9 @@ function _wireDebugSheetControls() {
         if (typeof bgLayerMesh !== 'undefined' && bgLayerMesh) { setP(bgLayerMesh.material); const ud = bgLayerMesh.userData || {}; if (ud.plate2) setP(ud.plate2.material); if (ud.steps) setP(ud.steps.material); if (ud.sky) setP(ud.sky.material); if (ud.back) setP(ud.back.material); if (ud.objLayers) for (const mO of ud.objLayers) setP(mO.material); }
         if (typeof bgSDDemandMesh !== 'undefined' && bgSDDemandMesh && bgSDDemandMesh.material.uniforms.u_paintOnly) bgSDDemandMesh.material.uniforms.u_paintOnly.value = !!on;
     };
+    { const cm = document.getElementById('cutMapSel'), sl = document.getElementById('shotLensSel');   // S67 §6 selects
+      if (cm) cm.addEventListener('change', () => { window._cutMap = cm.value; if (sl) sl.dispatchEvent(new Event('change')); });
+      if (sl) sl.addEventListener('change', () => { const f = +sl.value; window.setShotLens(f > 0 ? 2 * Math.atan(18 / f) * 180 / Math.PI : null); }); }
     document.getElementById('bgLayerBuildBtn')?.addEventListener('click', () => { if (window._applyPlateOptions) window._applyPlateOptions(); /* read the selects now, not the cached copy (a value set from the console fires no change event) */ if (window._bakePlate && (window._bgPlateOptions || {}).far === 'plane') window._bakePlate(); else buildBackgroundLayerWithOverlay(); });   // S6: the Build button honours the plate options
     // ON LOAD THE APP STAYS ON REALTIME INPAINTING (the screen-space
     // pullpush path) — the plane/bake builds are synchronous and would
@@ -23404,7 +23450,8 @@ function updateCameraAndProjection() {
         const camOff = 0.2;
         const lensGain = Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg) / 2);   // A65: 90deg -> 1.0 (identity)
         // S67 §6: under _headByAngle the lens gain (A65's fixed-distance law) gives way to D_shot / D_rest
-        const headGain = window._headByAngle ? bgShotDistance() / dollyRestDistance : lensGain;
+        const _cut = bgCutState();
+        const headGain = (_cut.gain !== null) ? _cut.gain : lensGain;
         let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * headGain;
         let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * headGain;
 
@@ -23441,7 +23488,8 @@ function updateCameraAndProjection() {
         // face's image position measures an ANGLE: the eye stays on the ray the viewer is actually on. The ratio is
         // held to the dolly's own range (dollyMin/MaxDistance, the 18-144 mm lens range) so the eye never reaches
         // the glass.
-        if (window._headByAngle && window._shotD > 0 && !dollyZoomActive) camera.position.z = subjectFocalPlaneWorldZ + window._shotD;
+        if (_cut.mode !== 'current' && !dollyZoomActive) camera.position.z = subjectFocalPlaneWorldZ + _cut.zBase;
+        window._eyeRestZ = (_cut.mode !== 'current') ? _cut.zBase : null;
         const _hz = window._headZState;
         if (window._headZ === 2 && _hz && _hz.span0 && _hz.fx && _hz.u !== undefined && videoInput && videoInput.videoWidth) {
             // the metric eye: replaces the face term (and the rest-pose baseline, which only a fixed distance justifies)
@@ -23451,16 +23499,16 @@ function updateCameraAndProjection() {
             const portalY = full ? 0 : -((cRect.top + cRect.height / 2) + (window.screenY || 0) - sm.sh / 2) * sm.pitch;
             const P = bgMetricEye({ u: _hz.u, v: _hz.v, span: _hz.span, fx: _hz.fx, cx: videoInput.videoWidth / 2, cy: videoInput.videoHeight / 2,
                                     ipdM: IPD_M, camX: co.x, camY: co.y, portalX, portalY });
-            const d0 = _hz.fx * IPD_M / _hz.span0, zBase = bgShotDistance();
-            const k = Math.min(dollyMaxDistance, Math.max(dollyMinDistance, zBase * P.z / d0)) / P.z;   // D_shot / d_intended, the eye held to the dolly's range
-            window._headZBase = zBase; _hz.applied = P.z / d0; _hz.eyeM = P;
+            const d0 = _hz.fx * IPD_M / _hz.span0, zBase = _cut.zBase;
+            const k = zBase * Math.min(dollyMaxDistance / dollyRestDistance, Math.max(dollyMinDistance / dollyRestDistance, P.z / d0)) / P.z;   // the lean ratio held to the dolly's range of ratios (18-144 mm about 45 mm)
+            window._headZBase = zBase; window._eyeRestZ = zBase; _hz.applied = P.z / d0; _hz.eyeM = P;
             camera.position.x = (P.x * k + gyroCamX + manualCamDX) * dollyLatGain;
             camera.position.y = (P.y * k + gyroCamY + manualCamDY) * dollyLatGain;
             camera.position.z = subjectFocalPlaneWorldZ + P.z * k;
         } else if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
-            const zBase = bgShotDistance();
-            const r = Math.min(dollyMaxDistance / zBase, Math.max(dollyMinDistance / zBase, _hz.ratio));
-            window._headZBase = zBase; _hz.applied = r;
+            const zBase = _cut.zBase;
+            const r = Math.min(dollyMaxDistance / dollyRestDistance, Math.max(dollyMinDistance / dollyRestDistance, _hz.ratio));   // a ratio range, so any shot distance can lean
+            window._headZBase = zBase; window._eyeRestZ = zBase; _hz.applied = r;
             camera.position.x *= r; camera.position.y *= r;
             camera.position.z = subjectFocalPlaneWorldZ + zBase * r;
         }
@@ -23609,6 +23657,7 @@ function updateCameraAndProjection() {
             if (uniforms.u_useRayReproject) uniforms.u_useRayReproject.value = _rayReprojectNow();
             if (uniforms.u_embedOffset)     uniforms.u_embedOffset.value     = bgEmbedOffsetNow();
             if (uniforms.u_refEye) uniforms.u_refEye.value.set(0, 0, bgRefEyeZNow());   // A208
+            if (uniforms.u_cutRemap) { const cs = bgCutState(); uniforms.u_cutRemap.value.set(cs.remap ? 1 : 0, cs.Dshot, cs.Dtrue); }   // S67 §6
             bgSyncApertureUniforms(uniforms);   // A171
 
             // --- NEW: Sync Ghost Mesh Uniforms ---
@@ -23665,6 +23714,7 @@ function updateCameraAndProjection() {
             bgSyncApertureUniforms(u);          // A171
             if (u.u_useRayReproject)       u.u_useRayReproject.value        = _rayReprojectNow();
             if (u.u_refEye)                u.u_refEye.value.set(0, 0, bgRefEyeZNow());   // A208
+            if (u.u_cutRemap) { const cs = bgCutState(); u.u_cutRemap.value.set(cs.remap ? 1 : 0, cs.Dshot, cs.Dtrue); }   // S67 §6
             if (_fC && u.u_frameC) { u.u_frameC.value.set(_fC[0], _fC[1]); u.u_frameH.value.set(_fH[0], _fH[1]);
                                      if (u.u_frameZ) u.u_frameZ.value = _fC.z; }   // A210/A210b
         };
@@ -25348,7 +25398,12 @@ function toggleSDPatchVisibility() {
 // and remains available.
 let bgEmbedVolume = false;
 function bgRefEyeZNow() {   // A208: frozen while the dolly runs, live otherwise
-    return (dollyZoomActive && dollyRefEyeZ !== null) ? dollyRefEyeZ : camera.position.z;
+    if (dollyZoomActive && dollyRefEyeZ !== null) return dollyRefEyeZ;
+    // S67 §6/§7: under z tracking or a cut mapping the eye leans away from its rest distance; the reference (authoring) eye
+    // must stay at the rest distance, as it does under the dolly (A208) -- a live reference re-places the volume along the
+    // leaning eye's own rays, so leaning in would reveal nothing
+    if (window._eyeRestZ > 0) return subjectFocalPlaneWorldZ + window._eyeRestZ;
+    return camera.position.z;
 }
 function bgEmbedOffsetNow() {
     return bgEmbedVolume ? -Math.max(0, innerVolumeDepth) : 0;
