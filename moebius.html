@@ -295,6 +295,9 @@
           <label style="font-size:0.85em;" title="also return depth (DA3 on the painted picture, fitted to the source depth on the background)"><input type="checkbox" id="paintDepthChk" checked> depth</label>
           <input type="text" id="paintServerUrl" placeholder="server (blank = this app's /paint)" style="width:150px; font-size:0.85em;" title="blank: this app's server forwards /paint to http://127.0.0.1:8765 (server.js, PAINT_URL). Or a full URL, e.g. http://localhost:8765 or a GPU machine's address">
           <span id="paintStatus" style="margin-left:6px; font-size:0.85em;"></span>
+          <span style="margin-left:12px; font-size:0.85em;" title="S71: a light-field quilt -- cols x rows views across the display's viewing cone, each the app's off-axis render from that angle. Set cols, rows and cone to the display's calibration.">
+            <button type="button" id="quiltBtn" style="padding:2px 8px;">💠 Quilt</button>
+            <input type="number" id="quiltCols" value="8" min="1" max="16" style="width:40px;"> × <input type="number" id="quiltRows" value="6" min="1" max="16" style="width:40px;"> views, cone <input type="number" id="quiltCone" value="40" min="1" max="120" style="width:44px;">°</span>
         </div>
         <div class="slider-container">
           <label for="debugViewSelect">Debug View:</label>
