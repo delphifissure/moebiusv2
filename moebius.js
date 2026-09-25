@@ -151,6 +151,16 @@ function bgPoseFrac(x, y, D) {
     const exR = Math.max(1e-6, D) * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
     return Math.max(Math.abs(x) / exR, Math.abs(y) / (exR * bgEnvAspect()));
 }
+// S64 (behind window._poseByAngle): where a sweep grid puts its u-th pose, u in [-1, 1] across the envelope on one
+// axis, as a fraction of the rim offset. Default: uniform in eye offset (u itself, today's grid). Under the flag:
+// uniform in viewing ANGLE, tan(u*A)/tan(A) with A the fade-end angle of that axis -- the only spacing that stays
+// finite as A -> 90 deg (the rim offset D tan A is unbounded) and that spends the poses where band texels are seen
+// largest (seen size ~ cos^2 theta, S64 sec. 1). Same endpoints (u = -1, 0, 1) in both.
+function bgPoseAxis(u, vertical) {
+    if (!window._poseByAngle) return u;
+    const A = (vertical ? bgViewFadeEndDegV : bgViewFadeEndDeg) * Math.PI / 180;
+    return Math.tan(u * A) / Math.tan(A);
+}
 // The fade in pose-fraction units: start = tan(35)/tan(45) = 0.700 of the rim on
 // the horizontal axis, and the same fraction of the (smaller) vertical rim.
 function bgFadeFrac(x, y, D) {
@@ -9514,7 +9524,7 @@ window._plugVisibilitySweep = function (opts) {
     const asp = bgEnvAspect();   // S2a: 45/30 envelope
     const NX = opts.nx || 17, NY = opts.ny || 5;   // 17 across: adjacent poses 1/8 of the cone apart in x, the axis of head motion
     const poses = opts.poses || [];
-    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * (2 * ix / (NX - 1) - 1), ex * asp * (2 * iy / (NY - 1) - 1)]);
+    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * bgPoseAxis(2 * ix / (NX - 1) - 1, false), ex * asp * bgPoseAxis(2 * iy / (NY - 1) - 1, true)]);
     const seen = new Uint8Array(N); let bad = 0, nPix = 0;
     // A234: hole -> covering texel. Needs the final plate depths and the demand
     // mask (captured by the bake under _plugSweepCapture) and the shift LUT.
@@ -9712,7 +9722,7 @@ window._plugCpuSweep = function (opts) {
     // uncovered set and the per-fragment tear set grow monotonically with the eye offset (the
     // between-pose pad was falsified on that ground, Addendum 180 item 9), so the cone's boundary
     // sees every reveal the interior sees — measured against the full grid before being trusted.
-    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { if (opts.boundary && !(ix === 0 || ix === NX - 1 || iy === 0 || iy === NY - 1)) continue; poses.push([exRim * (2 * ix / (NX - 1) - 1), exRim * asp * (2 * iy / (NY - 1) - 1)]); }
+    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { if (opts.boundary && !(ix === 0 || ix === NX - 1 || iy === 0 || iy === NY - 1)) continue; poses.push([exRim * bgPoseAxis(2 * ix / (NX - 1) - 1, false), exRim * asp * bgPoseAxis(2 * iy / (NY - 1) - 1, true)]); }
     const sc = opts.scale || 1, sign = (opts.sign === undefined) ? -1 : opts.sign;
     const GW = Math.ceil(pw / sc), GH = Math.ceil(ph / sc), G = GW * GH;
     const plateIdx = opts.plateIdx || null;

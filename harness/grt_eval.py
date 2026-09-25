@@ -98,6 +98,7 @@ def far_seed(dn, hole):
     return allow & (m >= thr)
 
 
+KLEIN_PROMPT = 'the background behind, continuous surfaces, natural texture'   # sd_return.py's prompt, one for every picture
 _lama = None
 def lama(img, hole):
     global _lama
@@ -146,6 +147,9 @@ if __name__ == '__main__':
                 if p == 'lama': fill = lama(img, hole)
                 elif p == 'pp': fill = pushpull(img, ~hole)
                 elif p == 'pp_far': fill = pushpull(img, far_seed(dn, hole))
+                elif p == 'klein':
+                    import klein
+                    fill = klein.paint((img * 255).astype(np.uint8), hole, KLEIN_PROMPT).astype(np.float32) / 255
                 comp = img.copy(); comp[hole] = fill[hole]
                 Image.fromarray((np.clip(comp, 0, 1) * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_%s.png' % (name, key, p)))
                 res[name][key][p] = scores(fill, img, hole); res[name][key][p]['secs'] = round(time.time() - t0, 1)

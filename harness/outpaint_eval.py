@@ -11,6 +11,8 @@ Painters (general, fixed for every picture):
   clamp   what the app shows today: the inner rectangle's edge pixels stretched outward (ClampToEdge)
   pp      push-pull from the inner rectangle (Solh & AlRegib)
   lama    LaMa
+  sd_fd   the same SD, with the margin depth CONTINUED from the edge surfaces (continue_depth) instead of clamped
+  klein   FLUX.2 [klein] 4B inpaint (klein.py: Apache-2.0, 4 steps, Q8 GGUF on CPU), the same prompt, no depth control
   sd      SD 1.5 inpainting + depth ControlNet (the pipeline of sd_return.py); depth = the source depth clamp-extended,
           which is what the bundle's plane_out_depth16 carries; one prompt for all pictures
 
@@ -38,6 +40,37 @@ def clamp_fill(img, m):
     H, W = img.shape[:2]
     yy = np.clip(np.arange(H), m, H - 1 - m); xx = np.clip(np.arange(W), m, W - 1 - m)
     return img[np.ix_(yy, xx)]
+
+
+def continue_depth(dn, m):
+    """Margin depth that CONTINUES each edge surface outward instead of repeating the edge value (the bundle's
+    plane_out_depth16 is clamp-extended). Per edge line (row for left/right, column for top/bottom): fit a line to the
+    inner rectangle's last k samples, where k is the ring width itself (the strip is extrapolated over as many samples
+    as it was fitted on -- no other constant), and extend it; the fit is on the FAR-side samples only (a sample nearer
+    than the line's median by more than the join ratio, i.e. a foreground object touching the edge, is dropped), and the
+    result is clamped to the picture's own depth range. Corners take the mean of the two extensions."""
+    H, W = dn.shape; out = dn.copy(); lo, hi = float(dn.min()), float(dn.max())
+    k = max(2, m)
+    def fit_ext(v, n):          # v: inner samples ordered from the edge inward; returns n values outward
+        x = np.arange(len(v), dtype=np.float64); ok = v <= np.median(v) * 1.05 + 1e-9
+        if ok.sum() < 2: ok[:] = True
+        a, b = np.polyfit(x[ok], v[ok], 1)
+        return np.clip(b + a * (-np.arange(1, n + 1)), lo, hi)
+    ext = np.full((H, W), np.nan); cnt = np.zeros((H, W))
+    for y in range(m, H - m):
+        L = fit_ext(dn[y, m:m + k][::1], m); R = fit_ext(dn[y, W - m - k:W - m][::-1], m)
+        ext[y, :m] = L[::-1]; ext[y, W - m:] = R
+    for x in range(m, W - m):
+        T = fit_ext(dn[m:m + k, x], m); B = fit_ext(dn[H - m - k:H - m, x][::-1], m)
+        ext[:m, x] = T[::-1]; ext[H - m:, x] = B
+    # corners: mean of the row and column extensions of the adjacent edge lines' ends
+    for ys, xs in [(slice(0, m), slice(0, m)), (slice(0, m), slice(W - m, W)), (slice(H - m, H), slice(0, m)), (slice(H - m, H), slice(W - m, W))]:
+        yy, xx = np.mgrid[ys, xs]
+        ry = np.clip(yy, m, H - m - 1); rx = np.clip(xx, m, W - m - 1)
+        ext[yy, xx] = 0.5 * (ext[ry, xx] + ext[yy, rx])
+    ring = np.ones((H, W), bool); ring[m:H - m, m:W - m] = False
+    out[ring] = ext[ring]
+    return out
 
 
 _pipe = None
@@ -84,6 +117,10 @@ for spec in A.pics:
             elif p == 'pp': fill = G.pushpull(img, ~hole)
             elif p == 'lama': fill = G.lama(seen, hole)
             elif p == 'sd': fill = sd_fill(seen, dclamp, hole)
+            elif p == 'sd_fd': fill = sd_fill(seen, continue_depth(np.where(hole, 0, dn), m), hole)
+            elif p == 'klein':
+                import klein
+                fill = klein.paint((seen * 255).astype(np.uint8), hole, A.prompt, seed=A.seed).astype(np.float32) / 255
             comp = img.copy(); comp[hole] = fill[hole]
             Image.fromarray((np.clip(comp, 0, 1) * 255).astype(np.uint8)).save(os.path.join(A.out, '%s_%s_%s.png' % (name, key, p)))
             r[p] = G.scores(fill, img, hole); r[p]['secs'] = round(time.time() - t0, 1)
