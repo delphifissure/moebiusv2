@@ -2387,7 +2387,10 @@ function _dbgViewAngleStamp() {
                    ? ('OUTSIDE the ' + bgViewFadeEndDeg + 'deg cone by ' + (ang - bgViewFadeEndDeg).toFixed(1) +
                       'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim) — viewer sees BLACK')
                    : ('inside ' + bgViewFadeEndDeg + 'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim)')) +
-               ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)');
+               ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)') +
+               ((bgHeadZWanted() && window._headZState) ? (' | headZ r=' + (window._headZState.ratio ? window._headZState.ratio.toFixed(3) : 'calibrating') +
+                   (window._headZState.dIpd ? ' d=' + window._headZState.dIpd.toFixed(2) + 'm(ipd)' : '') +
+                   (window._headZState.dIris ? ' ' + window._headZState.dIris.toFixed(2) + 'm(iris)' : '') + (window._headZState.fx ? '' : ' (no fx)')) : '');
     } catch (e) { return 'ang=?'; }
 }
 // =============================================================================
@@ -3958,6 +3961,56 @@ document.addEventListener('DOMContentLoaded', function () {
 // --- FACE TRACKING LOGIC (MediaPipe Face Mesh) -------------------------------
 // -----------------------------------------------------------------------------
 
+// S67 §7 HEAD DISTANCE FROM THE FACE MESH (window._headZ, or ?headz=1; off by default).
+// d = f_px * S / s_px for a facial feature of physical size S. Two features:
+//   IPD   the iris centres 468/473 (else the eye corners 33/263 / 1.45, a146b's canonical ratio), measured as a 3-D span
+//         over the mesh's x, y, z so a head turn does not shrink it (the 2-D span falls as cos(yaw)); S = IPD_M (a146b).
+//   iris  the iris ring 469-472 / 474-477: the larger of its two diameters (a circle seen obliquely keeps its major axis),
+//         averaged over both eyes; S = IRIS_M, the horizontal visible iris diameter MediaPipe Iris takes as its scale
+//         (11.7 mm; to be read first-hand before its spread is quoted).
+// The portal mapping needs only the RATIO r = d / d_intended = span0 / span (neither f_px nor the person's IPD enters);
+// metres need f_px (window._resolvedIntrinsics, a148) and are reported, not used. d_intended is captured automatically
+// on the same condition a145 uses for its template: 30 settled detections with the face centred.
+const IRIS_M = 0.0117;
+function bgHeadZWanted() { try { return !!window._headZ || /[?&]headz=1/.test(location.search); } catch (e) { return !!window._headZ; } }
+window._headZState = null;
+function bgHeadZMeasure(kp) {
+    const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+    const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    let span = null, iris = null;
+    if (kp[468] && kp[473]) span = d3(kp[468], kp[473]);
+    else if (kp[33] && kp[263]) span = d3(kp[33], kp[263]) / 1.45;
+    if (kp[472] && kp[477]) {
+        const e1 = Math.max(d2(kp[469], kp[471]), d2(kp[470], kp[472])), e2 = Math.max(d2(kp[474], kp[476]), d2(kp[475], kp[477]));
+        iris = 0.5 * (e1 + e2);
+    }
+    return { span, iris };
+}
+function bgHeadZUpdate(kp, nx, ny, frameW) {
+    if (!bgHeadZWanted()) return;
+    const m = bgHeadZMeasure(kp); if (!(m.span > 1)) return;
+    const S = window._headZState || (window._headZState = { span: m.span, iris: m.iris, span0: null, good: 0 });
+    // the same exponential smoothing the lateral track uses (faceSmoothingFactor): no new constant
+    S.span = faceSmoothingFactor * m.span + (1 - faceSmoothingFactor) * S.span;
+    if (m.iris > 0) S.iris = (S.iris > 0) ? faceSmoothingFactor * m.iris + (1 - faceSmoothingFactor) * S.iris : m.iris;
+    if (S.span0 === null) {
+        S.good++;
+        if (S.good > 30 && Math.abs(nx - 0.5) < 0.12 && Math.abs(ny - 0.5) < 0.12) { S.span0 = S.span; S.iris0 = S.iris; console.log('[S67] head-Z rest reference captured: span ' + S.span.toFixed(1) + ' px' + (S.iris > 0 ? ', iris ' + S.iris.toFixed(1) + ' px' : '')); }
+    }
+    S.ratio = S.span0 ? S.span0 / S.span : null;
+    const R = window._resolvedIntrinsics; let fx = (R && R.fx > 0) ? R.fx : null;
+    S.fxSource = fx ? 'a148 resolver' : null;
+    if (!fx) { try { const f = bgDeviceFovProfile(); if (f && f.hfov > 0) { fx = (frameW / 2) / Math.tan(f.hfov * Math.PI / 360); S.fxSource = 'device profile ' + (f.key || 'override') + ' (' + f.hfov + ' deg)'; } } catch (e) {} }
+    S.fx = fx;
+    S.dIpd = fx ? fx * IPD_M / S.span : null;
+    S.dIris = (fx && S.iris > 0) ? fx * IRIS_M / S.iris : null;
+}
+window.headZRecalibrate = function () { if (window._headZState) { window._headZState.span0 = null; window._headZState.good = 0; } };
+window.setHeadZ = async function (on) {
+    const was = bgHeadZWanted(); window._headZ = !!on; window._headZState = null;
+    if (bgHeadZWanted() !== was && typeof faceSmoothingFactor !== 'undefined') { try { await initializeFaceMesh(); } catch (e) { console.warn('[S67] detector re-init failed', e); } }
+};
+
 async function initializeFaceMesh() {
   // We still set the TFJS backend as it's used internally, even with MediaPipe runtime.
   await tf.setBackend('webgl');
@@ -3966,7 +4019,7 @@ async function initializeFaceMesh() {
   const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
   const detectorConfig = {
     maxFaces: 1,
-    refineLandmarks: false,
+    refineLandmarks: bgHeadZWanted(),   // S67 §7: the iris landmarks (468-477) carry the distance scale; off unless head-Z
     // Switch runtime from 'tfjs' to 'mediapipe' for reliability
     runtime: 'mediapipe',
     // Provide the location of the MediaPipe solution files via CDN
@@ -4016,6 +4069,7 @@ async function runFaceMeshCycle() {
         // the smoothed one — smoothing lags, and the last frame before a loss is
         // exactly where the lag would misreport the boundary.
         bgNoteFaceSeen(normalizedX, normalizedY);
+        bgHeadZUpdate(keypoints, normalizedX, normalizedY, videoInput.videoWidth);   // S67 §7 (no-op unless head-Z)
         // A148b HEAD POSE FROM THE FACE. Written exactly as the intrinsics brief
         // states it, so the dependency is visible in the code: fx enters Z and
         // nothing else. X and Y are computed here too and are INDEPENDENT of fx
@@ -11927,8 +11981,12 @@ window._revealLaw = function (pw, ph) {
     const tw = (typeof terrariumWidth === 'number') ? terrariumWidth : 0.16, th = (typeof terrariumHeight === 'number') ? terrariumHeight : 0.09;
     const la = pw / ph, fa = tw / th;
     const layerW = (la > fa) ? tw : th * la;                 // the app's own fit (see the u_plateFold arming: layerWf)
-    const exH = D * Math.tan((bgViewFadeEndDeg || 45) * Math.PI / 180);
-    const exV = D * Math.tan(((typeof bgViewFadeEndDegV === 'number' ? bgViewFadeEndDegV : 30)) * Math.PI / 180);
+    // S64: the gap a texel pair opens is seen at tan(theta) cos^2(theta) = sin(2 theta)/2 of its size at 45 deg on the glass,
+    // largest AT 45 deg, so the tolerance is evaluated at min(fadeEnd, 45) per axis: identical for any envelope up to 45
+    // (today's 45 x 30), and bounded past it (D tan(fadeEnd) -> infinity at 90 while the seen gap shrinks back to 0).
+    const cap45 = (deg) => Math.min(deg, 45) * Math.PI / 180;
+    const exH = D * Math.tan(cap45(bgViewFadeEndDeg || 45));
+    const exV = D * Math.tan(cap45((typeof bgViewFadeEndDegV === 'number' ? bgViewFadeEndDegV : 30)));
     const canvasW = (typeof renderer !== 'undefined' && renderer && renderer.domElement) ? renderer.domElement.width : pw;
     // screen px per world metre on the portal plane. The layer occupies layerW/tw of the frame's width and (canvasW * that)
     // of its pixels, so the ratio reduces to canvasW / tw exactly -- the layer's own fit cancels.
@@ -22267,6 +22325,9 @@ function bgBuildBackgroundLayerCore() {
 // A try/finally wrapper is the single point that covers all three bake modes'
 // return paths (quick, v2, v1) without threading a claim through each one.
 function buildBackgroundLayer() {
+    // S67 §7: the bake reads the eye distance live from camera.position.z (bgShiftLUTFor and the rest); with head-Z the
+    // viewer's lean must not become the bake's D -- the bake is made at the rest distance, the lean re-applies next frame.
+    if (bgHeadZWanted() && window._headZBase > 0 && typeof camera !== 'undefined' && camera) camera.position.z = subjectFocalPlaneWorldZ + window._headZBase;
     // A151 EVERY BAKE DROPS THE PREVIOUS BAKE'S SKIRT.
     //
     // The skirt is a quick-path object, but nothing removed it on a REBUILD:
@@ -23258,6 +23319,19 @@ function updateCameraAndProjection() {
         // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
         camera.position.x = (faceTrackCamX + gyroCamX + manualCamDX) * dollyLatGain;
         camera.position.y = (faceTrackCamY + gyroCamY + manualCamDY) * dollyLatGain;
+        // S67 §7: with head-Z the eye distance follows the viewer's, d/d_intended, from the rest distance (the dolly's
+        // distance this frame when it runs, else the rest distance) -- and x, y scale by the same ratio, because the
+        // face's image position measures an ANGLE: the eye stays on the ray the viewer is actually on. The ratio is
+        // held to the dolly's own range (dollyMin/MaxDistance, the 18-144 mm lens range) so the eye never reaches
+        // the glass.
+        const _hz = window._headZState;
+        if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
+            const zBase = dollyZoomActive ? Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ) : dollyRestDistance;
+            const r = Math.min(dollyMaxDistance / zBase, Math.max(dollyMinDistance / zBase, _hz.ratio));
+            window._headZBase = zBase; _hz.applied = r;
+            camera.position.x *= r; camera.position.y *= r;
+            camera.position.z = subjectFocalPlaneWorldZ + zBase * r;
+        }
         // a130 / A8: record where the head ACTUALLY goes. The simulated viewer
         // answers "what does an off-axis viewer see?"; this answers "does
         // anyone ever go there?" — the other half of the cone question, and the
