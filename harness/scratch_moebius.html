@@ -21,6 +21,12 @@
         <div id="transform" title="Displays face tracking coordinates or status."></div>
 
         <h4 class="control-header">Headtracking</h4>
+        <div class="slider-container" title="S67 cut mapping: how your head maps to the virtual eye across shots of different lenses. current = today's behaviour; A = head gain by lens (angle-preserving); B = eye at the shot's distance, head in constant metres; C = true window + the lens's depth compression kept in parallax; Cm = true window, depth as it is. A, B and C differ only when the shot lens differs from the rest lens; C and Cm use your face distance (z tracking) and the screen size.">
+          <label for="cutMapSel">Cut mapping:</label>
+          <select id="cutMapSel"><option value="current" selected>current</option><option value="A">A: head gain by lens</option><option value="B">B: constant metres</option><option value="C">C: true window + lens depth</option><option value="Cm">Cm: true window</option></select>
+          <label for="shotLensSel">shot lens:</label>
+          <select id="shotLensSel"><option value="0" selected>rest (45 mm)</option><option value="18">18 mm</option><option value="24">24 mm</option><option value="35">35 mm</option><option value="50">50 mm</option><option value="85">85 mm</option><option value="135">135 mm</option><option value="200">200 mm</option></select>
+        </div>
         <div class="slider-container" title="Adjusts the sensitivity of camera movement based on face tracking.">
           <label for="facetrackingScalarSlider">Facetracking Scalar:</label>
           <input type="range" id="facetrackingScalarSlider" min="0" max="50" step="0.1" value="1">
