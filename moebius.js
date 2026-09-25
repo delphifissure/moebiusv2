@@ -12611,6 +12611,40 @@ async function importPlaneReturn() {
 }
 window.importPlaneReturn = importPlaneReturn;
 
+// S71 §4: LIGHT-FIELD OUTPUT. A light-field display shows N views at once, one per direction in its viewing cone; the
+// frame it takes is a "quilt", a cols x rows grid of those views. Each view here is the app's own render from an eye at
+// the rest distance, moved sideways to the view's angle, through the same off-axis frustum the head tracker uses, so every
+// tile is exactly what a tracked viewer at that angle would see. The views run left to right, filling the grid from the
+// bottom-left tile (the common quilt convention); the cone, the view count and the tile size are the display's own
+// calibration and must be set to it -- the defaults are only a working example.
+window.renderQuilt = function (opt) {
+    opt = Object.assign({ cols: 8, rows: 6, coneDeg: 40, tileW: 420, tileH: 560 }, opt || {});
+    if (typeof camera === 'undefined' || !camera || !renderer) return null;
+    const n = opt.cols * opt.rows, cv = document.createElement('canvas'); cv.width = opt.cols * opt.tileW; cv.height = opt.rows * opt.tileH;
+    const cx = cv.getContext('2d'), saved = camera.position.clone(), wasSweeping = isSweeping, D = opt.distance || dollyRestDistance;
+    const z = subjectFocalPlaneWorldZ + D, half = opt.coneDeg * Math.PI / 360;
+    isSweeping = true;   // the head tracker leaves the camera alone while the views are drawn
+    try {
+        for (let k = 0; k < n; k++) {
+            const a = n > 1 ? -half + 2 * half * k / (n - 1) : 0;
+            camera.position.set(D * Math.tan(a), 0, z); updateCameraAndProjection(); render(); updateCameraAndProjection(); render();
+            const col = k % opt.cols, row = opt.rows - 1 - Math.floor(k / opt.cols);   // bottom-left first
+            const src = renderer.domElement, sw = src.width, sh = src.height, ta = opt.tileW / opt.tileH;
+            let w = sw, h = sw / ta; if (h > sh) { h = sh; w = sh * ta; }                  // the centre of the render at the tile's aspect
+            cx.drawImage(src, (sw - w) / 2, (sh - h) / 2, w, h, col * opt.tileW, row * opt.tileH, opt.tileW, opt.tileH);
+        }
+    } finally { camera.position.copy(saved); isSweeping = wasSweeping; updateCameraAndProjection(); render(); }
+    return cv;
+};
+function bgSaveQuilt() {
+    const o = { cols: +(document.getElementById('quiltCols') || {}).value || 8, rows: +(document.getElementById('quiltRows') || {}).value || 6,
+                coneDeg: +(document.getElementById('quiltCone') || {}).value || 40 };
+    const cv = window.renderQuilt(o); if (!cv) return;
+    const a = document.createElement('a'); a.href = cv.toDataURL('image/png');
+    a.download = 'moebius_quilt_qs' + o.cols + 'x' + o.rows + 'a' + (cv.width / o.cols / (cv.height / o.rows)).toFixed(2) + '.png';   // the quilt naming light-field tools read
+    document.body.appendChild(a); a.click(); a.remove();
+}
+
 // S70: one click — bake (if there is no plate yet), write the SD bundle, send it to the paint server
 // (harness/paint_server.py, which runs sd_return.py with the painter chosen here), import what comes back through the
 // same path as "Import plane return". The server URL is empty by default: the app's server.js forwards /paint to it.
@@ -29484,6 +29518,7 @@ function setupStaticControlListeners() {
     const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
     const importPlaneRetBtn = document.getElementById('importPlaneReturnButton'); if (importPlaneRetBtn) importPlaneRetBtn.addEventListener('click', importPlaneReturn);   // Sprint 25
     document.getElementById('paintHolesBtn')?.addEventListener('click', () => window.paintHoles());   // S70
+    document.getElementById('quiltBtn')?.addEventListener('click', bgSaveQuilt);   // S71: light-field quilt
     { const u = document.getElementById('paintServerUrl');   // S70: the server URL is remembered per browser
       if (u) { try { u.value = localStorage.getItem('paintServerUrl') || ''; } catch (e) {}
                u.addEventListener('change', () => { try { localStorage.setItem('paintServerUrl', u.value.trim()); } catch (e) {} }); } }

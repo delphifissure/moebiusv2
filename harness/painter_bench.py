@@ -36,7 +36,7 @@ import numpy as np
 from PIL import Image
 ap = argparse.ArgumentParser()
 ap.add_argument('--pics', nargs='+', required=True); ap.add_argument('--out', required=True)
-ap.add_argument('--figure', required=True); ap.add_argument('--steps', type=int, default=20); ap.add_argument('--seed', type=int, default=1234)
+ap.add_argument('--figure', required=True); ap.add_argument('--long', type=int, default=768); ap.add_argument('--steps', type=int, default=20); ap.add_argument('--seed', type=int, default=1234)
 ap.add_argument('--arms', default='vis:lama,vis:sd,rm:lama,rm:sd,rm:sd_neg,rm:lamasd3,rm:lamasd5,rm:washsd5')
 A = ap.parse_args(); os.makedirs(A.out, exist_ok=True)
 sys.argv = [sys.argv[0]]
@@ -82,7 +82,7 @@ def sd(img, dctl, hole, neg, strength):
         _pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained('stable-diffusion-v1-5/stable-diffusion-inpainting', controlnet=cn, variant='fp16',
                                                                           torch_dtype=torch.float32, safety_checker=None, requires_safety_checker=False)
         _pipe.scheduler = UniPCMultistepScheduler.from_config(_pipe.scheduler.config); _pipe.set_progress_bar_config(disable=True)
-    H, W = hole.shape; s = min(1.0, 768 / max(H, W)); Ws, Hs = int(round(W * s / 8) * 8), int(round(H * s / 8) * 8)   # sd_return's working size (--long 768)
+    H, W = hole.shape; s = min(1.0, A.long / max(H, W)); Ws, Hs = int(round(W * s / 8) * 8), int(round(H * s / 8) * 8)   # the working size (--long; sd_return's is 768)
     ctl = Image.fromarray(np.round(np.clip(dctl, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((Ws, Hs), Image.BILINEAR)
     r = _pipe(prompt=PROMPT, negative_prompt=neg, image=Image.fromarray((np.clip(img, 0, 1) * 255).astype(np.uint8)).resize((Ws, Hs), Image.LANCZOS),
               mask_image=Image.fromarray((hole * 255).astype(np.uint8)).resize((Ws, Hs), Image.NEAREST), control_image=ctl,
