@@ -133,7 +133,7 @@ def lama(img, m):
 
 arms = [a for a in A.arms.split(',') if a]
 plates = {a: [] for a in arms}
-store_x, store_c = [], []   # B3's world-space paint
+store_x, store_c, store_z0 = [], [], []   # B3's world-space paint (and each point's depth when painted)
 for i in range(F):
     base = rgb[i].copy(); m = hole[i]
     if 'A' in arms: plates['A'].append(lama(base, m))
@@ -159,19 +159,25 @@ for i in range(F):
         # does not reach -- which is then added to the store.
         rem = m & ~gm; b3 = b.copy()
         if rem.any() and len(store_c):
-            X = np.concatenate(store_x); C = np.concatenate(store_c); u, v, z = project(i, X)
+            X = np.concatenate(store_x); C = np.concatenate(store_c); Z0 = np.concatenate(store_z0); u, v, z = project(i, X)
             ui = np.round(u).astype(int); vi = np.round(v).astype(int)
             q = (ui >= 0) & (vi >= 0) & (ui < nx) & (vi < ny) & (z > 0)
             q &= zfoot(bgz, i, u, v, z)
             zb = np.full((ny, nx), np.inf, np.float32); cb = np.zeros((ny, nx, 3), np.float32)
             order = np.argsort(-z[q])                                    # far first, near overwrite
-            for k in np.nonzero(q)[0][order]: zb[vi[k], ui[k]] = z[k]; cb[vi[k], ui[k]] = C[k]
+            # footprint: a stored point covered one pixel at its painting depth z0; at depth z it spans z0/z pixels, so it is
+            # splatted over ceil(z0/z) x ceil(z0/z) pixels (magnification opens no gaps; minification keeps one pixel)
+            fp = np.maximum(1, np.ceil(Z0 / np.maximum(z, 1e-9) - 1e-6)).astype(int)
+            for k in np.nonzero(q)[0][order]:
+                r = fp[k]; y0, x0 = vi[k] - (r - 1) // 2, ui[k] - (r - 1) // 2
+                sy, sx = slice(max(0, y0), min(ny, y0 + r)), slice(max(0, x0), min(nx, x0 + r))
+                zb[sy, sx] = z[k]; cb[sy, sx] = C[k]
             carried = rem & np.isfinite(zb)
             b3[carried] = cb[carried]; rem = rem & ~carried
         p3 = lama(b3, rem)
         if rem.any():
             mm = rem & np.isfinite(bgz[i])
-            if mm.any(): store_x.append(backproject(i, mm)); store_c.append(p3[mm])
+            if mm.any(): Xn = backproject(i, mm); store_x.append(Xn); store_c.append(p3[mm]); store_z0.append(project(i, Xn)[2])
         plates['B3'].append(p3)
     if i % 8 == 0: print('  frame %d/%d %.0fs' % (i + 1, F, time.time() - t0), flush=True)
 
