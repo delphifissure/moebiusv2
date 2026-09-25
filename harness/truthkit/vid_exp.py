@@ -23,7 +23,8 @@ frames' holes, t -> t+1 with the true pose and background depth), next to the sa
 floor: shading and resampling). Geometry here is the truth's: this is the ceiling of the world-canvas path; with
 estimated pose and depth it can only lose.
 
-  python3 vid_exp.py <shot> [--root OUT/video] [--out OUT/video_exp] [--arms A,B1,B2] [--nolpips]
+  B3  as B2, but the paint is stored in world space and reprojected from its first painting every frame (no chain)
+  python3 vid_exp.py <shot> [--root OUT/video] [--out OUT/video_exp] [--arms A,B1,B2,B3] [--nolpips]
 """
 import argparse, json, os, sys, time
 import numpy as np
@@ -132,6 +133,7 @@ def lama(img, m):
 
 arms = [a for a in A.arms.split(',') if a]
 plates = {a: [] for a in arms}
+store_x, store_c = [], []   # B3's world-space paint
 for i in range(F):
     base = rgb[i].copy(); m = hole[i]
     if 'A' in arms: plates['A'].append(lama(base, m))
@@ -150,6 +152,27 @@ for i in range(F):
             b2[carried] = plates['B2'][i - 1][vi[q], ui[q]]
             rem = rem & ~carried
         plates['B2'].append(lama(b2, rem))
+    if 'B3' in arms:
+        # B3 (S65 reading): paint once, stored in WORLD space. A remainder pixel painted for the first time becomes a stored
+        # 3-D point with its colour; every later frame reprojects the store (one resample from the original paint, never a
+        # chain of frame-to-frame resamples as in B2) under the same z-footprint test, and LaMa paints only what the store
+        # does not reach -- which is then added to the store.
+        rem = m & ~gm; b3 = b.copy()
+        if rem.any() and len(store_c):
+            X = np.concatenate(store_x); C = np.concatenate(store_c); u, v, z = project(i, X)
+            ui = np.round(u).astype(int); vi = np.round(v).astype(int)
+            q = (ui >= 0) & (vi >= 0) & (ui < nx) & (vi < ny) & (z > 0)
+            q &= zfoot(bgz, i, u, v, z)
+            zb = np.full((ny, nx), np.inf, np.float32); cb = np.zeros((ny, nx, 3), np.float32)
+            order = np.argsort(-z[q])                                    # far first, near overwrite
+            for k in np.nonzero(q)[0][order]: zb[vi[k], ui[k]] = z[k]; cb[vi[k], ui[k]] = C[k]
+            carried = rem & np.isfinite(zb)
+            b3[carried] = cb[carried]; rem = rem & ~carried
+        p3 = lama(b3, rem)
+        if rem.any():
+            mm = rem & np.isfinite(bgz[i])
+            if mm.any(): store_x.append(backproject(i, mm)); store_c.append(p3[mm])
+        plates['B3'].append(p3)
     if i % 8 == 0: print('  frame %d/%d %.0fs' % (i + 1, F, time.time() - t0), flush=True)
 
 # ---------------- scores
