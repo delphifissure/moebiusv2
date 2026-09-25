@@ -4003,7 +4003,8 @@ function bgHeadZMeasure(kp) {
     return { span, iris };
 }
 function bgHeadZUpdate(kp, nx, ny, frameW) {
-    if (!bgHeadZWanted()) return;
+    // runs on every detection so the preview can show the distance; it drives the camera only under head-Z
+    // (without iris landmarks the span falls back to the eye corners, a146b's route)
     const m = bgHeadZMeasure(kp); if (!(m.span > 1)) return;
     const S = window._headZState || (window._headZState = { span: m.span, iris: m.iris, span0: null, good: 0 });
     // the same exponential smoothing the lateral track uses (faceSmoothingFactor): no new constant
@@ -4045,6 +4046,33 @@ function bgScreenMetres() {
 function bgMetricEye(o) {
     const d = o.fx * o.ipdM / o.span;
     return { x: -(o.u - o.cx) * d / o.fx + o.camX - o.portalX, y: -(o.v - o.cy) * d / o.fx + o.camY - o.portalY, z: d };
+}
+// The tracking numbers on the webcam preview (user request): the virtual eye relative to the portal centre (what the
+// render uses, metres), its viewing angles, and the face-mesh distance (which drives the eye only under head-Z). Values
+// are from the previous frame's camera update; text sized to the preview's own resolution.
+function bgDrawTrackReadout(ctx, W, H) {
+    try {
+        const pz = (typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0;
+        const ex = camera.position.x, ey = camera.position.y, ez = camera.position.z - pz;
+        const hz = window._headZState, f = (v, n) => (v >= 0 ? '+' : '') + v.toFixed(n);
+        const lines = ['eye  x ' + f(ex, 3) + '  y ' + f(ey, 3) + '  z ' + ez.toFixed(3) + ' m',
+                       'angle  h ' + f(Math.atan2(ex, ez) * 180 / Math.PI, 1) + '\u00b0  v ' + f(Math.atan2(ey, ez) * 180 / Math.PI, 1) + '\u00b0'];
+        if (hz) {
+            let t = 'face  ' + (hz.dIpd ? hz.dIpd.toFixed(2) + ' m (ipd)' : 'no focal length') + (hz.dIris ? '  ' + hz.dIris.toFixed(2) + ' m (iris)' : '');
+            t += '  r ' + (hz.ratio ? hz.ratio.toFixed(3) : 'calib.');
+            lines.push(t);
+            if (hz.eyeM) lines.push('real eye  x ' + f(hz.eyeM.x, 3) + '  y ' + f(hz.eyeM.y, 3) + '  z ' + hz.eyeM.z.toFixed(3) + ' m');
+        }
+        lines.push('z tracking ' + (window._headZ === 2 ? 'metric' : (bgHeadZWanted() ? 'on' : 'off (?headz=1)')) + (window._headByAngle ? ' | lens gain' : ''));
+        // as large as fits: start at 1/24 of the preview's width, shrink until the widest line fits
+        ctx.save(); ctx.textBaseline = 'top';
+        let fs = Math.round(W / 24), w = 0;
+        const measure = () => { ctx.font = 'bold ' + fs + 'px ui-monospace, Menlo, Consolas, monospace'; w = 0; for (const l of lines) w = Math.max(w, ctx.measureText(l).width); };
+        measure(); if (w > W * 0.96) { fs = Math.max(8, Math.floor(fs * W * 0.96 / w)); measure(); }
+        const pad = Math.round(fs * 0.35), lh = Math.round(fs * 1.25);
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, w + 2 * pad, lines.length * lh + 2 * pad);
+        ctx.fillStyle = '#7fffd4'; lines.forEach((l, i) => ctx.fillText(l, pad, pad + i * lh)); ctx.restore();
+    } catch (e) {}
 }
 window.headZRecalibrate = function () { if (window._headZState) { window._headZState.span0 = null; window._headZState.good = 0; } };
 window.setHeadZ = async function (on) {
@@ -4098,6 +4126,7 @@ async function runFaceMeshCycle() {
             faceOverlayCtx.fill();
         }
 
+        bgDrawTrackReadout(faceOverlayCtx, faceOverlayCanvas.width, faceOverlayCanvas.height);
         const noseTip = keypoints[1];
         const normalizedX = noseTip.x / videoInput.videoWidth;
         const normalizedY = noseTip.y / videoInput.videoHeight;
