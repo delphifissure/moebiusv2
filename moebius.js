@@ -22554,7 +22554,7 @@ function _wireDebugSheetControls() {
         if (gapSel) gapSel.addEventListener('change', () => bakeGapRule(gapSel.value));
         window._bakeGapRule = bakeGapRule;
     }
-    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions.v3').
+    // S6 PLATE OPTIONS (the Sprint 5 arms as bake-time choices; remembered in localStorage 'bgPlateOptions.v4').
     // far side: membrane (the shipped quick bake) | plane (the rim law + the plane far side, S3–S5 recipe);
     // fill: wash | mirror (the far side reflected across the rim); margin: off | picture | window (A245, clipped or not);
     // faces: off | on (step faces at parallel-line rims); band: all | tier at N° (the texture stage's band by first-uncover
@@ -22582,16 +22582,17 @@ function _wireDebugSheetControls() {
         // NOT promoted, because each has a measured cost that only a screen can price: seams='all' (closes the far-pose rim
         // holes, silverwarrior 1 635 -> 2 px, at the price of a skin between every silhouette and its background) and the
         // margin modes (clamp-extended edge colour standing in for an outpaint; off at the user's instruction).
-        const defaults = { far: 'plane', fill: 'wash', margin: 'auto', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'perline', pinholes: 'asbaked' };
+        const defaults = { far: 'plane', fill: 'wash', margin: 'auto', faces: 'off', band: '35', sky: 'off', seams: 'stretched', join: 'off', rules: 'new', ramps: 'off', hole: 'source', pinholes: 'asbaked' };   // hole 'source' by default since S67 (user: per-line's streaks)
+        // .v4: hole depth 'source' became the default (a saved .v3 set carries hole='perline' for everyone who touched the panel).
         // The key is bumped to .v3 with the default change and the old set is NOT read: a panel saved under rules='cur'
         // would otherwise shadow the new default exactly once for everyone who has ever touched the panel, which is the
         // failure the versioning exists to prevent.
-        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions.v3') || 'null'); } catch (e) {}
+        let saved = null; try { saved = JSON.parse(localStorage.getItem('bgPlateOptions.v4') || 'null'); } catch (e) {}
         const opt = Object.assign({}, defaults, saved || {});
         for (const k in els) if (els[k]) { if (opt[k] !== undefined) els[k].value = opt[k]; if (els[k].value !== opt[k]) opt[k] = els[k].value; }
         const applyPlateOptions = () => {
             for (const k in els) if (els[k]) opt[k] = els[k].value;
-            try { localStorage.setItem('bgPlateOptions.v3', JSON.stringify(opt)); } catch (e) {}
+            try { localStorage.setItem('bgPlateOptions.v4', JSON.stringify(opt)); } catch (e) {}
             const plane = opt.far === 'plane';
             window._tearLaw = plane ? 'rim' : undefined; window._farRule = plane ? 'plane' : undefined;
             window._skyInf = (plane && opt.sky === 'on') ? 1 : 0;
