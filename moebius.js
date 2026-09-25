@@ -540,7 +540,7 @@ function bgApplySourceHole() {
     const rl = bgRimLawFor(pw, ph), lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
     const D = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
     const layerW = (pw / ph > terrariumWidth / terrariumHeight) ? terrariumWidth : terrariumHeight * pw / ph;
-    const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 }, mesh = bgLayerMesh; window._qbSrcHoleArgs = o;   // S70: probes re-solve with o.seenMode
+    const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8, seenMode: window._seenMode }, mesh = bgLayerMesh; window._qbSrcHoleArgs = o;   // S70: probes re-solve with o.seenMode
     const finish = (r, where, ms) => {
         if (seq !== window._qbSourceHoleSeq || window._qbDQ !== dQ || bgLayerMesh !== mesh) { console.warn('[S62] a newer bake started while the hole was solving; this result is dropped'); return null; }
         return bgFinishSourceHole(r, { pw, ph, N, L, rl, t0, where, msSolve: ms, step });
@@ -569,7 +569,7 @@ function bgSourceHoleInWorker(o) {
                     'onmessage = (e) => { const m = e.data, g = m.g; try {\n' +
                     '  window = g.window; currentNormPortalPlane = g.pn; portalPlaneWorldZ = g.pz; camera = { position: { z: g.cz } }; innerVolumeDepth = g.inner; outerVolumeDepth = g.outer;\n' +
                     '  terrariumWidth = g.tw; terrariumHeight = g.th; bgViewFadeEndDeg = g.fadeH; bgViewFadeEndDegV = g.fadeV; _sky = g.sky; _bgRimLaw = null;\n' +
-                    '  const rl = bgRimLawFor(m.pw, m.ph); const r = bgSourceHole({ dQ: m.dQ, rgb: m.rgb, pw: m.pw, ph: m.ph, rl, step: m.step, D: m.D, layerW: m.layerW, tol: m.tol });\n' +
+                    '  const rl = bgRimLawFor(m.pw, m.ph); const r = bgSourceHole({ dQ: m.dQ, rgb: m.rgb, pw: m.pw, ph: m.ph, rl, step: m.step, D: m.D, layerW: m.layerW, tol: m.tol, seenMode: m.seenMode });\n' +
                     '  postMessage({ id: m.id, r }, [r.plate.buffer, r.wash.buffer, r.hole.buffer, r.far.buffer].concat(r.has2 ? [r.plate2.buffer, r.wash2.buffer, r.has2.buffer] : []));\n' +
                     '} catch (err) { postMessage({ id: m.id, error: String((err && err.stack) || err) }); } };';
                 _bgHoleWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
@@ -583,7 +583,7 @@ function bgSourceHoleInWorker(o) {
                         fadeH: (typeof bgViewFadeEndDeg === 'number') ? bgViewFadeEndDeg : 45, fadeV: (typeof bgViewFadeEndDegV === 'number') ? bgViewFadeEndDegV : 30, sky: [skyOn, skyOn ? bgSkyQ() : -1] };
             w.onmessage = (e) => { if (e.data.id !== id) return; if (e.data.error) reject(new Error(e.data.error)); else resolve(e.data.r); };
             w.onerror = (e) => { _bgHoleWorker = null; try { w.terminate(); } catch (e2) {} reject(new Error((e && e.message) || 'worker error')); };
-            w.postMessage({ id, g, dQ: Float32Array.from(o.dQ), rgb: o.rgb, pw: o.pw, ph: o.ph, step: o.step, D: o.D, layerW: o.layerW, tol: o.tol });
+            w.postMessage({ id, g, dQ: Float32Array.from(o.dQ), rgb: o.rgb, pw: o.pw, ph: o.ph, step: o.step, D: o.D, layerW: o.layerW, tol: o.tol, seenMode: o.seenMode });
         } catch (e) { reject(e); }
     });
 }
@@ -947,7 +947,7 @@ function bgInkAdopt(src, rgb, pw, ph, rl0, step) {
     return { out, stats: { rims, rimsInk, adopted } };
 }
 
-// S70: THE EXACT SEEN TEST (instrument, bgSourceHole o.seenMode = 'exact'). Every texel moves by its shift times the pose
+// S70: THE EXACT SEEN TEST (bgSourceHole o.seenMode = 'exact', the default since the three-picture check). Every texel moves by its shift times the pose
 // h (|hx| <= 1, |hy| <= env: the envelope rectangle E). A plate texel v (shift sv) hidden at rest leaves its occluder when
 // a torn edge of the source mesh sweeps over its screen place: the boundary texel u (shift su > sv) is at v's screen place
 // at the pose h = (xv - xu)/(su - sv), which lies in E exactly when dE(xv - xu) <= su - sv, dE(dx, dy) = max(|dx|, |dy|/env)
@@ -1188,10 +1188,11 @@ function bgSourceHole(o) {
       const sP = new Float64Array(N); for (let i = 0; i < N; i++) { if (!hole[i]) { sP[i] = s[i]; continue; } const ze = rl.zeAt(P0[i]); sP[i] = (rl.sky >= 0 && P0[i] < rl.sky) ? -ex * ppm : ex * (o.D - ze) / ze * ppm; }
       const TP = meshTris(P0, (i, j) => rl.joinedIdx(i, j, P0, pw)), pz = new Float32Array(N), pid = new Int32Array(N);
       const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]; let nGap = 0;
-      // S70: o.seenMode (instrument; default 'poses' = the 32 poses below, unchanged): 'dense' = o.seenDirs directions
-      // uniform in angle over the pose square x o.seenMags magnitudes; 'exact' = the 32 poses plus the emergence test after
-      // the loop
-      const seenMode = o.seenMode || 'poses', poseList = [];
+      // S70: o.seenMode: 'poses' = the 32 poses below alone; 'exact' (default) = the 32 poses plus the emergence test after
+      // the loop; 'dense' (instrument) = o.seenDirs directions uniform in angle over the pose square x o.seenMags magnitudes
+      // S70 (user: on once the other pictures agree -- troll 88.6 -> 93.3 %, starwatcher 99.3 -> 99.9 %, milkmaid 95.6 -> 98.7 %
+      // of a 4 096-pose set, every added texel verified): 'exact' by default; window._seenMode = 'poses' is the old 32 poses alone
+      const seenMode = o.seenMode || 'exact', poseList = [];
       if (seenMode === 'dense') { const nd = o.seenDirs || 64, nm = o.seenMags || 16;
           for (let k = 0; k < nd; k++) { const a = 2 * Math.PI * k / nd, c = Math.cos(a), sn = Math.sin(a), sc = 1 / Math.max(Math.abs(c), Math.abs(sn));
               for (let j = 1; j <= nm; j++) poseList.push([c * sc * j / nm, sn * sc * j / nm * env]); } }

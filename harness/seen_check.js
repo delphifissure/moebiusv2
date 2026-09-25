@@ -1,6 +1,6 @@
 // S70 item 4: the source-anchored hole's SEEN step, sampled vs exact. One bake in source mode, then bgSourceHole is
 // solved again on the bake's own inputs (window._qbSrcHoleArgs) three ways:
-//   poses  the 32 poses the app uses (8 directions x 4 magnitudes)            -- must equal the bake's own result
+//   poses  the 32 poses alone (8 directions x 4 magnitudes)                   -- equals the bake's own result under window._seenMode = 'poses'
 //   dense  DIRS x MAGS poses uniform in angle over the pose square (default 64 x 16 = 1024)
 //   exact  the 32 poses plus the emergence test (bgSeenEmergence): every texel it adds is verified at its own pose
 // Reported per arm: the seen set before the majority smoothing (dem) and the kept hole after it; recall of each against
@@ -23,7 +23,7 @@ const OUT = path.join(H, 'shots', 'seen'); fs.mkdirSync(OUT, { recursive: true }
     for (let t = 0; t < 2400; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbSourceHole && !window._qbSourceHoleBusy && !!window._qbSrcHoleArgs)) break; await new Promise(r => setTimeout(r, 500)); }
     const R = await page.evaluate(([dirs, mags]) => {
         const o = window._qbSrcHoleArgs, N = o.pw * o.ph, out = { pw: o.pw, ph: o.ph, arms: {} }, sets = {};
-        for (const [arm, extra] of [['poses', {}], ['dense', { seenMode: 'dense', seenDirs: dirs, seenMags: mags }], ['exact', { seenMode: 'exact' }]]) {
+        for (const [arm, extra] of [['poses', { seenMode: 'poses' }], ['dense', { seenMode: 'dense', seenDirs: dirs, seenMags: mags }], ['exact', { seenMode: 'exact' }]]) {
             const t0 = performance.now(); const r = bgSourceHole(Object.assign({}, o, extra, { seenReport: true })); const ms = performance.now() - t0;
             const st = r.stats, cnt = (a) => { let n = 0; for (let i = 0; i < N; i++) if (a[i]) n++; return n; };
             // dem restricted to candidates (dem marks triangle vertices, some outside the candidate set)
