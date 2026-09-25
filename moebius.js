@@ -22794,6 +22794,14 @@ function _wireDebugSheetControls() {
             window._washMode = (plane && opt.fill === 'membrane') ? 'membrane' : 'asbaked';
             window._pinholeDepth = (plane && opt.pinholes === 'filled') ? 1 : 0;
             window._bgPlateOptions = Object.assign({}, opt);   // debug-sheet / HUD stamp
+            // S70 (user, 2026-09-25: grey out): under hole depth 'source' these options change nothing -- each was baked alone
+            // against the default and hashed (harness/select_live_check.js); they belong to the per-line hole. Greyed with the
+            // reason; they come back when hole depth is per-line or plain.
+            const srcH = opt.hole === 'source';
+            for (const k of ['fill', 'pinholes', 'faces', 'band', 'seams', 'join']) { const el = els[k]; if (!el) continue;
+                if (el.dataset.titleOrig === undefined) el.dataset.titleOrig = el.title || '';
+                el.disabled = srcH; el.style.opacity = srcH ? '0.45' : '';
+                el.title = srcH ? 'No effect with hole depth "source" (measured: the bake is identical); applies to the per-line hole. ' + el.dataset.titleOrig : el.dataset.titleOrig; }
         };
         applyPlateOptions();
         // the plane recipe is a geometric bake (window._plugGeoBand); the membrane far side is the ordinary Build
