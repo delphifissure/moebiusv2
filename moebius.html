@@ -97,9 +97,11 @@
         <h4 class="control-header">Scene Scale</h4>
         <button id="setScaleButton" class="control-button" title="S69: add a size reference -- two clicks on something whose real length you know (the view holds at rest while you click). One reference sets the scale where it stands; two at different depths (or one plus sky) set how the scene recedes; the lens (shot lens or Camera Intrinsics) sets the camera distance. Drives the depth under cut mapping C or Cm.">Set Scale</button>
         <div id="scaleRefPanel" style="font-size:0.85em; margin-top:4px;">
-          <select id="scalePreset" title="Typical sizes (edit the length if you know better)"><option value="0" selected>custom length</option><option value="1.7">person standing (typical 1.7 m)</option><option value="0.23">adult head, chin to crown (typical 0.23 m)</option><option value="2.0">door height (typical 2.0 m)</option><option value="4.5">car length (typical 4.5 m)</option><option value="0.18">stair step (typical 0.18 m)</option></select>
+          <select id="scalePreset" title="Typical sizes and their typical ranges (edit the length if you know better: a typed length is taken as exact; the preset's range is how far a real one may differ, and the fit leaves out a reference further off than that)"><option value="0" selected>custom length</option><option value="1.7" data-range="1.5,1.9" data-name="person">person standing 1.7 m (1.5–1.9)</option><option value="0.23" data-range="0.21,0.25" data-name="head">adult head, chin to crown 0.23 m (0.21–0.25)</option><option value="2.0" data-range="1.95,2.1" data-name="door">door height 2.0 m (1.95–2.1)</option><option value="4.5" data-range="3.5,5.5" data-name="car">car length 4.5 m (3.5–5.5)</option><option value="0.18" data-range="0.15,0.2" data-name="step">stair step 0.18 m (0.15–0.20)</option></select>
           <input type="number" id="scaleLen" value="1.0" min="0.001" step="0.01" style="width:64px;"> m
           <button id="scaleClearBtn" title="Remove all size references">Clear</button>
+          <button id="scaleFacesBtn" title="S70: find the faces in the picture and use each as a size reference (eyes 63 mm apart); untick any that is not a real adult face at its real size">Find faces</button>
+          <div id="scaleRefList" style="margin-top:3px;"></div>
           <div id="scaleReadout" style="margin-top:3px;">no references</div>
         </div>
 
@@ -285,6 +287,15 @@
           <button type="button" id="svTestBtn" style="margin-left:4px;padding:2px 8px;" title="A1 frame-convention assert, then anchor drift across +/-40 deg, then the A2 known-perturbation check. Results in the console.">&#10003; acceptance test</button>
         </div>
 
+        <div class="slider-container" id="paintRow" title="S70: one click. Bakes the plate if there is none yet, writes the SD bundle, sends it to the paint server (python3 harness/paint_server.py, which runs sd_return.py), and imports the returned colour (and depth) exactly as Import plane return does. A new Build drops it.">
+          <button type="button" id="paintHolesBtn" style="padding:2px 8px;">🖌 Paint holes</button>
+          <select id="paintPainterSel" title="painter (sd_return.py --painter): sd = SD 1.5 inpainting + depth ControlNet from noise; wash+sd = SD started from the bundle's own wash; lama+sd = LaMa's fill refined by SD; lama = LaMa only (fast, continues the surroundings, invents nothing)">
+            <option value="sd" selected>SD</option><option value="wash+sd">wash + SD</option><option value="lama+sd">LaMa + SD</option><option value="lama">LaMa only</option></select>
+          <select id="paintMaskSel" title="the mask SD is shown (the colour is still written on the hole only): as is; blob = the hole widened by its own largest inscribed radius, so it no longer has the occluder's outline"><option value="asis" selected>mask as is</option><option value="blob">blob mask</option></select>
+          <label style="font-size:0.85em;" title="also return depth (DA3 on the painted picture, fitted to the source depth on the background)"><input type="checkbox" id="paintDepthChk" checked> depth</label>
+          <input type="text" id="paintServerUrl" placeholder="server (blank = this app's /paint)" style="width:150px; font-size:0.85em;" title="blank: this app's server forwards /paint to http://127.0.0.1:8765 (server.js, PAINT_URL). Or a full URL, e.g. http://localhost:8765 or a GPU machine's address">
+          <span id="paintStatus" style="margin-left:6px; font-size:0.85em;"></span>
+        </div>
         <div class="slider-container">
           <label for="debugViewSelect">Debug View:</label>
           <button type="button" id="debugSheetBtn" style="margin-left:8px; padding:2px 8px;" title="Download one PNG with all pipeline buffers + settings stamp — drag it into the chat">📸 Debug Sheet</button>

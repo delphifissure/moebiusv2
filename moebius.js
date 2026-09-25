@@ -540,7 +540,7 @@ function bgApplySourceHole() {
     const rl = bgRimLawFor(pw, ph), lut = bgShiftLUTFor(pw, ph), step = 1 / Math.max(1e-6, Math.max(Math.abs(lut.m0), Math.abs(lut.m1)));
     const D = Math.max(1e-3, Math.abs(((typeof camera !== 'undefined' && camera && camera.position) ? camera.position.z : 0.2) - ((typeof portalPlaneWorldZ === 'number') ? portalPlaneWorldZ : 0)));
     const layerW = (pw / ph > terrariumWidth / terrariumHeight) ? terrariumWidth : terrariumHeight * pw / ph;
-    const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 }, mesh = bgLayerMesh;
+    const o = { dQ, rgb, pw, ph, rl, step, D, layerW, tol: 1e-8 }, mesh = bgLayerMesh; window._qbSrcHoleArgs = o;   // S70: probes re-solve with o.seenMode
     const finish = (r, where, ms) => {
         if (seq !== window._qbSourceHoleSeq || window._qbDQ !== dQ || bgLayerMesh !== mesh) { console.warn('[S62] a newer bake started while the hole was solving; this result is dropped'); return null; }
         return bgFinishSourceHole(r, { pw, ph, N, L, rl, t0, where, msSolve: ms, step });
@@ -563,7 +563,7 @@ function bgSourceHoleInWorker(o) {
         try {
             if (!_bgHoleWorker) {
                 if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') throw new Error('Worker unavailable');
-                const fns = [bgRimLawFor, bgRimLawAtStep, bgPinholeFilledMask, bgMGSolve, bgSourceHole, bgEnvAspect].map(f => f.toString()).join('\n');
+                const fns = [bgRimLawFor, bgRimLawAtStep, bgPinholeFilledMask, bgMGSolve, bgSeenEmergence, bgSourceHole, bgEnvAspect].map(f => f.toString()).join('\n');
                 const src = 'let window = {}, currentNormPortalPlane, portalPlaneWorldZ, camera, innerVolumeDepth, outerVolumeDepth, terrariumWidth, terrariumHeight, bgViewFadeEndDeg, bgViewFadeEndDegV, _sky = [false, -1], _bgRimLaw = null;\n' +
                     'function bgSkyInfOn() { return _sky[0]; }\nfunction bgSkyQ() { return _sky[1]; }\n' + fns + '\n' +
                     'onmessage = (e) => { const m = e.data, g = m.g; try {\n' +
@@ -947,6 +947,83 @@ function bgInkAdopt(src, rgb, pw, ph, rl0, step) {
     return { out, stats: { rims, rimsInk, adopted } };
 }
 
+// S70: THE EXACT SEEN TEST (instrument, bgSourceHole o.seenMode = 'exact'). Every texel moves by its shift times the pose
+// h (|hx| <= 1, |hy| <= env: the envelope rectangle E). A plate texel v (shift sv) hidden at rest leaves its occluder when
+// a torn edge of the source mesh sweeps over its screen place: the boundary texel u (shift su > sv) is at v's screen place
+// at the pose h = (xv - xu)/(su - sv), which lies in E exactly when dE(xv - xu) <= su - sv, dE(dx, dy) = max(|dx|, |dy|/env)
+// the rectangle's own gauge. So v can emerge within the envelope iff sv <= W(xv), W(x) = max over boundary u of
+// [su - dE(x - xu)]: a max-plus distance transform, computed exactly at every breakpoint of the gauge (integers in x,
+// multiples of 1/env in y) by growing the rectangle one texel per step. No pose is sampled. It is a necessary condition:
+// another surface can cover v at that pose, so each texel it adds is VERIFIED at its own emergence pose (just past it, and
+// at the envelope's rim along the same ray) by a point test against the source mesh as drawn (kept triangles, shifted).
+// Texels the 32 poses already saw are kept as they were; the test only adds.
+function bgSeenEmergence(c) {
+    const { pw, ph, N, s, sP, TF, hole, dem, P0, dQ, step, env } = c, t0 = Date.now();
+    // boundary texels: a vertex of a kept triangle that is also a vertex of a missing one (or on the frame)
+    const bnd = new Uint8Array(N); let nB = 0;
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let any = 0, miss = 0;
+        const inc = [[x, y, 1], [x - 1, y, 1], [x - 1, y, 2], [x, y - 1, 1], [x, y - 1, 2], [x - 1, y - 1, 2]];
+        for (const [cx, cy, b] of inc) { if (cx < 0 || cy < 0 || cx >= pw - 1 || cy >= ph - 1) { miss = 1; continue; } if (TF[cy * pw + cx] & b) any = 1; else miss = 1; }
+        if (any && miss) { bnd[i] = 1; nB++; } }
+    // candidates the poses did not see, and their own shift
+    const need = []; let smin = Infinity, smax = -Infinity;
+    for (let i = 0; i < N; i++) { if (bnd[i]) { if (s[i] > smax) smax = s[i]; } if (hole[i] && !dem[i] && P0[i] < dQ[i] - 2 * step) { need.push(i); if (sP[i] < smin) smin = sP[i]; } }
+    if (!need.length || !nB) return { boundary: nB, unseenCandidates: need.length, emergent: 0, added: 0, ms: Date.now() - t0 };
+    const K = Math.max(0, smax - smin) + 1;
+    // W_q and its argmax, per quadrant q of the offset (xv - xu): the rectangle grows one texel at a time toward that
+    // quadrant only, at every breakpoint of the gauge; per quadrant because the edge that uncovers a texel in one direction
+    // is not the one that does in another, and each gives its own emergence pose to verify
+    let M = new Float64Array(N), Mi = new Int32Array(N), T = new Float64Array(N), Ti = new Int32Array(N);
+    const grow = (ax, sg) => {   // M(x) <- max(M(x), M(x - sg e_ax)): offsets x - xu gain one step of sign sg along ax
+        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let b = M[i], bi = Mi[i];
+            const xx = ax === 0 ? x - sg : x, yy = ax === 1 ? y - sg : y;
+            if (xx >= 0 && yy >= 0 && xx < pw && yy < ph) { const j = yy * pw + xx; if (M[j] > b) { b = M[j]; bi = Mi[j]; } }
+            T[i] = b; Ti[i] = bi; }
+        let a = M; M = T; T = a; let ai = Mi; Mi = Ti; Ti = ai; };
+    const Wq = [], Wiq = []; let levels = 0;
+    for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+        M.fill(-Infinity); Mi.fill(-1); for (let i = 0; i < N; i++) if (bnd[i]) { M[i] = s[i]; Mi[i] = i; }
+        const W = Float64Array.from(M), Wi = Int32Array.from(Mi); let rx = 0, ry = 0;
+        for (;;) { const kx = rx + 1, ky = (ry + 1) / env, k = Math.min(kx, ky); if (k > K) break;
+            if (kx <= ky) { grow(0, sx); rx++; } if (ky <= kx) { grow(1, sy); ry++; } levels++;
+            for (let i = 0; i < N; i++) { const v = M[i] - k; if (v > W[i]) { W[i] = v; Wi[i] = Mi[i]; } } }
+        Wq.push(W); Wiq.push(Wi);
+    }
+    // the point test: is screen point (yx, yy) covered by the source mesh at pose (hx, hy)? A mesh point x covers it when
+    // x + s(x) h = y: march x = y - sig h over the shift range, a root of s(x(sig)) - sig inside a kept triangle
+    const sAt = (px, py) => { const cx = Math.floor(px), cy = Math.floor(py); if (cx < 0 || cy < 0 || cx >= pw - 1 || cy >= ph - 1) return NaN;
+        const i = cy * pw + cx, fx = px - cx, fy = py - cy;
+        if (fx + fy <= 1) { if (!(TF[i] & 1)) return NaN; return s[i] + fx * (s[i + 1] - s[i]) + fy * (s[i + pw] - s[i]); }
+        if (!(TF[i] & 2)) return NaN; return s[i + pw + 1] + (1 - fx) * (s[i + pw] - s[i + pw + 1]) + (1 - fy) * (s[i + 1] - s[i + pw + 1]); };
+    let sMinAll = Infinity, sMaxAll = -Infinity; for (let i = 0; i < N; i++) { if (s[i] < sMinAll) sMinAll = s[i]; if (s[i] > sMaxAll) sMaxAll = s[i]; }
+    const covered = (yx, yy, hx, hy) => {
+        const hn = Math.hypot(hx, hy); if (!(hn > 0)) return true;
+        const n = Math.max(2, Math.ceil((sMaxAll - sMinAll) * hn / 0.5)); let prevG = NaN;
+        for (let k = 0; k <= n; k++) { const sig = sMinAll + (sMaxAll - sMinAll) * k / n, sm = sAt(yx - sig * hx, yy - sig * hy);
+            if (sm !== sm) { prevG = NaN; continue; } const g = sm - sig; if (Math.abs(g) * hn <= 0.5) return true; if (prevG === prevG && (g > 0) !== (prevG > 0)) return true; prevG = g; }
+        return false; };
+    // the renderer's test marks the three vertices of the plate triangle drawn at an uncovered pixel, so a texel counts as
+    // seen when a screen pixel within its triangles (one texel around its screen place) is uncovered: the same here
+    const nb = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+    let emergent = 0, added = 0, failed = 0, tried = 0;
+    for (const v of need) {
+        const xv = v % pw, yv = (v - xv) / pw; let em = false, ok = false;
+        for (let q = 0; q < 4 && !ok; q++) {
+            if (!(sP[v] <= Wq[q][v] + 1)) continue; em = true;                       // + 1: within one texel, as above
+            const u = Wiq[q][v], du = s[u] - sP[v]; if (!(du > 0)) continue;
+            const xu = u % pw, yu = (u - xu) / pw, h0x = (xv - xu) / du, h0y = (yv - yu) / du, g0 = Math.max(Math.abs(h0x), Math.abs(h0y) / env);
+            const lamMax = g0 > 0 ? 1 / g0 : 1, rel = Math.hypot(xv - xu, yv - yu);
+            const lams = [Math.min(lamMax, 1 + 1 / Math.max(1, rel)), 0.5 * (1 + lamMax), lamMax];
+            for (const lam of lams) { if (ok) break; tried++; const hx = lam * h0x, hy = lam * h0y, yx = xv + sP[v] * hx, yy = yv + sP[v] * hy;
+                for (const [ox, oy] of nb) { const px = yx + ox, py = yy + oy; if (px < 0 || py < 0 || px > pw - 1 || py > ph - 1) continue;
+                    if (!covered(px, py, hx, hy)) { ok = true; break; } } }
+        }
+        if (em) emergent++;
+        if (ok) { dem[v] = 1; added++; } else if (em) failed++;
+    }
+    return { boundary: nB, unseenCandidates: need.length, emergent, added, failedVerification: failed, posesTried: tried, levels, ms: Date.now() - t0 };
+}
+
 // S62: THE SOURCE-ANCHORED HOLE (research/S62; harness/srcfill.py steps 2-5). No per-line value anywhere.
 //   rims   every 4-neighbour pair (rows and columns) the rim law tears; a run of torn steps of one sign across an edge is
 //          one rim, from its top texel (the object) to its bottom texel (the background it reveals); the run's interior
@@ -1081,8 +1158,15 @@ function bgSourceHole(o) {
       const sP = new Float64Array(N); for (let i = 0; i < N; i++) { if (!hole[i]) { sP[i] = s[i]; continue; } const ze = rl.zeAt(P0[i]); sP[i] = (rl.sky >= 0 && P0[i] < rl.sky) ? -ex * ppm : ex * (o.D - ze) / ze * ppm; }
       const TP = meshTris(P0, (i, j) => rl.joinedIdx(i, j, P0, pw)), pz = new Float32Array(N), pid = new Int32Array(N);
       const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]; let nGap = 0;
-      for (const [ux, uy] of dirs) for (const m of [0.25, 0.5, 0.75, 1]) {
-        const hx = ux * m, hy = uy * m * env;
+      // S70: o.seenMode (instrument; default 'poses' = the 32 poses below, unchanged): 'dense' = o.seenDirs directions
+      // uniform in angle over the pose square x o.seenMags magnitudes; 'exact' = the 32 poses plus the emergence test after
+      // the loop
+      const seenMode = o.seenMode || 'poses', poseList = [];
+      if (seenMode === 'dense') { const nd = o.seenDirs || 64, nm = o.seenMags || 16;
+          for (let k = 0; k < nd; k++) { const a = 2 * Math.PI * k / nd, c = Math.cos(a), sn = Math.sin(a), sc = 1 / Math.max(Math.abs(c), Math.abs(sn));
+              for (let j = 1; j <= nm; j++) poseList.push([c * sc * j / nm, sn * sc * j / nm * env]); } }
+      else for (const [ux, uy] of dirs) for (const m of [0.25, 0.5, 0.75, 1]) poseList.push([ux * m, uy * m * env]);
+      for (const [hx, hy] of poseList) {
         drawMesh(dQ, s, TF, hx, hy, zb, null);   // the source mesh at this pose, as the renderer draws it
         // the plate at this pose, drawn the same way (P0: the quick fill in the candidate hole, the source elsewhere); every
         // screen pixel the source mesh leaves uncovered shows the plate triangle drawn there, and its texels are SEEN
@@ -1090,6 +1174,8 @@ function bgSourceHole(o) {
         for (let c = 0; c < N; c++) { if (zb[c] >= 0 || pz[c] < 0) continue; for (const v of triVerts(pid[c])) if (P0[v] < dQ[v] - 2 * step) dem[v] = 1; }   // unless a texel is its own source
         for (let c = 0; c < N; c++) if (zb[c] < 0) nGap++;
       }
+      const dem0 = o.seenReport ? Uint8Array.from(dem) : null; if (o.seenReport) st.seenCand0 = Uint8Array.from(hole);
+      if (seenMode === 'exact') st.seenExact = bgSeenEmergence({ pw, ph, N, s, sP, TF, hole, dem, P0, dQ, step, env });
       // the seen set's outline carries the map's column-to-column noise and the pose sampling; a majority over a square of
       // side 2*WASH_RUN+1 (the ink-line scale below which a mask detail cannot be told from a line) smooths it
       const RS = 8 /* = WASH_RUN */, W2 = pw + 1, II = new Int32Array((pw + 1) * (ph + 1));
@@ -1101,7 +1187,8 @@ function bgSourceHole(o) {
         const sum = II[y1 * W2 + x1] - II[y0 * W2 + x1] - II[y1 * W2 + x0] + II[y0 * W2 + x0], area = (x1 - x0) * (y1 - y0);
         const nearRim = dem[i] && dRim[i] <= RS;   // within an ink run of ANY rim (not only the reach's origin): a thin gap (a staff, an arm across a body) is all rim
         if (2 * sum < area && !nearRim) hole[i] = 0; else nSeen++; }
-      st.seen = { candidates: nCand, kept: nSeen, gapPx: nGap, poses: 32, ms: Date.now() - tS }; }
+      st.seen = { candidates: nCand, kept: nSeen, gapPx: nGap, poses: poseList.length, mode: seenMode, ms: Date.now() - tS };
+      if (o.seenReport) { st.seenDem = dem; st.seenDem0 = dem0; st.seenCand = Uint8Array.from(hole); } }
     const demanded = hole.slice();   // what some pose shows (the rescue below)
     const ph0 = bgPinholeFilledMask(hole, dQ, pw, ph, step); hole = ph0.mask; st.rampInHole = nRamp; st.pinholes = ph0.holes; st.pinholesJoined = ph0.joined;
     // the membrane, rounds until every hole texel's fill lies behind its own source depth by two steps
@@ -12493,6 +12580,79 @@ async function importPlaneReturn() {
 }
 window.importPlaneReturn = importPlaneReturn;
 
+// S70: one click — bake (if there is no plate yet), write the SD bundle, send it to the paint server
+// (harness/paint_server.py, which runs sd_return.py with the painter chosen here), import what comes back through the
+// same path as "Import plane return". The server URL is empty by default: the app's server.js forwards /paint to it.
+function bgPaintBase() {
+    const v = ((document.getElementById('paintServerUrl') || {}).value || '').trim().replace(/\/+$/, '');
+    return v || 'paint';
+}
+function bgPaintStatus(msg, bad) {
+    const el = document.getElementById('paintStatus'); if (el) { el.textContent = msg; el.style.color = bad ? '#ff6b6b' : ''; }
+    console.log('[S70] ' + msg);
+}
+function bgPlateReady() {
+    return !!(window._bgQuickBaked && window._qbSize && window._qbPlateF && (!window._srcHole || window._qbSourceHole));
+}
+window.paintHoles = async function (opt) {
+    opt = opt || {};
+    if (window._paintBusy) { bgPaintStatus('already painting'); return null; }
+    window._paintBusy = true;
+    const btn = document.getElementById('paintHolesBtn'); if (btn) btn.disabled = true;
+    const t0 = Date.now(), secs = () => Math.round((Date.now() - t0) / 1000) + ' s';
+    try {
+        const base = opt.base || bgPaintBase();
+        // the server first: a bake is minutes, and there is no point in it if nothing will paint
+        let health = null;
+        try { health = await (await fetch(base + '/health', { cache: 'no-store' })).json(); } catch (e) { health = null; }
+        if (!health || !health.ok) throw new Error('no paint server at ' + base + ' — run  python3 harness/paint_server.py  (and the app through server.js, or put the server URL in the box)');
+        if (!bgPlateReady()) {
+            bgPaintStatus('baking the plate…');
+            document.getElementById('bgLayerBuildBtn').click();
+            for (let t = 0; !bgPlateReady(); t++) {
+                if (t > 2400) throw new Error('the bake did not finish in 20 min');
+                await new Promise(r => setTimeout(r, 500));
+            }
+        }
+        if (window._qbSourceHoleBusy) { bgPaintStatus('waiting for the hole solve…'); await window._qbSourceHoleBusy; }
+        bgPaintStatus('writing the bundle…');
+        await new Promise(r => requestAnimationFrame(() => r()));
+        const zip = await exportSDBundle({ returnBytes: true });
+        if (!zip || !zip.length) throw new Error('the bundle came back empty');
+        const q = new URLSearchParams();
+        q.set('painter', opt.painter || (document.getElementById('paintPainterSel') || {}).value || 'sd');
+        const m = opt.sdmask || (document.getElementById('paintMaskSel') || {}).value; if (m && m !== 'asis') q.set('sdmask', m);
+        const depth = (opt.depth !== undefined) ? opt.depth : !!(document.getElementById('paintDepthChk') || { checked: true }).checked;
+        q.set('depth', depth ? '1' : '0');
+        bgPaintStatus('sending ' + (zip.length / 1e6).toFixed(1) + ' MB…');
+        const r0 = await fetch(base + '/paint?' + q.toString(), { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: zip });
+        const j0 = await r0.json(); if (!r0.ok || !j0.job) throw new Error('paint server refused the job: ' + (j0.error || r0.status));
+        let st = null;
+        for (;;) {
+            await new Promise(r => setTimeout(r, 2000));
+            st = await (await fetch(base + '/job/' + j0.job, { cache: 'no-store' })).json();
+            const last = (st.log && st.log.length) ? st.log[st.log.length - 1].slice(0, 90) : '';
+            if (st.state === 'queued') bgPaintStatus('queued behind ' + st.queuedAhead + ' job(s)… ' + secs());
+            else if (st.state === 'running') bgPaintStatus(q.get('painter') + ' painting… ' + secs() + (last ? '  ' + last : ''));
+            else break;
+        }
+        if (st.state !== 'done') throw new Error('the painter failed (exit ' + st.rc + '): ' + (st.log || []).slice(-2).join(' | '));
+        bgPaintStatus('importing ' + st.files.length + ' file(s)…');
+        const got = await (await fetch(base + '/job/' + j0.job + '/files', { cache: 'no-store' })).json();
+        const files = Object.entries(got).map(([n, b]) => { const bs = atob(b), a = new Uint8Array(bs.length); for (let i = 0; i < bs.length; i++) a[i] = bs.charCodeAt(i); return new File([a], n, { type: 'image/png' }); });
+        const rep = await window._importPlaneReturnFiles(files);
+        if (!rep) throw new Error('the return did not import (is the plate from this bake?)');
+        window._paintLast = { job: j0.job, args: j0.args, files: st.files, report: rep, seconds: (Date.now() - t0) / 1000 };
+        bgPaintStatus('painted: ' + rep.band + ' texels, ' + st.files.length + ' file(s), ' + secs() + ' (a new Build drops it)');
+        return window._paintLast;
+    } catch (e) {
+        bgPaintStatus('Paint holes: ' + (e && e.message || e), true); console.error('[S70]', e);
+        return null;
+    } finally {
+        window._paintBusy = false; if (btn) btn.disabled = false;
+    }
+};
+
 async function importObjectLayers() {
     if (!(window._bgQuickBaked && window._qbSize)) { alert('Object layers: build the plate first (S6 panel), then import.'); return; }
     const input = document.createElement('input'); input.type = 'file'; input.multiple = true; input.accept = 'image/png';
@@ -12570,12 +12730,16 @@ window._objectView = function (opts) {
     console.log('[S27] object view ' + JSON.stringify(counts)); return { canvas: cv, counts };
 };
 
-function exportSDBundle() {
-    if (window._qbSourceHoleBusy) { console.log('[S62] the export waits for the source-anchored hole'); window._qbSourceHoleBusy.then(() => exportSDBundle()); return; }   // else it would write the per-line bake's plate
+function exportSDBundle(opts) {
+    // S70: exportSDBundle({ returnBytes: true }) returns the zip (a Promise when it has to wait for the source hole)
+    // instead of downloading it, and throws instead of alerting: the one-click Paint holes path
+    const o = (opts && opts.returnBytes) ? opts : {};
+    const fail = (m) => { if (o.returnBytes) throw new Error(m); alert(m); };
+    if (window._qbSourceHoleBusy) { console.log('[S62] the export waits for the source-anchored hole'); return window._qbSourceHoleBusy.then(() => exportSDBundle(o)); }   // else it would write the per-line bake's plate
     try {
-        if (!renderer || !postProcessScene || !postProcessCamera) { alert('Renderer not ready'); return; }
+        if (!renderer || !postProcessScene || !postProcessCamera) { fail('Renderer not ready'); return; }
         const postProcessQuad = postProcessScene.children[0];
-        if (!postProcessQuad) { alert('Post-process quad not ready'); return; }
+        if (!postProcessQuad) { fail('Post-process quad not ready'); return; }
 
         renderNormalizedDepthPass();
         const thr = parseFloat(document.getElementById('fgSubThresholdSlider')?.value || '0.05');
@@ -12593,7 +12757,7 @@ function exportSDBundle() {
         let fgOk = false;
         try { fgOk = runFGSubtraction(pingPongRenderTargetB?.texture || null, true, thr); }
         catch (e) { console.error('[SD-BUNDLE] FG subtraction failed:', e); }
-        if (!fgOk) { alert('FG subtraction failed - cannot build bundle (see console)'); return; }
+        if (!fgOk) { fail('FG subtraction failed - cannot build bundle (see console)'); return; }
 
         const w = renderer.domElement.width, h = renderer.domElement.height;
         if (!_dbgExportTarget || _dbgExportTarget.width !== w || _dbgExportTarget.height !== h) {
@@ -12610,7 +12774,7 @@ function exportSDBundle() {
         // sheet exporter's own creation path, extracted, so both callers share
         // one definition of the export modes.
         ensureDbgPanelMaterial();
-        if (!_dbgPanelMaterial) { alert('SD bundle: panel material could not be created — see console.'); return; }
+        if (!_dbgPanelMaterial) { fail('SD bundle: panel material could not be created — see console.'); return; }
         // A210: publish the source frame rect in NDC for the geometric
         // inpaint/outpaint split. The Kooima frustum maps the fixed portal
         // rect to the full viewport, so NDC = portal-plane world / rect half —
@@ -12929,6 +13093,7 @@ function exportSDBundle() {
         renderer.setRenderTarget(null);
 
         const zipBytes = _makeZip(files);
+        if (o.returnBytes) { console.log('[SD-BUNDLE] built for Paint holes: ' + files.length + ' files, ' + zipBytes.length + ' bytes'); return zipBytes; }
         // Synchronous download (same Safari constraint as the sheet).
         let bin = '';
         const CHUNK = 0x8000;
@@ -12944,6 +13109,7 @@ function exportSDBundle() {
         console.log('[SD-BUNDLE] exported', aEl.download, files.map(f => f.name).join(', '));
     } catch (e) {
         console.error('[SD-BUNDLE] export failed:', e);
+        if (o.returnBytes) throw e;
         alert('SD bundle export failed - see console');
     }
 }
@@ -29060,7 +29226,8 @@ function setupStaticControlListeners() {
         if (canvasElement) canvasElement.style.cursor = 'crosshair';
     });
     document.getElementById('scalePreset')?.addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (v > 0) { const i = document.getElementById('scaleLen'); if (i) i.value = v; } });
-    document.getElementById('scaleClearBtn')?.addEventListener('click', () => { window._sceneScale = { refs: [] }; bgScaleSolve(); });
+    document.getElementById('scaleClearBtn')?.addEventListener('click', () => { bgSceneScale().refs = []; bgScaleSolve(); });
+    document.getElementById('scaleFacesBtn')?.addEventListener('click', () => bgScaleFindFaces());   // S70
 
     // --- Camera Intrinsics Inputs (Unchanged logic) ---
     const focalLengthInput = document.getElementById('focalLengthInput');
@@ -29277,6 +29444,10 @@ function setupStaticControlListeners() {
     document.getElementById('importMPILayersButton')?.addEventListener('click', importMPILayerPatches);
     const importObjLayersBtn = document.getElementById('importObjLayersButton'); if (importObjLayersBtn) importObjLayersBtn.addEventListener('click', importObjectLayers);   // S27
     const importPlaneRetBtn = document.getElementById('importPlaneReturnButton'); if (importPlaneRetBtn) importPlaneRetBtn.addEventListener('click', importPlaneReturn);   // Sprint 25
+    document.getElementById('paintHolesBtn')?.addEventListener('click', () => window.paintHoles());   // S70
+    { const u = document.getElementById('paintServerUrl');   // S70: the server URL is remembered per browser
+      if (u) { try { u.value = localStorage.getItem('paintServerUrl') || ''; } catch (e) {}
+               u.addEventListener('change', () => { try { localStorage.setItem('paintServerUrl', u.value.trim()); } catch (e) {} }); } }
     const objViewBtn = document.getElementById('objectViewButton'); if (objViewBtn) objViewBtn.addEventListener('click', () => window._objectView());   // S27
     const objMaskBtn = document.getElementById('importObjMasksButton'); if (objMaskBtn) objMaskBtn.addEventListener('click', importObjectMasks);   // S28
     const objHLBtn = document.getElementById('objHighlightButton'); if (objHLBtn) objHLBtn.addEventListener('click', () => { const v = document.getElementById('objHighlightId'); const n = v ? parseInt(v.value, 10) : -1; window._objectHighlight(isNaN(n) ? -1 : n); });   // S28
@@ -29901,44 +30072,153 @@ function bgScaleLensD(layerW) {
     if (f > 0 && sw > 0) return { D: layerW * f / sw, src: 'Camera Intrinsics (' + f + ' mm on a ' + sw + ' mm sensor)' };
     return { D: layerW / (2 * Math.tan(Math.PI / 4)), src: 'default 90 deg' };
 }
+// S70: references are PER SHOT. A shot is the depth map it was baked from (the same picture baked again is the same
+// shot); its references are kept in localStorage under that key and come back when the shot does, and a reference
+// never applies to another shot's geometry (bgMetricLawOn checks the key).
+const _sceneKeyCache = new WeakMap();
+function bgSceneKey() {
+    const dQ = window._qbDQ, sz = window._qbSize; if (!dQ || !sz) return null;
+    if (_sceneKeyCache.has(dQ)) return _sceneKeyCache.get(dQ);
+    let h = 2166136261 >>> 0; const st = Math.max(1, Math.floor(dQ.length / 4096));   // FNV-1a over 4096 samples of the depth
+    for (let i = 0; i < dQ.length; i += st) { h ^= Math.round(dQ[i] * 65535); h = Math.imul(h, 16777619) >>> 0; }
+    const k = sz.pw + 'x' + sz.ph + ':' + h.toString(16); _sceneKeyCache.set(dQ, k); return k;
+}
+function bgSceneScale() {   // the current shot's reference set (restored from storage on first sight of the shot)
+    const key = bgSceneKey(); let S = window._sceneScale;
+    if (S && S.key === key) return S;
+    let refs = [];
+    if (key) { try { const j = JSON.parse(localStorage.getItem('sceneScale.v1.' + key) || 'null'); if (j && Array.isArray(j.refs)) refs = j.refs; } catch (e) {} }
+    S = window._sceneScale = { refs, key, status: refs.length ? 'unsolved' : 'no references' };
+    if (refs.length) bgScaleSolve();
+    return S;
+}
+function bgScaleStore() {
+    const S = window._sceneScale; if (!S || !S.key) return;
+    try { localStorage.setItem('sceneScale.v1.' + S.key, JSON.stringify({ refs: S.refs.map(r => { const o = Object.assign({}, r); delete o.resid; delete o.outlier; delete o.disputed; return o; }) })); } catch (e) {}
+}
+// the relative 1-sigma of a reference's size in q: its class spread (a preset's typical range is read as +-2 sigma; a
+// typed length is exact) and the click / landmark precision (+-1 px at each end: sqrt 2 px over its pixel length)
+function bgRefRelSigma(r) {
+    const px = Math.SQRT2 / Math.max(1, r.lenPx || 1);
+    return Math.hypot(r.classSig || 0, px);
+}
+// the fit: q = alpha d + beta over the references in use, plus the sky as (d = 0, q = 0) when there is sky, weighted
+// by 1/sigma^2, sigma_k^2 = (q_k s_k)^2 + (alpha sd_k)^2 (sd_k: the depth's own precision there -- the quantum for a
+// reference, the sky threshold for the sky). With three or more points, every pair proposes a line and the largest set
+// within 2 sigma of it (the two-sided 95 % band) is refitted; the rest are OUTLIERS, reported, not averaged in
+// (a poster, a statue, a child, a reflection). Two points cannot outvote each other: a disagreement is a CONFLICT.
+function bgScaleFit(pts) {
+    const sig = (p, a) => Math.hypot(p.q * p.s, a * p.sd);
+    const wfit = (set, a0) => {
+        let a = a0, b = 0;
+        for (let it = 0; it < 3; it++) {
+            let sw = 0, sd = 0, sq = 0, sdd = 0, sdq = 0;
+            for (const p of set) { const s = Math.max(1e-12, sig(p, a)), w = 1 / (s * s); sw += w; sd += w * p.d; sq += w * p.q; sdd += w * p.d * p.d; sdq += w * p.d * p.q; }
+            const den = sw * sdd - sd * sd; if (!(Math.abs(den) > 1e-300)) return null;
+            a = (sw * sdq - sd * sq) / den; b = (sq - a * sd) / sw;
+        }
+        return { a, b };
+    };
+    const inl = (L) => pts.map(p => Math.abs(L.a * p.d + L.b - p.q) <= 2 * sig(p, L.a));
+    if (pts.length <= 2) { const L = wfit(pts, 0); return L ? { a: L.a, b: L.b, inlier: pts.map(() => true) } : null; }
+    let best = null;
+    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+        const P = pts[i], Q = pts[j]; if (Math.abs(P.d - Q.d) < 1e-6) continue;
+        const a = (Q.q - P.q) / (Q.d - P.d), b = P.q - a * P.d; if (!(a > 0)) continue;
+        let m = inl({ a, b }), set = pts.filter((_, k) => m[k]); if (set.length < 2) continue;
+        const L = wfit(set, a); if (!L || !(L.a > 0)) continue;
+        m = inl(L); const n = m.filter(Boolean).length;
+        let chi = 0; pts.forEach((p, k) => { if (m[k]) { const s = sig(p, L.a); chi += ((L.a * p.d + L.b - p.q) / s) ** 2; } });
+        const key = m.map(Number).join('');
+        if (!best || n > best.n) best = { a: L.a, b: L.b, inlier: m, n, chi, key, rivals: [] };
+        else if (n === best.n && key !== best.key) {
+            // another set of the same size that also fits within its noise (chi^2 within its n - 2 degrees of freedom's 95 %
+            // band is not needed: both are consistent sets) is a RIVAL reading: the data cannot choose, so the fit says so
+            if (!best.rivals.some(r => r.key === key)) best.rivals.push({ key, inlier: m, chi });
+            if (chi < best.chi) { const o = { key: best.key, inlier: best.inlier, chi: best.chi }; Object.assign(best, { a: L.a, b: L.b, inlier: m, chi, key }); best.rivals = best.rivals.filter(r => r.key !== key).concat([o]); }
+        }
+    }
+    return best;
+}
+bgScaleFit.plain = function (pts) {   // every point, weighted by 1/sigma^2 (three passes, sigma depends on alpha)
+    let a = 0, b = 0; const sig = (p) => Math.max(1e-12, Math.hypot(p.q * p.s, a * p.sd));
+    for (let it = 0; it < 3; it++) { let sw = 0, sd = 0, sq = 0, sdd = 0, sdq = 0;
+        for (const p of pts) { const w = 1 / sig(p) ** 2; sw += w; sd += w * p.d; sq += w * p.q; sdd += w * p.d * p.d; sdq += w * p.d * p.q; }
+        const den = sw * sdd - sd * sd; a = (sw * sdq - sd * sq) / den; b = (sq - a * sd) / sw; }
+    return { a, b };
+};
 function bgScaleSolve() {
-    const S = window._sceneScale || (window._sceneScale = { refs: [] });
+    const S = bgSceneScale.inSolve ? window._sceneScale : (bgSceneScale.inSolve = true, (() => { try { return bgSceneScale(); } finally { bgSceneScale.inSolve = false; } })());
     const refs = S.refs, notes = [];
     const dQ = window._qbDQ; let sky = false;
     if (dQ) { const q = bgSkyQ(); let n = 0; for (let i = 0; i < dQ.length; i += 7) if (dQ[i] < q) n++; sky = n > 0; }
-    const pts = refs.map(r => ({ d: r.d, q: r.q, w: 1 }));
-    if (sky) { pts.push({ d: 0, q: 0, w: 1 }); notes.push('sky present: its disparity is infinity'); }
+    const qd = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const use = refs.filter(r => r.use !== false);
+    refs.forEach(r => { r.outlier = false; r.disputed = false; r.resid = null; });
+    if (use.length === 0) { S.alpha = S.beta = null; S.status = refs.length ? 'no references in use' : 'no references'; bgScaleReadout(); bgScaleStore(); return S; }
+    const pts = use.map(r => ({ d: r.d, q: r.q, s: bgRefRelSigma(r), sd: qd, ref: r }));
+    if (sky) { pts.push({ d: 0, q: 0, s: 0, sd: bgSkyQ(), sky: true }); notes.push('sky present: its disparity is infinity'); }
     const ds = new Set(pts.map(p => p.d.toFixed(4)));
     let alpha = null, beta = null;
-    if (refs.length === 0) { S.alpha = S.beta = null; S.status = 'no references'; bgScaleReadout(); return S; }
     if (ds.size >= 2) {
-        let sw = 0, sd = 0, sq = 0, sdd = 0, sdq = 0;
-        for (const p of pts) { sw += p.w; sd += p.w * p.d; sq += p.w * p.q; sdd += p.w * p.d * p.d; sdq += p.w * p.d * p.q; }
-        const den = sw * sdd - sd * sd; alpha = (sw * sdq - sd * sq) / den; beta = (sq - alpha * sd) / sw;
-    } else { alpha = refs[0].q / Math.max(1e-6, refs[0].d); beta = 0; notes.push('one depth only and no sky: ASSUMED the farthest point (d = 0) is at infinity -- wrong indoors; add a second reference at another depth'); }
-    if (!(alpha > 0)) { notes.push('references CONFLICT (nearer is not larger): the first reference alone is used, with d = 0 at infinity'); alpha = refs[0].q / Math.max(1e-6, refs[0].d); beta = 0; }
+        const F = bgScaleFit(pts);
+        if (F && F.a > 0 && F.rivals && F.rivals.length) {
+            // AMBIGUOUS: two or more equally large agreeing sets (sky + two faces that disagree: either face can be the odd
+            // one). Nothing is left out; all points are fitted together and the disputed ones are named.
+            const L = bgScaleFit.plain(pts); alpha = L.a; beta = L.b;
+            const disputed = pts.filter((p, k) => [F].concat(F.rivals).some(r => r.inlier[k]) && ![F].concat(F.rivals).every(r => r.inlier[k]));
+            disputed.forEach(p => { if (p.ref) p.ref.disputed = true; });
+            notes.push('AMBIGUOUS: ' + (1 + F.rivals.length) + ' equally large sets of references agree among themselves but not with each other (' +
+                disputed.map(p => p.sky ? 'the sky' : ('the ' + (p.ref.kind === 'face' ? 'face' : (p.ref.presetName || 'length')) + ' at d ' + p.d.toFixed(2))).join(', ') +
+                '); all are fitted together -- add a reference or untick the wrong one');
+        } else if (F && F.a > 0) {
+            alpha = F.a; beta = F.b;
+            pts.forEach((p, k) => { if (!F.inlier[k]) { if (p.sky) notes.push('the sky is OFF the references\' line: its depth is not infinity here (a painted or hazy sky?) or the references disagree with it'); else p.ref.outlier = true; } });
+            const nOut = use.filter(r => r.outlier).length;
+            if (nOut) notes.push(nOut + ' reference' + (nOut > 1 ? 's' : '') + ' OFF the line by more than 2 sigma, left out (a poster, statue, child, reflection, or a wrong size?)');
+            if (F.n !== undefined && 2 * F.n <= pts.length) notes.push('NO MAJORITY: the largest agreeing set is ' + F.n + ' of ' + pts.length + '; add references or check the sizes');
+        }
+    } else { alpha = use[0].q / Math.max(1e-6, use[0].d); beta = 0; notes.push('one depth only and no sky: ASSUMED the farthest point (d = 0) is at infinity -- wrong indoors; add a second reference at another depth'); }
+    if (!(alpha > 0)) { notes.push('references CONFLICT (nearer is not larger): the first reference alone is used, with d = 0 at infinity'); alpha = use[0].q / Math.max(1e-6, use[0].d); beta = 0; }
     const pn = currentNormPortalPlane, m = alpha * pn + beta;
-    const lens = bgScaleLensD(refs[0].layerW);
+    const lens = bgScaleLensD(use[0].layerW);
     S.alpha = alpha; S.beta = beta; S.m = m; S.D = lens.D; S.Dsrc = lens.src; S.Zs = lens.D / Math.max(1e-9, m); S.pn = pn; S.sky = sky; S.notes = notes;
-    S.residuals = refs.map(r => (alpha * r.d + beta) / r.q - 1);
-    S.status = 'ok'; bgScaleReadout(); return S;
+    refs.forEach(r => { r.resid = (alpha * r.d + beta) / r.q - 1; });
+    S.residuals = use.map(r => r.resid);
+    S.status = 'ok'; bgScaleReadout(); bgScaleStore(); return S;
 }
 function bgScaleReadout() {
     const el = document.getElementById('scaleReadout'); if (!el) return; const S = window._sceneScale;
+    const list = document.getElementById('scaleRefList');
+    if (list) {
+        list.innerHTML = '';
+        (S && S.refs || []).forEach((r, k) => {
+            const row = document.createElement('div'); row.style.whiteSpace = 'nowrap';
+            const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = r.use !== false; cb.title = 'use this reference';
+            cb.addEventListener('change', () => { r.use = cb.checked; bgScaleSolve(); });
+            const x = document.createElement('button'); x.textContent = '×'; x.title = 'remove'; x.style.padding = '0 4px';
+            x.addEventListener('click', () => { S.refs.splice(k, 1); bgScaleSolve(); });
+            const t = document.createElement('span');
+            t.textContent = ' ' + (r.kind === 'face' ? 'face (eyes 63 mm)' : (r.presetName || 'length') + ' ' + r.lenM + ' m') + ' at d ' + r.d.toFixed(2) +
+                (r.resid !== null && r.resid !== undefined && r.use !== false ? '  ' + (r.resid >= 0 ? '+' : '') + (100 * r.resid).toFixed(0) + '%' : '') + (r.outlier ? '  OFF THE LINE' : '') + (r.disputed ? '  DISPUTED' : '');
+            if (r.outlier || r.disputed) t.style.color = '#ff6b6b';
+            row.append(cb, x, t); list.appendChild(row);
+        });
+    }
     if (!S || !S.refs || !S.refs.length) { el.innerHTML = 'no references'; return; }
     if (S.status !== 'ok') { el.innerHTML = S.status; return; }
     const farZ = S.beta > 1e-9 ? (S.D / S.beta).toFixed(1) + ' m' : 'infinity';
-    el.innerHTML = S.refs.length + ' reference' + (S.refs.length > 1 ? 's' : '') + (S.sky ? ' + sky' : '') +
+    const nUse = S.refs.filter(r => r.use !== false && !r.outlier).length;
+    el.innerHTML = nUse + ' reference' + (nUse !== 1 ? 's' : '') + ' on the line' + (S.sky ? ' + sky' : '') +
         ' &middot; at the subject plane 1 m = ' + (100 * S.m).toFixed(1) + ' cm on the portal' +
         ' &middot; subject ' + S.Zs.toFixed(2) + ' m from the camera (lens: ' + S.Dsrc + ')' +
         ' &middot; farthest point ' + farZ +
-        (S.residuals.length > 1 ? ' &middot; residuals ' + S.residuals.map(x => (100 * x).toFixed(0) + '%').join(' ') : '') +
         (S.notes.length ? '<br>' + S.notes.join('<br>') : '') +
         ((window._cutMap === 'C' || window._cutMap === 'Cm') ? '<br>drives the metric depth law (cut mapping ' + window._cutMap + ')' : '<br>(drives the geometry under cut mapping C or Cm)');
 }
 // the per-shot metric depth law: z behind the pin plane = D (Z/Z_s - 1), Z/Z_s = (alpha pn + beta)/(alpha d + beta); capped in
 // parallax space at g = z/(D + z) <= 0.999 (C's cap), so infinity stays finite
-function bgMetricLawOn() { const S = window._sceneScale; return !!(S && S.status === 'ok' && (window._cutMap === 'C' || window._cutMap === 'Cm')); }
+function bgMetricLawOn() { const S = window._sceneScale; return !!(S && S.status === 'ok' && S.key && S.key === bgSceneKey() && (window._cutMap === 'C' || window._cutMap === 'Cm')); }
 function bgMetricLawZ(d) {   // returns the law's zOff sign (+ toward the viewer)
     const S = window._sceneScale; const qs = S.alpha * S.pn + S.beta, q = Math.max(qs / 1000, S.alpha * d + S.beta);
     const zb = Math.min(999 * S.D, S.D * (qs / q - 1)); return -zb;
@@ -29956,8 +30236,14 @@ function handleCanvasClickForScale(event) {
     const Dr = dollyRestDistance, za = Dr - volumeZOffForNormDepth(a.d), zb = Dr - volumeZOffForNormDepth(b.d);
     const oneSurface = Math.max(za, zb) <= 1.05 * Math.min(za, zb);
     const s = lenPx * a.layerW / a.pw;                                    // portal units
-    const ref = { d: 0.5 * (a.d + b.d), q: s / len, lenM: len, lenPx, s, layerW: a.layerW, pw: a.pw, oneSurface, preset: document.getElementById('scalePreset')?.value || 'custom' };
-    (window._sceneScale || (window._sceneScale = { refs: [] })).refs.push(ref);
+    // the class spread: a preset's typical range (data-range, read as +-2 sigma) when its length is used as is; a typed length is exact
+    const sel = document.getElementById('scalePreset'), opt = sel && sel.selectedOptions && sel.selectedOptions[0];
+    let classSig = 0, presetName = null;
+    if (opt && parseFloat(opt.value) > 0 && Math.abs(parseFloat(opt.value) - len) < 1e-9 && opt.dataset.range) {
+        const [lo, hi] = opt.dataset.range.split(',').map(parseFloat); classSig = (hi - lo) / 4 / len; presetName = opt.dataset.name || null;
+    }
+    const ref = { d: 0.5 * (a.d + b.d), q: s / len, lenM: len, lenPx, s, layerW: a.layerW, pw: a.pw, oneSurface, preset: sel?.value || 'custom', presetName, classSig, use: true, kind: 'length' };
+    bgSceneScale().refs.push(ref);
     bgScaleSolve();
     if (!oneSurface) { const el = document.getElementById('scaleReadout'); if (el) el.innerHTML += '<br>the last two points are at different depths: the length is foreshortened; prefer two points on one surface'; }
     bgEndScaleMode();
@@ -29967,6 +30253,64 @@ function bgEndScaleMode() {
     const btn = document.getElementById('setScaleButton'); if (btn) { btn.textContent = 'Set Scale'; btn.style.backgroundColor = ''; }
     if (canvasElement) canvasElement.style.cursor = 'default';
 }
+// S70: faces in the picture as size references, found automatically and used unless unticked (the robust fit reports
+// the ones off the line). The measure is the head-Z one (bgHeadZMeasure): the 3-D span between the iris centres, which
+// yaw does not shorten; the size is the adult interpupillary distance IPD_M, 63 mm, with its SD 3.5 mm (5.6 %) as the
+// class sigma (Dodgson 2004, as cited at IPD_M; not re-read here). The face mesh's detector is
+// short-range (faces that fill a good part of its input), so the picture is searched whole and in tiles of a half and a
+// quarter of the short side; a face whose eyes are closer than about 1/50 of the short side is below its range.
+const IPD_SIG = 0.0035 / IPD_M;   // IPD_M 63 mm and its SD 3.5 mm: the Dodgson (2004) values cited at IPD_M above
+async function bgScaleFindFaces() {
+    const el = document.getElementById('scaleReadout');
+    const say = (m) => { if (el) el.innerHTML = m; console.log('[S70] faces: ' + m); };
+    const sz = window._qbSize, dQ = window._qbDQ, L = mediaLayers && mediaLayers[0];
+    if (!sz || !dQ || !L || !L.mesh || !L.textures || !L.textures.color || !L.textures.color.image) { say('bake first: the faces need the depth'); return null; }
+    if (typeof faceLandmarksDetection === 'undefined') { say('the face detector is not loaded'); return null; }
+    const img = L.textures.color.image, W = img.naturalWidth || img.videoWidth || img.width, H = img.naturalHeight || img.videoHeight || img.height;
+    say('looking for faces…');
+    // the webcam detector (maxFaces 1) is swapped out while the picture is searched, then rebuilt
+    const hadCam = !!faceMeshDetector; if (hadCam) { try { faceMeshDetector.dispose(); } catch (e) {} faceMeshDetector = null; }
+    let det = null; const found = [];
+    try {
+        det = await faceLandmarksDetection.createDetector(faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
+            { maxFaces: 10, refineLandmarks: true, runtime: 'mediapipe', solutionPath: window._faceSolutionPath || 'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh' });
+        const cv = document.createElement('canvas'), cx = cv.getContext('2d');
+        const tiles = [[0, 0, W, H]];
+        for (const k of [2, 4]) { const T = Math.round(Math.min(W, H) / k);   // half and quarter of the short side, half-overlapped
+            for (let y = 0; y + T <= H + 1; y += T / 2) for (let x = 0; x + T <= W + 1; x += T / 2) tiles.push([Math.round(x), Math.round(y), T, T]); }
+        for (const [x0, y0, tw, th] of tiles) {
+            const f = Math.min(1, 1280 / Math.max(tw, th)); cv.width = Math.round(tw * f); cv.height = Math.round(th * f);
+            cx.drawImage(img, x0, y0, tw, th, 0, 0, cv.width, cv.height);
+            let faces = []; try { faces = await det.estimateFaces(cv, { flipHorizontal: false }); } catch (e) { faces = []; }
+            for (const fc of faces) {
+                const kp = fc.keypoints; if (!kp || !kp[473]) continue;
+                const m = bgHeadZMeasure(kp); if (!(m.span > 0)) continue;
+                const u = (x0 + 0.5 * (kp[468].x + kp[473].x) / f) / W, v = (y0 + 0.5 * (kp[468].y + kp[473].y) / f) / H, spanSrc = m.span / f;
+                found.push({ u, v, spanSrc });
+            }
+        }
+    } catch (e) { say('face search failed: ' + (e && e.message || e)); }
+    finally { try { det && det.dispose(); } catch (e) {} if (hadCam) { try { await initializeFaceMesh(); } catch (e) {} } }
+    // one face seen in several tiles: keep the widest measure (a face cut by a tile edge measures short)
+    found.sort((a, b) => b.spanSrc - a.spanSrc); const faces = [];
+    for (const f of found) if (!faces.some(g => Math.hypot((g.u - f.u) * W, (g.v - f.v) * H) < 0.5 * g.spanSrc)) faces.push(f);
+    const S = bgSceneScale(); S.refs = S.refs.filter(r => r.kind !== 'face');
+    const layerW = L.mesh.geometry.parameters.width;
+    for (const f of faces) {
+        const lenPx = f.spanSrc * sz.pw / W; if (lenPx < 4) continue;                  // below 4 px the landmark precision alone is > 35 %
+        const cxp = f.u * sz.pw, cyp = f.v * sz.ph, r = Math.max(1, 0.5 * lenPx), ds = [];
+        for (let y = Math.floor(cyp - r); y <= cyp + r; y++) for (let x = Math.floor(cxp - r); x <= cxp + r; x++)
+            if (x >= 0 && y >= 0 && x < sz.pw && y < sz.ph && (x - cxp) ** 2 + (y - cyp) ** 2 <= r * r) ds.push(dQ[y * sz.pw + x]);
+        if (!ds.length) continue; ds.sort((a, b) => a - b);
+        const s = lenPx * layerW / sz.pw;
+        S.refs.push({ kind: 'face', d: ds[ds.length >> 1], q: s / IPD_M, lenM: IPD_M, lenPx, s, layerW, pw: sz.pw, classSig: IPD_SIG, use: true, u: f.u, v: f.v, oneSurface: true });
+    }
+    const n = S.refs.filter(r => r.kind === 'face').length;
+    bgScaleSolve();
+    if (!n && el) el.innerHTML = 'no faces found (' + found.length + ' detections, none measurable)<br>' + el.innerHTML;
+    return n;
+}
+window.bgScaleFindFaces = bgScaleFindFaces;
 // -----------------------------------------------------------------------------
 // --- MAIN APPLICATION ENTRY POINT --------------------------------------------
 // -----------------------------------------------------------------------------

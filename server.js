@@ -9,6 +9,21 @@ const httpsPort = 3000;
 const httpPort = 3001;
 const host = '0.0.0.0';
 
+// S70: the one-click "Paint holes" button talks to the paint server (harness/paint_server.py, which runs
+// sd_return.py). /paint/<path> is forwarded to PAINT_URL/<path> so the page reaches it same-origin, on http
+// here and on https from the iPad (a direct http call from an https page would be blocked as mixed content).
+const PAINT_URL = new URL(process.env.PAINT_URL || 'http://127.0.0.1:8765');
+app.use('/paint', (req, res) => {
+  const up = http.request({ host: PAINT_URL.hostname, port: PAINT_URL.port || 80, method: req.method,
+    path: req.url, headers: { 'content-type': req.headers['content-type'] || 'application/octet-stream',
+      ...(req.headers['content-length'] ? { 'content-length': req.headers['content-length'] } : {}) } }, (r) => {
+    res.writeHead(r.statusCode, { 'content-type': r.headers['content-type'] || 'application/json', 'cache-control': 'no-store' });
+    r.pipe(res);
+  });
+  up.on('error', (e) => { if (!res.headersSent) res.status(502).json({ error: 'paint server not reachable at ' + PAINT_URL.href + ' (' + e.code + '): start it with  python3 harness/paint_server.py' }); });
+  req.pipe(up);
+});
+
 // This one line handles serving all your static files.
 // Cache-Control: no-store on dev assets: with stable filenames (moebius.js),
 // the browser must never serve a stale copy — the on-page badge + this header

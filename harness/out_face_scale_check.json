@@ -1,0 +1,61 @@
+{
+ "paintingFace": {
+  "x": 513.8598284721375,
+  "y": 266.6558110713959,
+  "ipd": 42.59188210411389
+ },
+ "found": 3,
+ "ms": 194976,
+ "faces": [
+  {
+   "u": 0.167,
+   "v": 0.519,
+   "d": 0.800000011920929,
+   "lenPx": 29.81,
+   "q": 0.04646099103101724,
+   "outlier": false,
+   "resid": -0.003
+  },
+  {
+   "u": 0.5,
+   "v": 0.519,
+   "d": 0.550000011920929,
+   "lenPx": 29.5,
+   "q": 0.04597402115046469,
+   "outlier": true,
+   "resid": -0.307
+  },
+  {
+   "u": 0.833,
+   "v": 0.52,
+   "d": 0.30000001192092896,
+   "lenPx": 11.03,
+   "q": 0.017189541089441606,
+   "outlier": false,
+   "resid": 0.011
+  }
+ ],
+ "alpha": 0.057906746994829776,
+ "beta": -2.5224463138285127e-7,
+ "betaOverAlpha": -0.000004356049069815181,
+ "sky": true,
+ "qRatioLR": 2.702863956010736,
+ "qRatioWant": 2.666666666666667,
+ "notes": [
+  "sky present: its disparity is infinity",
+  "1 reference OFF the line by more than 2 sigma, left out (a poster, statue, child, reflection, or a wrong size?)"
+ ],
+ "readout": "2 references on the line + sky · at the subject plane 1 m = 2.9 cm on the portal · subject 5.65 m from the camera (lens: Camera Intrinsics (50 mm on a 36 mm sensor)) · farthest point infinity\nsky present: its disparity is infinity\n1 reference OFF the line by more than 2 sigma, left out (a poster, statue, child, reflection, or a wrong size?)\n(drives the geometry under cut mapping C or Cm)",
+ "listRows": 3,
+ "ambiguous": {
+  "notes": [
+   "sky present: its disparity is infinity",
+   "AMBIGUOUS: 3 equally large sets of references agree among themselves but not with each other (the face at d 0.80, the face at d 0.55, the sky); all are fitted together -- add a reference or untick the wrong one"
+  ],
+  "disputed": [
+   0.800000011920929,
+   0.550000011920929
+  ],
+  "outliers": []
+ }
+}

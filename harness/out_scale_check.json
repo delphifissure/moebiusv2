@@ -1,24 +1,53 @@
 {
  "one": {
-  "alpha": 0.22499999664723866,
+  "alpha": 0.22499999664723894,
   "beta": 0,
   "notes": [
    "one depth only and no sky: ASSUMED the farthest point (d = 0) is at infinity -- wrong indoors; add a second reference at another depth"
   ]
  },
  "two": {
-  "alpha": 0.19999999999999973,
-  "beta": 0.019999997615814336,
+  "alpha": 0.20000000000000043,
+  "beta": 0.0199999976158141,
   "residuals": [
-   0,
-   2.220446049250313e-16
+   4.440892098500626e-16,
+   -2.220446049250313e-16
   ],
   "notes": [],
-  "m": 0.1199999976158142,
-  "D": 0.16363636363636364,
+  "m": 0.11999999761581431,
+  "D": 0.10398338220918867,
   "Dsrc": "Camera Intrinsics (50 mm on a 36 mm sensor)",
-  "Zs": 1.3636363907293847,
-  "lensDexpected": 0.16363636363636364
+  "Zs": 0.86652820229294,
+  "lensDexpected": 0.10398338220918867
+ },
+ "robust": {
+  "alpha": 0.20000000000000015,
+  "beta": 0.01999999761581418,
+  "outliers": [
+   false,
+   false,
+   false,
+   true
+  ],
+  "resid": [
+   0,
+   0,
+   0,
+   1.3152
+  ],
+  "notes": [
+   "1 reference OFF the line by more than 2 sigma, left out (a poster, statue, child, reflection, or a wrong size?)"
+  ]
+ },
+ "robustUnticked": {
+  "alpha": 0.20000000000000015,
+  "beta": 0.01999999761581418,
+  "notes": []
+ },
+ "presetSigma": {
+  "got": 0.05882352941176469,
+  "want": 0.05882352941176471,
+  "name": "person"
  },
  "conflict": [
   "references CONFLICT (nearer is not larger): the first reference alone is used, with d = 0 at infinity"
@@ -33,15 +62,26 @@
    0.04
   ],
   "Cm": [
-   -0.8181819157166969,
-   -0.3272727467797018,
-   -0.08181818425655357,
+   -0.5199169730248803,
+   -0.20796677681416398,
+   -0.05199169265406763,
    0,
-   0.05454545526793506,
-   0.07438016609532949
+   0.034661127862166095,
+   0.04726517424367195
   ],
   "monotone": true
  },
+ "perShot": {
+  "k1": "400x300:f6fa563",
+  "k2": "400x300:69eb9eed",
+  "differ": true,
+  "lawOnShot1": true,
+  "refsShot2": 0,
+  "lawOnShot2": false,
+  "refsBack": 2,
+  "alphaBack": 0.20000000000000043,
+  "lawOnBack": true
+ },
  "scalarUnchanged": true,
- "readout": "2 references · at the subject plane 1 m = 12.0 cm on the portal · subject 1.36 m from the camera (lens: Camera Intrinsics (50 mm on a 36 mm sensor)) · farthest point 8.2 m · residuals 0% 0%\n(drives the geometry under cut mapping C or Cm)"
+ "readout": "2 references on the line · at the subject plane 1 m = 12.0 cm on the portal · subject 0.87 m from the camera (lens: Camera Intrinsics (50 mm on a 36 mm sensor)) · farthest point 5.2 m\ndrives the metric depth law (cut mapping Cm)"
 }
