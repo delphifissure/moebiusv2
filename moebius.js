@@ -3961,7 +3961,7 @@ document.addEventListener('DOMContentLoaded', function () {
 // --- FACE TRACKING LOGIC (MediaPipe Face Mesh) -------------------------------
 // -----------------------------------------------------------------------------
 
-// S67 §7 HEAD DISTANCE FROM THE FACE MESH (window._headZ, or ?headz=1; off by default).
+// S67 §7 HEAD DISTANCE FROM THE FACE MESH (window._headZ; ON by default since the user's call, ?headz=0 to turn off).
 // d = f_px * S / s_px for a facial feature of physical size S. Two features:
 //   IPD   the iris centres 468/473 (else the eye corners 33/263 / 1.45, a146b's canonical ratio), measured as a 3-D span
 //         over the mesh's x, y, z so a head turn does not shrink it (the 2-D span falls as cos(yaw)); S = IPD_M (a146b).
@@ -3988,7 +3988,11 @@ window.setShotLens = function (hfovDeg) {   // a cut: the shot's horizontal fiel
     console.log('[S67] shot lens ' + (hfovDeg > 0 ? hfovDeg + ' deg -> eye distance ' + window._shotD.toFixed(3) + ' m (gain ' + (window._shotD / dollyRestDistance).toFixed(2) + ')' : 'cleared'));
 };
 const IRIS_M = 0.0117;
-function bgHeadZWanted() { try { return !!window._headZ || /[?&]headz=1/.test(location.search); } catch (e) { return !!window._headZ; } }
+// ON BY DEFAULT (user decision, S67 §7): window._headZ unset = on; false/0 or ?headz=0 turns it off; 2 = the metric eye
+function bgHeadZWanted() {
+    try { if (/[?&]headz=0/.test(location.search)) return false; } catch (e) {}
+    return (window._headZ === undefined || window._headZ === null) ? true : !!window._headZ;
+}
 window._headZState = null;
 function bgHeadZMeasure(kp) {
     const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
@@ -4063,7 +4067,7 @@ function bgDrawTrackReadout(ctx, W, H) {
             lines.push(t);
             if (hz.eyeM) lines.push('real eye  x ' + f(hz.eyeM.x, 3) + '  y ' + f(hz.eyeM.y, 3) + '  z ' + hz.eyeM.z.toFixed(3) + ' m');
         }
-        lines.push('z tracking ' + (window._headZ === 2 ? 'metric' : (bgHeadZWanted() ? 'on' : 'off (?headz=1)')) + (window._headByAngle ? ' | lens gain' : ''));
+        lines.push('z tracking ' + (window._headZ === 2 ? 'metric' : (bgHeadZWanted() ? 'on' : 'off')) + (window._headByAngle ? ' | lens gain' : ''));
         // as large as fits: start at 1/24 of the preview's width, shrink until the widest line fits
         ctx.save(); ctx.textBaseline = 'top';
         let fs = Math.round(W / 24), w = 0;
