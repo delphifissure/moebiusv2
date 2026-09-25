@@ -969,26 +969,34 @@ function bgSeenEmergence(c) {
     const need = []; let smin = Infinity, smax = -Infinity;
     for (let i = 0; i < N; i++) { if (bnd[i]) { if (s[i] > smax) smax = s[i]; } if (hole[i] && !dem[i] && P0[i] < dQ[i] - 2 * step) { need.push(i); if (sP[i] < smin) smin = sP[i]; } }
     if (!need.length || !nB) return { boundary: nB, unseenCandidates: need.length, emergent: 0, added: 0, ms: Date.now() - t0 };
-    const K = Math.max(0, smax - smin) + 1;
-    // W_q and its argmax, per quadrant q of the offset (xv - xu): the rectangle grows one texel at a time toward that
-    // quadrant only, at every breakpoint of the gauge; per quadrant because the edge that uncovers a texel in one direction
-    // is not the one that does in another, and each gives its own emergence pose to verify
-    let M = new Float64Array(N), Mi = new Int32Array(N), T = new Float64Array(N), Ti = new Int32Array(N);
-    const grow = (ax, sg) => {   // M(x) <- max(M(x), M(x - sg e_ax)): offsets x - xu gain one step of sign sg along ax
-        for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const i = y * pw + x; let b = M[i], bi = Mi[i];
+    const K = Math.max(0, smax - smin) + 1; const tW = Date.now();
+    // W_q and its argmax, per quadrant q of the offset (xv - xu), on a COARSE grid of FxF blocks: each block carries its
+    // boundary texel of largest shift, and the rectangle grows one block at a time at every breakpoint of the gauge. W is
+    // only the screen (the verification below decides), so the coarse W is used with the slack that makes it conservative:
+    // the true offset differs from the block offset by less than F texels on each axis, so dE differs by less than
+    // F / env, and sigma <= Wc + F / env keeps every texel the exact W would keep (S70: 46 s -> about 1 s on the troll).
+    // F is a speed setting, not a quality constant: any F keeps the same texels through the screen.
+    const F = c.coarse || 4, pwc = Math.ceil(pw / F), phc = Math.ceil(ph / F), Nc = pwc * phc, slack = F / env + 1;
+    const Bc = new Float64Array(Nc).fill(-Infinity), Bi = new Int32Array(Nc).fill(-1);
+    for (let i = 0; i < N; i++) if (bnd[i]) { const x = i % pw, y = (i - x) / pw, q = ((y / F) | 0) * pwc + ((x / F) | 0); if (s[i] > Bc[q]) { Bc[q] = s[i]; Bi[q] = i; } }
+    let M = new Float64Array(Nc), Mi = new Int32Array(Nc), T = new Float64Array(Nc), Ti = new Int32Array(Nc);
+    const grow = (ax, sg) => {
+        for (let y = 0; y < phc; y++) for (let x = 0; x < pwc; x++) { const i = y * pwc + x; let b = M[i], bi = Mi[i];
             const xx = ax === 0 ? x - sg : x, yy = ax === 1 ? y - sg : y;
-            if (xx >= 0 && yy >= 0 && xx < pw && yy < ph) { const j = yy * pw + xx; if (M[j] > b) { b = M[j]; bi = Mi[j]; } }
+            if (xx >= 0 && yy >= 0 && xx < pwc && yy < phc) { const jj = yy * pwc + xx; if (M[jj] > b) { b = M[jj]; bi = Mi[jj]; } }
             T[i] = b; Ti[i] = bi; }
-        let a = M; M = T; T = a; let ai = Mi; Mi = Ti; Ti = ai; };
+        let t = M; M = T; T = t; let ti = Mi; Mi = Ti; Ti = ti; };
     const Wq = [], Wiq = []; let levels = 0;
     for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
-        M.fill(-Infinity); Mi.fill(-1); for (let i = 0; i < N; i++) if (bnd[i]) { M[i] = s[i]; Mi[i] = i; }
+        M.set(Bc); Mi.set(Bi);
         const W = Float64Array.from(M), Wi = Int32Array.from(Mi); let rx = 0, ry = 0;
-        for (;;) { const kx = rx + 1, ky = (ry + 1) / env, k = Math.min(kx, ky); if (k > K) break;
+        for (;;) { const kx = (rx + 1) * F, ky = (ry + 1) * F / env, k = Math.min(kx, ky); if (k > K + slack) break;
             if (kx <= ky) { grow(0, sx); rx++; } if (ky <= kx) { grow(1, sy); ry++; } levels++;
-            for (let i = 0; i < N; i++) { const v = M[i] - k; if (v > W[i]) { W[i] = v; Wi[i] = Mi[i]; } } }
+            for (let i = 0; i < Nc; i++) { const v = M[i] - k; if (v > W[i]) { W[i] = v; Wi[i] = Mi[i]; } } }
         Wq.push(W); Wiq.push(Wi);
     }
+    const cellOf = (v) => { const x = v % pw, y = (v - x) / pw; return ((y / F) | 0) * pwc + ((x / F) | 0); };
+    const msW = Date.now() - tW; const tV = Date.now(); let marchSamples = 0;
     // the point test: is screen point (yx, yy) covered by the source mesh at pose (hx, hy)? A mesh point x covers it when
     // x + s(x) h = y: march x = y - sig h over the shift range, a root of s(x(sig)) - sig inside a kept triangle
     const sAt = (px, py) => { const cx = Math.floor(px), cy = Math.floor(py); if (cx < 0 || cy < 0 || cx >= pw - 1 || cy >= ph - 1) return NaN;
@@ -996,11 +1004,33 @@ function bgSeenEmergence(c) {
         if (fx + fy <= 1) { if (!(TF[i] & 1)) return NaN; return s[i] + fx * (s[i + 1] - s[i]) + fy * (s[i + pw] - s[i]); }
         if (!(TF[i] & 2)) return NaN; return s[i + pw + 1] + (1 - fx) * (s[i + pw] - s[i + pw + 1]) + (1 - fy) * (s[i + 1] - s[i + pw + 1]); };
     let sMinAll = Infinity, sMaxAll = -Infinity; for (let i = 0; i < N; i++) { if (s[i] < sMinAll) sMinAll = s[i]; if (s[i] > sMaxAll) sMaxAll = s[i]; }
+    // tiles of TS x TS texels carry the range of s over their texels and a one-texel border (every vertex of a triangle
+    // that reaches into the tile): a root of s(x(sig)) - sig inside a tile needs sig within that range (+ the tolerance),
+    // so the march jumps over any stretch of a tile it cannot meet -- exact, the same answer as the plain march
+    const TS = 8, twc = Math.ceil(pw / TS), thc = Math.ceil(ph / TS), tMin = new Float64Array(twc * thc).fill(Infinity), tMax = new Float64Array(twc * thc).fill(-Infinity);
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) { const v = s[y * pw + x];
+        for (let ty = Math.max(0, ((y - 1) / TS) | 0); ty <= Math.min(thc - 1, ((y + 1) / TS) | 0); ty++) for (let tx = Math.max(0, ((x - 1) / TS) | 0); tx <= Math.min(twc - 1, ((x + 1) / TS) | 0); tx++) {
+            const t = ty * twc + tx; if (v < tMin[t]) tMin[t] = v; if (v > tMax[t]) tMax[t] = v; } }
     const covered = (yx, yy, hx, hy) => {
         const hn = Math.hypot(hx, hy); if (!(hn > 0)) return true;
-        const n = Math.max(2, Math.ceil((sMaxAll - sMinAll) * hn / 0.5)); let prevG = NaN;
-        for (let k = 0; k <= n; k++) { const sig = sMinAll + (sMaxAll - sMinAll) * k / n, sm = sAt(yx - sig * hx, yy - sig * hy);
-            if (sm !== sm) { prevG = NaN; continue; } const g = sm - sig; if (Math.abs(g) * hn <= 0.5) return true; if (prevG === prevG && (g > 0) !== (prevG > 0)) return true; prevG = g; }
+        const step = (sMaxAll - sMinAll) / Math.max(2, Math.ceil((sMaxAll - sMinAll) * hn / 0.5)), tol = 0.5 / hn + 1e-9; let prevG = NaN, sig = sMinAll;
+        while (sig <= sMaxAll + 1e-9) {
+            marchSamples++;
+            const px = yx - sig * hx, py = yy - sig * hy;
+            if (px < 0 || py < 0 || px >= pw - 1 || py >= ph - 1) { prevG = NaN; sig += step; continue; }
+            const tx = (px / TS) | 0, ty = (py / TS) | 0, t = ty * twc + tx;
+            if (sig < tMin[t] - tol || sig > tMax[t] + tol) {            // no root in this tile at this sig: jump to where it can be, or out
+                const dx = -hx, dy = -hy;
+                const ex = dx > 0 ? ((tx + 1) * TS - px) / dx : (dx < 0 ? (tx * TS - px) / dx : Infinity);
+                const ey = dy > 0 ? ((ty + 1) * TS - py) / dy : (dy < 0 ? (ty * TS - py) / dy : Infinity);
+                let nxt = sig + Math.min(ex, ey) + 1e-6;
+                if (sig < tMin[t] - tol) nxt = Math.min(nxt, tMin[t] - tol);
+                prevG = NaN; sig = Math.max(nxt, sig + 1e-6); continue;
+            }
+            const sm = sAt(px, py);
+            if (sm !== sm) { prevG = NaN; sig += step; continue; }
+            const g = sm - sig; if (Math.abs(g) * hn <= 0.5) return true; if (prevG === prevG && (g > 0) !== (prevG > 0)) return true; prevG = g; sig += step;
+        }
         return false; };
     // the renderer's test marks the three vertices of the plate triangle drawn at an uncovered pixel, so a texel counts as
     // seen when a screen pixel within its triangles (one texel around its screen place) is uncovered: the same here
@@ -1009,8 +1039,8 @@ function bgSeenEmergence(c) {
     for (const v of need) {
         const xv = v % pw, yv = (v - xv) / pw; let em = false, ok = false;
         for (let q = 0; q < 4 && !ok; q++) {
-            if (!(sP[v] <= Wq[q][v] + 1)) continue; em = true;                       // + 1: within one texel, as above
-            const u = Wiq[q][v], du = s[u] - sP[v]; if (!(du > 0)) continue;
+            const cv = cellOf(v); if (!(sP[v] <= Wq[q][cv] + slack)) continue; em = true;   // the coarse screen with its slack (above)
+            const u = Wiq[q][cv]; if (u < 0) continue; const du = s[u] - sP[v]; if (!(du > 0)) continue;
             const xu = u % pw, yu = (u - xu) / pw, h0x = (xv - xu) / du, h0y = (yv - yu) / du, g0 = Math.max(Math.abs(h0x), Math.abs(h0y) / env);
             const lamMax = g0 > 0 ? 1 / g0 : 1, rel = Math.hypot(xv - xu, yv - yu);
             const lams = [Math.min(lamMax, 1 + 1 / Math.max(1, rel)), 0.5 * (1 + lamMax), lamMax];
@@ -1021,7 +1051,7 @@ function bgSeenEmergence(c) {
         if (em) emergent++;
         if (ok) { dem[v] = 1; added++; } else if (em) failed++;
     }
-    return { boundary: nB, unseenCandidates: need.length, emergent, added, failedVerification: failed, posesTried: tried, levels, ms: Date.now() - t0 };
+    return { boundary: nB, unseenCandidates: need.length, emergent, added, failedVerification: failed, posesTried: tried, levels, coarse: F, K, sRange: [sMinAll, sMaxAll], msW, msVerify: Date.now() - tV, marchSamples, ms: Date.now() - t0 };
 }
 
 // S62: THE SOURCE-ANCHORED HOLE (research/S62; harness/srcfill.py steps 2-5). No per-line value anywhere.
@@ -1175,7 +1205,7 @@ function bgSourceHole(o) {
         for (let c = 0; c < N; c++) if (zb[c] < 0) nGap++;
       }
       const dem0 = o.seenReport ? Uint8Array.from(dem) : null; if (o.seenReport) st.seenCand0 = Uint8Array.from(hole);
-      if (seenMode === 'exact') st.seenExact = bgSeenEmergence({ pw, ph, N, s, sP, TF, hole, dem, P0, dQ, step, env });
+      if (seenMode === 'exact') st.seenExact = bgSeenEmergence({ pw, ph, N, s, sP, TF, hole, dem, P0, dQ, step, env, coarse: o.seenCoarse });
       // the seen set's outline carries the map's column-to-column noise and the pose sampling; a majority over a square of
       // side 2*WASH_RUN+1 (the ink-line scale below which a mask detail cannot be told from a line) smooths it
       const RS = 8 /* = WASH_RUN */, W2 = pw + 1, II = new Int32Array((pw + 1) * (ph + 1));
