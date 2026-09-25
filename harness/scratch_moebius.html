@@ -95,7 +95,13 @@
         </div>
 
         <h4 class="control-header">Scene Scale</h4>
-        <button id="setScaleButton" class="control-button" title="Click to define a real-world scale for the scene.">Set Scale</button>
+        <button id="setScaleButton" class="control-button" title="S69: add a size reference -- two clicks on something whose real length you know (the view holds at rest while you click). One reference sets the scale where it stands; two at different depths (or one plus sky) set how the scene recedes; the lens (shot lens or Camera Intrinsics) sets the camera distance. Drives the depth under cut mapping C or Cm.">Set Scale</button>
+        <div id="scaleRefPanel" style="font-size:0.85em; margin-top:4px;">
+          <select id="scalePreset" title="Typical sizes (edit the length if you know better)"><option value="0" selected>custom length</option><option value="1.7">person standing (typical 1.7 m)</option><option value="0.23">adult head, chin to crown (typical 0.23 m)</option><option value="2.0">door height (typical 2.0 m)</option><option value="4.5">car length (typical 4.5 m)</option><option value="0.18">stair step (typical 0.18 m)</option></select>
+          <input type="number" id="scaleLen" value="1.0" min="0.001" step="0.01" style="width:64px;"> m
+          <button id="scaleClearBtn" title="Remove all size references">Clear</button>
+          <div id="scaleReadout" style="margin-top:3px;">no references</div>
+        </div>
 
         <h4 class="control-header">Depth & Parallax</h4>
         <div class="slider-container" title="Controls depth 'into' the screen from the portal plane.">
