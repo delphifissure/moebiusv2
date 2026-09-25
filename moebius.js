@@ -4013,6 +4013,10 @@ function bgHeadZUpdate(kp, nx, ny, frameW) {
         S.good++;
         if (S.good > 30 && Math.abs(nx - 0.5) < 0.12 && Math.abs(ny - 0.5) < 0.12) { S.span0 = S.span; S.iris0 = S.iris; console.log('[S67] head-Z rest reference captured: span ' + S.span.toFixed(1) + ' px' + (S.iris > 0 ? ', iris ' + S.iris.toFixed(1) + ' px' : '')); }
     }
+    if (kp[468] && kp[473]) { const mu = 0.5 * (kp[468].x + kp[473].x), mv = 0.5 * (kp[468].y + kp[473].y);
+        S.u = (S.u === undefined) ? mu : faceSmoothingFactor * mu + (1 - faceSmoothingFactor) * S.u;
+        S.v = (S.v === undefined) ? mv : faceSmoothingFactor * mv + (1 - faceSmoothingFactor) * S.v; }
+    S.frameW = frameW;
     S.ratio = S.span0 ? S.span0 / S.span : null;
     const R = window._resolvedIntrinsics; let fx = (R && R.fx > 0) ? R.fx : null;
     S.fxSource = fx ? 'a148 resolver' : null;
@@ -4020,6 +4024,27 @@ function bgHeadZUpdate(kp, nx, ny, frameW) {
     S.fx = fx;
     S.dIpd = fx ? fx * IPD_M / S.span : null;
     S.dIris = (fx && S.iris > 0) ? fx * IRIS_M / S.iris : null;
+}
+// S67 §6/§7 THE METRIC EYE (window._headZ === 2). The face's image offset is an angle from the WEBCAM, not from the
+// portal's centre: the webcam sits off the portal (on a laptop, at the top edge of the screen) and the app's window may
+// sit anywhere on the screen, and both offsets subtend an angle that changes with the viewer's distance. With the
+// distance known, the eye is placed in metres relative to the portal centre and mapped to the virtual eye by the
+// uniform, angle-preserving scale D_shot / d_intended; the shot's frustum stays pinned to the portal as it is.
+// Inputs a device may not report are parameters, not tuned constants: the screen size (physicalScreenDiagonalInches,
+// the existing setting) and the webcam's position relative to the screen centre (window._camOffsetM {x, y} in metres;
+// default the top-centre edge of the screen, an approximation that ignores the bezel).
+function bgScreenMetres() {
+    const sw = (window.screen && window.screen.width) || window.innerWidth, sh = (window.screen && window.screen.height) || window.innerHeight;
+    const pitch = physicalScreenDiagonalInches * 0.0254 / Math.hypot(sw, sh);   // metres per screen (CSS) pixel
+    return { pitch, W: sw * pitch, H: sh * pitch, sw, sh };
+}
+// pure: the eye in metres relative to the portal centre (x right, y up, z toward the viewer) from the eye midpoint's image
+// position (u, v), the 3-D IPD span in px, the focal length fx (px) and principal point (cx, cy), the IPD in metres, the
+// webcam's position and the portal centre's position relative to the screen centre (metres, x right, y up). The webcam
+// faces the viewer, so image right is the viewer's left and image down is down.
+function bgMetricEye(o) {
+    const d = o.fx * o.ipdM / o.span;
+    return { x: -(o.u - o.cx) * d / o.fx + o.camX - o.portalX, y: -(o.v - o.cy) * d / o.fx + o.camY - o.portalY, z: d };
 }
 window.headZRecalibrate = function () { if (window._headZState) { window._headZState.span0 = null; window._headZState.good = 0; } };
 window.setHeadZ = async function (on) {
@@ -23344,7 +23369,21 @@ function updateCameraAndProjection() {
         // the glass.
         if (window._headByAngle && window._shotD > 0 && !dollyZoomActive) camera.position.z = subjectFocalPlaneWorldZ + window._shotD;
         const _hz = window._headZState;
-        if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
+        if (window._headZ === 2 && _hz && _hz.span0 && _hz.fx && _hz.u !== undefined && videoInput && videoInput.videoWidth) {
+            // the metric eye: replaces the face term (and the rest-pose baseline, which only a fixed distance justifies)
+            const sm = bgScreenMetres(), co = window._camOffsetM || { x: 0, y: sm.H / 2 };
+            const full = !!(document.fullscreenElement || document.webkitFullscreenElement);
+            const portalX = full ? 0 : ((cRect.left + cRect.width / 2) + (window.screenX || 0) - sm.sw / 2) * sm.pitch;
+            const portalY = full ? 0 : -((cRect.top + cRect.height / 2) + (window.screenY || 0) - sm.sh / 2) * sm.pitch;
+            const P = bgMetricEye({ u: _hz.u, v: _hz.v, span: _hz.span, fx: _hz.fx, cx: videoInput.videoWidth / 2, cy: videoInput.videoHeight / 2,
+                                    ipdM: IPD_M, camX: co.x, camY: co.y, portalX, portalY });
+            const d0 = _hz.fx * IPD_M / _hz.span0, zBase = bgShotDistance();
+            const k = Math.min(dollyMaxDistance, Math.max(dollyMinDistance, zBase * P.z / d0)) / P.z;   // D_shot / d_intended, the eye held to the dolly's range
+            window._headZBase = zBase; _hz.applied = P.z / d0; _hz.eyeM = P;
+            camera.position.x = (P.x * k + gyroCamX + manualCamDX) * dollyLatGain;
+            camera.position.y = (P.y * k + gyroCamY + manualCamDY) * dollyLatGain;
+            camera.position.z = subjectFocalPlaneWorldZ + P.z * k;
+        } else if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
             const zBase = bgShotDistance();
             const r = Math.min(dollyMaxDistance / zBase, Math.max(dollyMinDistance / zBase, _hz.ratio));
             window._headZBase = zBase; _hz.applied = r;
