@@ -21,7 +21,7 @@ import argparse, json, os, re, sys, time
 import numpy as np
 from PIL import Image
 ap = argparse.ArgumentParser()
-ap.add_argument('--phase', required=True, choices=['captions', 'sd']); ap.add_argument('--pics', nargs='+', required=True)
+ap.add_argument('--phase', required=True, choices=['captions', 'masks', 'sd']); ap.add_argument('--pics', nargs='+', required=True)
 ap.add_argument('--out', required=True); ap.add_argument('--deg', default='20,45'); ap.add_argument('--steps', type=int, default=20)
 ap.add_argument('--seed', type=int, default=1234)
 A = ap.parse_args(); os.makedirs(A.out, exist_ok=True)
@@ -86,6 +86,48 @@ if A.phase == 'captions':
         caps[name] = {'bg_raw': bg_raw, 'occ_raw': occ_raw, 'prompt': clean_bg(bg_raw), 'negative_subject': subject(occ_raw) if occ_raw else '',
                       'occluderPct': float(100 * occ.mean()), 'secs': round(time.time() - t0, 1)}
         print(name, json.dumps(caps[name]), flush=True)
+        json.dump(caps, open(CAPF, 'w'), indent=1)
+
+elif A.phase == 'masks':
+    # the rule that replaced 'captions' (whose background caption still named the foreground and whose occluder crops
+    # captioned as nonsense): Florence-2 captions the picture in detail, grounds each phrase, segments it
+    # ('<REFERRING_EXPRESSION_SEGMENTATION>'), and a phrase whose mask lies mostly (> 1/2, a majority, no tuning) on the
+    # near side of the holes (the occluders: not far_seed, not hole) goes to the negative prompt; the rest form the prompt.
+    import torch
+    from PIL import ImageDraw
+    from transformers import AutoProcessor, Florence2ForConditionalGeneration
+    torch.set_num_threads(2)
+    RID = 'florence-community/Florence-2-base'
+    proc = AutoProcessor.from_pretrained(RID); model = Florence2ForConditionalGeneration.from_pretrained(RID, torch_dtype=torch.float32).eval()
+    def run(im, task, text=''):
+        inp = proc(text=task + text, images=im, return_tensors='pt')
+        with torch.no_grad(): ids = model.generate(**inp, max_new_tokens=512, num_beams=3)
+        return proc.post_process_generation(proc.batch_decode(ids, skip_special_tokens=False)[0], task=task, image_size=im.size)[task]
+    caps = json.load(open(CAPF)) if os.path.exists(CAPF) else {}
+    for spec in A.pics:
+        name, rest = spec.split('='); pc, pd = rest.split(':')
+        img, dn = G.load(pc, pd); hs = holes_for(img, dn)
+        hole = np.zeros(dn.shape, bool)
+        for h in hs.values(): hole |= h
+        if hole.sum() < 50: caps[name] = None; print(name, 'no hole', flush=True); continue
+        occ = ~hole & ~G.far_seed(dn, hole)
+        im = Image.fromarray((img * 255).astype(np.uint8)); t0 = time.time()
+        capt = run(im, '<MORE_DETAILED_CAPTION>'); g = run(im, '<CAPTION_TO_PHRASE_GROUNDING>', capt)
+        phrases = list(dict.fromkeys(l.strip() for l in g['labels'] if l.strip()))
+        pos, neg, per = [], [], {}
+        for ph in phrases:
+            r = run(im, '<REFERRING_EXPRESSION_SEGMENTATION>', ph)
+            mk = Image.new('L', im.size, 0); dr = ImageDraw.Draw(mk)
+            for polys in r['polygons']:
+                for pl in polys:
+                    if len(pl) >= 6: dr.polygon(pl, fill=255)
+            mk = np.asarray(mk) > 0
+            if mk.sum() < 20: per[ph] = None; continue
+            near = float(occ[mk].mean()); per[ph] = {'maskPct': float(100 * mk.mean()), 'near': near}
+            (neg if near > 0.5 else pos).append(re.sub(r'^(the|a|an)\s+', '', ph, flags=re.I))
+        caps[name] = {'caption': capt, 'phrases': per, 'prompt': ', '.join(pos) if pos else GEN_PROMPT,
+                      'negative_subject': ', '.join(neg), 'occluderPct': float(100 * occ.mean()), 'secs': round(time.time() - t0, 1)}
+        print(name, 'prompt:', caps[name]['prompt'], '| negative:', caps[name]['negative_subject'], '| %.0fs' % caps[name]['secs'], flush=True)
         json.dump(caps, open(CAPF, 'w'), indent=1)
 
 else:

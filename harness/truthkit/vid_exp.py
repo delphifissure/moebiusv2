@@ -23,7 +23,8 @@ frames' holes, t -> t+1 with the true pose and background depth), next to the sa
 floor: shading and resampling). Geometry here is the truth's: this is the ceiling of the world-canvas path; with
 estimated pose and depth it can only lose.
 
-  B3  as B2, but the paint is stored in world space and reprojected from its first painting every frame (no chain)
+  B3  THE METHOD (S68 §4): as B2, but the paint is stored in world space and reprojected from its first painting every
+      frame (no chain), each stored point splatted at its projected footprint
   python3 vid_exp.py <shot> [--root OUT/video] [--out OUT/video_exp] [--arms A,B1,B2,B3] [--nolpips]
 """
 import argparse, json, os, sys, time
@@ -34,7 +35,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('shot')
 ap.add_argument('--root', default='/home/user/moebiusv2/harness/truthkit/out/video')
 ap.add_argument('--out', default='/home/user/moebiusv2/harness/truthkit/out/video_exp')
-ap.add_argument('--arms', default='A,B1,B2')
+ap.add_argument('--arms', default='A,B1,B3')   # B3 (world-space paint, footprint splats) is the method (S68 §4); B2 on request
 ap.add_argument('--nolpips', action='store_true')
 A = ap.parse_args()
 D = os.path.join(A.root, A.shot); O = os.path.join(A.out, A.shot); os.makedirs(O, exist_ok=True)
