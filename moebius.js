@@ -151,6 +151,16 @@ function bgPoseFrac(x, y, D) {
     const exR = Math.max(1e-6, D) * Math.tan(bgViewFadeEndDeg * Math.PI / 180);
     return Math.max(Math.abs(x) / exR, Math.abs(y) / (exR * bgEnvAspect()));
 }
+// S64 (behind window._poseByAngle): where a sweep grid puts its u-th pose, u in [-1, 1] across the envelope on one
+// axis, as a fraction of the rim offset. Default: uniform in eye offset (u itself, today's grid). Under the flag:
+// uniform in viewing ANGLE, tan(u*A)/tan(A) with A the fade-end angle of that axis -- the only spacing that stays
+// finite as A -> 90 deg (the rim offset D tan A is unbounded) and that spends the poses where band texels are seen
+// largest (seen size ~ cos^2 theta, S64 sec. 1). Same endpoints (u = -1, 0, 1) in both.
+function bgPoseAxis(u, vertical) {
+    if (!window._poseByAngle) return u;
+    const A = (vertical ? bgViewFadeEndDegV : bgViewFadeEndDeg) * Math.PI / 180;
+    return Math.tan(u * A) / Math.tan(A);
+}
 // The fade in pose-fraction units: start = tan(35)/tan(45) = 0.700 of the rim on
 // the horizontal axis, and the same fraction of the (smaller) vertical rim.
 function bgFadeFrac(x, y, D) {
@@ -591,6 +601,7 @@ function bgFinishSourceHole(r, c) {
     } else console.warn('[S62] source hole: the plate has no colour canvas; the wash is not applied');
     let tri = null; try { tri = bgRetearPlate(r.plate, rl, pw, ph, r.hole, r.has2); } catch (eT) { console.warn('[S62] source hole: plate index not rebuilt:', eT); }
     window._qbSrcCtx = { rl, L };   // S62 §12: the import rebuilds plate 2 with these
+    window._qbOccluder = r.occluder || null;   // S62 §12: the figure in front of a middle surface, for the bundle
     let p2st = null; try { p2st = bgSourcePlate2(r, pw, ph, rl, L); } catch (e2) { console.warn('[S62] plate 2 failed (none):', e2); }
     // sky (§7): a hole part that continues the sky has sky depth, so the plate leaves its triangles to the sky layer
     // (bgRetearPlate); the sky layer takes that part's wash (the sky surface's own colours) where its texture held the
@@ -1302,6 +1313,7 @@ function bgSourceHole(o) {
         st.plate2Seams = nSeam;
         st.surfaces = sv.list.filter(S => sv.cl[S.comp] && sv.cl[S.comp].length > 1).map(S => ({ comp: S.comp, med: +S.med.toFixed(4), pins: S.pins }));
     }
+    let occluder = null;
     // A MIDDLE SURFACE (S62 §12; user: "the silhouette of the legs leaves a gap in the dune"). A hole can hold two layers of
     // the source itself: the starwatcher's hole takes in both his legs and the dune's top band, and its one fill is the
     // plain behind the dune's ridge -- right for the band, but behind the legs the nearest surface is the dune going on,
@@ -1320,7 +1332,25 @@ function bgSourceHole(o) {
       for (let i = 0; i < N; i++) { if (!hole[i] || !(dQ[i] > plate[i] + 2 * step) || (has2 && has2[i])) continue;
         for (const j of nbrs(i)) if (j >= 0 && hole[j] && dQ[j] > dQ[i] + 2 * step && !jS(i, j)) { pinM[i] = 1;
           const b0 = Math.min(32000, Math.ceil(Math.abs(shfM(dQ[j]) - shfM(dQ[i]))) + 1); if (b0 > bud[j]) { bud[j] = b0; inU[j] = 1; q.push(j); } } }
-      for (let h = 0; h < q.length; h++) { const j = q[h]; if (bud[j] <= 1) continue; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !pinM[k] && jS(j, k) && !(has2 && has2[k]) && bud[j] - 1 > bud[k]) { bud[k] = bud[j] - 1; inU[k] = 1; q.push(k); } }
+      // THE CONTACT (user: "the leg silhouette fills still is either filled with a hallucinated object or is partially
+      // transparent"). Where the boots stand in the dune, legs and dune meet at one depth, so a flood through texels joined in
+      // depth runs from the legs into the dune and the dune is continued behind itself (a phantom middle layer below the
+      // boots, drawn half through the dune). Colour still parts them there -- tan boots, lavender dune. So each texel the
+      // flood reaches must look like the part it came from: its colour nearer the seed's (the nearer part, a 3x3 mean at the
+      // rim) than the pin's (the middle surface beside it, likewise). A colour STEP bound (the picture's own 90th percentile
+      // within a joined surface) stopped at every ink line inside the starwatcher's boots and left slivers.
+      const m3 = (i) => { const x = i % pw, y = (i - x) / pw, c = [0, 0, 0]; let n = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= pw || yy >= ph) continue; const k = yy * pw + xx; for (let c3 = 0; c3 < 3; c3++) c[c3] += rgb[3 * k + c3]; n++; } return c.map(v => v / n); };
+      const refO = new Map(), refM = new Map(), from = new Int32Array(N).fill(-1);   // per seed: the part's colour and the middle surface's
+      for (const j of q) if (!refO.has(j)) { refO.set(j, m3(j)); let best = null; for (const i of nbrs(j)) if (i >= 0 && pinM[i]) { best = m3(i); break; } refM.set(j, best || m3(j)); from[j] = j; }
+      const dist2 = (i, c) => { let s2 = 0; for (let c3 = 0; c3 < 3; c3++) { const d = rgb[3 * i + c3] - c[c3]; s2 += d * d; } return s2; };
+      const likePart = (k, sd) => dist2(k, refO.get(sd)) < dist2(k, refM.get(sd));
+      // the nearer part itself, whole (the figure standing in front of the middle surface): the same flood without the reach
+      // bound. The bundle carries it (plane_mask_occluder) so a painter can take the figure out of its picture: SD's near pass
+      // otherwise continued the legs it saw above the region, down into it (new boots at the starwatcher's feet)
+      const occ = new Uint8Array(N); { const oq = q.slice(), of = new Int32Array(N).fill(-1); for (const j of oq) { occ[j] = 1; of[j] = from[j]; }
+        for (let h = 0; h < oq.length; h++) { const j = oq[h]; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !occ[k] && !pinM[k] && jS(j, k) && likePart(k, of[j])) { occ[k] = 1; of[k] = of[j]; oq.push(k); } } }
+      for (let h = 0; h < q.length; h++) { const j = q[h]; if (bud[j] <= 1) continue; for (const k of nbrs(j)) if (k >= 0 && hole[k] && !pinM[k] && jS(j, k) && likePart(k, from[j]) && !(has2 && has2[k]) && bud[j] - 1 > bud[k]) { bud[k] = bud[j] - 1; inU[k] = 1; from[k] = from[j]; q.push(k); } }
+      occluder = occ;
       const J = [], jx = new Int32Array(N).fill(-1); for (let i = 0; i < N; i++) if (inU[i]) { jx[i] = J.length; J.push(i); }
       let nMid = 0, nPin = 0; for (let i = 0; i < N; i++) if (pinM[i]) nPin++;
       if (J.length && nPin) { const M = J.length, ext = new Map(), exP = [], adj = []; for (let t = 0; t < M; t++) adj.push([]);
@@ -1527,7 +1557,7 @@ function bgSourceHole(o) {
     const far = Float32Array.from(dQ); let nFar = 0;
     for (let i = 0; i < N; i++) { if (hole[i]) far[i] = plate[i]; else if (FF[i] === FF[i]) far[i] = FF[i]; if (far[i] < dQ[i]) nFar++; }
     Object.assign(st, res.info, { hole: nh, farFieldTexels: nFar, notBehindLeftHole: left, notBehindAfterFinal: nBack, solveRounds: rounds, localRounds, ms: Date.now() - t0 });
-    return { plate, wash, hole, far, plate2, wash2, has2, stats: st };
+    return { plate, wash, hole, far, plate2, wash2, has2, occluder, stats: st };
 }
 
 function bgRampColourCollapse(d, rgba, pw, ph, lp, step, singleEdge) {
@@ -2357,7 +2387,10 @@ function _dbgViewAngleStamp() {
                    ? ('OUTSIDE the ' + bgViewFadeEndDeg + 'deg cone by ' + (ang - bgViewFadeEndDeg).toFixed(1) +
                       'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim) — viewer sees BLACK')
                    : ('inside ' + bgViewFadeEndDeg + 'deg (' + (off / Math.max(1e-6, rim)).toFixed(2) + 'x rim)')) +
-               ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)');
+               ' | fade=' + f.toFixed(2) + (bgViewFadeEnabled ? '' : ' (fade OFF)') +
+               ((bgHeadZWanted() && window._headZState) ? (' | headZ r=' + (window._headZState.ratio ? window._headZState.ratio.toFixed(3) : 'calibrating') +
+                   (window._headZState.dIpd ? ' d=' + window._headZState.dIpd.toFixed(2) + 'm(ipd)' : '') +
+                   (window._headZState.dIris ? ' ' + window._headZState.dIris.toFixed(2) + 'm(iris)' : '') + (window._headZState.fx ? '' : ' (no fx)')) : '');
     } catch (e) { return 'ang=?'; }
 }
 // =============================================================================
@@ -3928,6 +3961,72 @@ document.addEventListener('DOMContentLoaded', function () {
 // --- FACE TRACKING LOGIC (MediaPipe Face Mesh) -------------------------------
 // -----------------------------------------------------------------------------
 
+// S67 §7 HEAD DISTANCE FROM THE FACE MESH (window._headZ, or ?headz=1; off by default).
+// d = f_px * S / s_px for a facial feature of physical size S. Two features:
+//   IPD   the iris centres 468/473 (else the eye corners 33/263 / 1.45, a146b's canonical ratio), measured as a 3-D span
+//         over the mesh's x, y, z so a head turn does not shrink it (the 2-D span falls as cos(yaw)); S = IPD_M (a146b).
+//   iris  the iris ring 469-472 / 474-477: the larger of its two diameters (a circle seen obliquely keeps its major axis),
+//         averaged over both eyes; S = IRIS_M, the horizontal visible iris diameter MediaPipe Iris takes as its scale
+//         (11.7 mm; to be read first-hand before its spread is quoted).
+// The portal mapping needs only the RATIO r = d / d_intended = span0 / span (neither f_px nor the person's IPD enters);
+// metres need f_px (window._resolvedIntrinsics, a148) and are reported, not used. d_intended is captured automatically
+// on the same condition a145 uses for its template: 30 settled detections with the face centred.
+// S67 §6 THE SHOT'S EYE DISTANCE AND THE ANGLE-PRESERVING HEAD GAIN (window._headByAngle, off by default).
+// Each shot is the real scene scaled so the frame at the subject plane fills the portal; the virtual eye sits where the
+// scaled camera sat, the shot's centre of projection D = (W/2)/tan(hfov/2) (dollyDistForFocal is the same law in mm).
+// The viewer's head must reach the virtual eye by the ratio D / D_rest, so a head angle is the same angle in every
+// shot: the camera moves more the longer the lens, the pinned subject stays where (and as large as) the viewer expects,
+// and only the relief and the background re-perspective. Identity when the shot distance is the rest distance.
+function bgShotDistance() {
+    if (typeof dollyZoomActive !== 'undefined' && dollyZoomActive && typeof camera !== 'undefined' && camera) return Math.max(1e-3, camera.position.z - subjectFocalPlaneWorldZ);
+    return (window._shotD > 0) ? window._shotD : dollyRestDistance;
+}
+window.setShotLens = function (hfovDeg) {   // a cut: the shot's horizontal field of view (null = back to the rest distance)
+    window._shotD = (hfovDeg > 0) ? (terrariumWidth / 2) / Math.tan(hfovDeg * Math.PI / 360) : null;
+    // the eye goes to the shot's distance now (and back to the rest distance when cleared), unless the dolly owns z
+    if (typeof camera !== 'undefined' && camera && !(typeof dollyZoomActive !== 'undefined' && dollyZoomActive)) camera.position.z = subjectFocalPlaneWorldZ + bgShotDistance();
+    console.log('[S67] shot lens ' + (hfovDeg > 0 ? hfovDeg + ' deg -> eye distance ' + window._shotD.toFixed(3) + ' m (gain ' + (window._shotD / dollyRestDistance).toFixed(2) + ')' : 'cleared'));
+};
+const IRIS_M = 0.0117;
+function bgHeadZWanted() { try { return !!window._headZ || /[?&]headz=1/.test(location.search); } catch (e) { return !!window._headZ; } }
+window._headZState = null;
+function bgHeadZMeasure(kp) {
+    const d3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+    const d2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    let span = null, iris = null;
+    if (kp[468] && kp[473]) span = d3(kp[468], kp[473]);
+    else if (kp[33] && kp[263]) span = d3(kp[33], kp[263]) / 1.45;
+    if (kp[472] && kp[477]) {
+        const e1 = Math.max(d2(kp[469], kp[471]), d2(kp[470], kp[472])), e2 = Math.max(d2(kp[474], kp[476]), d2(kp[475], kp[477]));
+        iris = 0.5 * (e1 + e2);
+    }
+    return { span, iris };
+}
+function bgHeadZUpdate(kp, nx, ny, frameW) {
+    if (!bgHeadZWanted()) return;
+    const m = bgHeadZMeasure(kp); if (!(m.span > 1)) return;
+    const S = window._headZState || (window._headZState = { span: m.span, iris: m.iris, span0: null, good: 0 });
+    // the same exponential smoothing the lateral track uses (faceSmoothingFactor): no new constant
+    S.span = faceSmoothingFactor * m.span + (1 - faceSmoothingFactor) * S.span;
+    if (m.iris > 0) S.iris = (S.iris > 0) ? faceSmoothingFactor * m.iris + (1 - faceSmoothingFactor) * S.iris : m.iris;
+    if (S.span0 === null) {
+        S.good++;
+        if (S.good > 30 && Math.abs(nx - 0.5) < 0.12 && Math.abs(ny - 0.5) < 0.12) { S.span0 = S.span; S.iris0 = S.iris; console.log('[S67] head-Z rest reference captured: span ' + S.span.toFixed(1) + ' px' + (S.iris > 0 ? ', iris ' + S.iris.toFixed(1) + ' px' : '')); }
+    }
+    S.ratio = S.span0 ? S.span0 / S.span : null;
+    const R = window._resolvedIntrinsics; let fx = (R && R.fx > 0) ? R.fx : null;
+    S.fxSource = fx ? 'a148 resolver' : null;
+    if (!fx) { try { const f = bgDeviceFovProfile(); if (f && f.hfov > 0) { fx = (frameW / 2) / Math.tan(f.hfov * Math.PI / 360); S.fxSource = 'device profile ' + (f.key || 'override') + ' (' + f.hfov + ' deg)'; } } catch (e) {} }
+    S.fx = fx;
+    S.dIpd = fx ? fx * IPD_M / S.span : null;
+    S.dIris = (fx && S.iris > 0) ? fx * IRIS_M / S.iris : null;
+}
+window.headZRecalibrate = function () { if (window._headZState) { window._headZState.span0 = null; window._headZState.good = 0; } };
+window.setHeadZ = async function (on) {
+    const was = bgHeadZWanted(); window._headZ = !!on; window._headZState = null;
+    if (bgHeadZWanted() !== was && typeof faceSmoothingFactor !== 'undefined') { try { await initializeFaceMesh(); } catch (e) { console.warn('[S67] detector re-init failed', e); } }
+};
+
 async function initializeFaceMesh() {
   // We still set the TFJS backend as it's used internally, even with MediaPipe runtime.
   await tf.setBackend('webgl');
@@ -3936,7 +4035,7 @@ async function initializeFaceMesh() {
   const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
   const detectorConfig = {
     maxFaces: 1,
-    refineLandmarks: false,
+    refineLandmarks: bgHeadZWanted(),   // S67 §7: the iris landmarks (468-477) carry the distance scale; off unless head-Z
     // Switch runtime from 'tfjs' to 'mediapipe' for reliability
     runtime: 'mediapipe',
     // Provide the location of the MediaPipe solution files via CDN
@@ -3986,6 +4085,7 @@ async function runFaceMeshCycle() {
         // the smoothed one — smoothing lags, and the last frame before a loss is
         // exactly where the lag would misreport the boundary.
         bgNoteFaceSeen(normalizedX, normalizedY);
+        bgHeadZUpdate(keypoints, normalizedX, normalizedY, videoInput.videoWidth);   // S67 §7 (no-op unless head-Z)
         // A148b HEAD POSE FROM THE FACE. Written exactly as the intrinsics brief
         // states it, so the dependency is visible in the code: fx enters Z and
         // nothing else. X and Y are computed here too and are INDEPENDENT of fx
@@ -9494,7 +9594,7 @@ window._plugVisibilitySweep = function (opts) {
     const asp = bgEnvAspect();   // S2a: 45/30 envelope
     const NX = opts.nx || 17, NY = opts.ny || 5;   // 17 across: adjacent poses 1/8 of the cone apart in x, the axis of head motion
     const poses = opts.poses || [];
-    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * (2 * ix / (NX - 1) - 1), ex * asp * (2 * iy / (NY - 1) - 1)]);
+    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) poses.push([ex * bgPoseAxis(2 * ix / (NX - 1) - 1, false), ex * asp * bgPoseAxis(2 * iy / (NY - 1) - 1, true)]);
     const seen = new Uint8Array(N); let bad = 0, nPix = 0;
     // A234: hole -> covering texel. Needs the final plate depths and the demand
     // mask (captured by the bake under _plugSweepCapture) and the shift LUT.
@@ -9692,7 +9792,7 @@ window._plugCpuSweep = function (opts) {
     // uncovered set and the per-fragment tear set grow monotonically with the eye offset (the
     // between-pose pad was falsified on that ground, Addendum 180 item 9), so the cone's boundary
     // sees every reveal the interior sees — measured against the full grid before being trusted.
-    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { if (opts.boundary && !(ix === 0 || ix === NX - 1 || iy === 0 || iy === NY - 1)) continue; poses.push([exRim * (2 * ix / (NX - 1) - 1), exRim * asp * (2 * iy / (NY - 1) - 1)]); }
+    if (!opts.poses) for (let iy = 0; iy < NY; iy++) for (let ix = 0; ix < NX; ix++) { if (opts.boundary && !(ix === 0 || ix === NX - 1 || iy === 0 || iy === NY - 1)) continue; poses.push([exRim * bgPoseAxis(2 * ix / (NX - 1) - 1, false), exRim * asp * bgPoseAxis(2 * iy / (NY - 1) - 1, true)]); }
     const sc = opts.scale || 1, sign = (opts.sign === undefined) ? -1 : opts.sign;
     const GW = Math.ceil(pw / sc), GH = Math.ceil(ph / sc), G = GW * GH;
     const plateIdx = opts.plateIdx || null;
@@ -11897,8 +11997,12 @@ window._revealLaw = function (pw, ph) {
     const tw = (typeof terrariumWidth === 'number') ? terrariumWidth : 0.16, th = (typeof terrariumHeight === 'number') ? terrariumHeight : 0.09;
     const la = pw / ph, fa = tw / th;
     const layerW = (la > fa) ? tw : th * la;                 // the app's own fit (see the u_plateFold arming: layerWf)
-    const exH = D * Math.tan((bgViewFadeEndDeg || 45) * Math.PI / 180);
-    const exV = D * Math.tan(((typeof bgViewFadeEndDegV === 'number' ? bgViewFadeEndDegV : 30)) * Math.PI / 180);
+    // S64: the gap a texel pair opens is seen at tan(theta) cos^2(theta) = sin(2 theta)/2 of its size at 45 deg on the glass,
+    // largest AT 45 deg, so the tolerance is evaluated at min(fadeEnd, 45) per axis: identical for any envelope up to 45
+    // (today's 45 x 30), and bounded past it (D tan(fadeEnd) -> infinity at 90 while the seen gap shrinks back to 0).
+    const cap45 = (deg) => Math.min(deg, 45) * Math.PI / 180;
+    const exH = D * Math.tan(cap45(bgViewFadeEndDeg || 45));
+    const exV = D * Math.tan(cap45((typeof bgViewFadeEndDegV === 'number' ? bgViewFadeEndDegV : 30)));
     const canvasW = (typeof renderer !== 'undefined' && renderer && renderer.domElement) ? renderer.domElement.width : pw;
     // screen px per world metre on the portal plane. The layer occupies layerW/tw of the frame's width and (canvasW * that)
     // of its pixels, so the ratio reduces to canvasW / tw exactly -- the layer's own fit cancels.
@@ -12492,6 +12596,7 @@ function exportSDBundle() {
                     gray16('plane_plate2_depth16.png', (i) => pF2[flipIdx(i)], 'plate 2 depth: the second far surface where one exists (plane_plate2_mask), plate 1 elsewhere');
                     if (window._qbPlateColor2 && window._qbPlateColor2.length === 4 * N) rgba8('plane_plate2_color.png', window._qbPlateColor2, 'plate 2 colour: rim-window means of its own rims — every masked texel is a placeholder');
                     mask8('plane_plate2_mask.png', (i) => has2[i] ? 255 : 0, 'white = texels that carry a second far surface (all placeholders): inpaint these on plane_plate2_color');
+                    if (window._qbOccluder && window._qbOccluder.length === N) mask8('plane_mask_occluder.png', (i) => window._qbOccluder[i] ? 255 : 0, 'white = the figure standing in front of a middle surface (S62 §12: found from the middle surface\'s rim through texels joined in depth and continuous in colour): a painter repainting the middle layer takes it out of its picture, or continues it (SD painted new boots at the starwatcher\'s feet)');
                 }
                 // sky
                 const skyOn = bgSkyInfOn(); const sq = bgSkyQ();
@@ -22236,6 +22341,9 @@ function bgBuildBackgroundLayerCore() {
 // A try/finally wrapper is the single point that covers all three bake modes'
 // return paths (quick, v2, v1) without threading a claim through each one.
 function buildBackgroundLayer() {
+    // S67 §7: the bake reads the eye distance live from camera.position.z (bgShiftLUTFor and the rest); with head-Z the
+    // viewer's lean must not become the bake's D -- the bake is made at the rest distance, the lean re-applies next frame.
+    if (bgHeadZWanted() && window._headZBase > 0 && typeof camera !== 'undefined' && camera) camera.position.z = subjectFocalPlaneWorldZ + window._headZBase;
     // A151 EVERY BAKE DROPS THE PREVIOUS BAKE'S SKIRT.
     //
     // The skirt is a quick-path object, but nothing removed it on a REBUILD:
@@ -23196,8 +23304,10 @@ function updateCameraAndProjection() {
         const effectiveDeviationY = currentCombinedY - baselineFaceTrackerOffsetY;
         const camOff = 0.2;
         const lensGain = Math.tan(THREE.MathUtils.degToRad(contentLensFovDeg) / 2);   // A65: 90deg -> 1.0 (identity)
-        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * lensGain;
-        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * lensGain;
+        // S67 §6: under _headByAngle the lens gain (A65's fixed-distance law) gives way to D_shot / D_rest
+        const headGain = window._headByAngle ? bgShotDistance() / dollyRestDistance : lensGain;
+        let faceTrackCamX = -effectiveDeviationX * camOff * scalarVal * headGain;
+        let faceTrackCamY = -effectiveDeviationY * camOff * scalarVal * headGain;
 
         let gyroCamX = 0;
         let gyroCamY = 0;
@@ -23220,13 +23330,27 @@ function updateCameraAndProjection() {
             const stablePitchDegEquivalent = stablePitchRad * radianToDegreeFactor;
             const stableRollDegEquivalent = stableRollRad * radianToDegreeFactor;
 
-            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * lensGain;
-            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * lensGain;
+            gyroCamX = -stablePitchDegEquivalent * gyroSensitivityX * headGain;
+            gyroCamY = stableRollDegEquivalent * gyroSensitivityY * headGain;
         }
 
         // dollyLatGain = 1 except while the A67 q!=P subject pin is engaged
         camera.position.x = (faceTrackCamX + gyroCamX + manualCamDX) * dollyLatGain;
         camera.position.y = (faceTrackCamY + gyroCamY + manualCamDY) * dollyLatGain;
+        // S67 §7: with head-Z the eye distance follows the viewer's, d/d_intended, from the rest distance (the dolly's
+        // distance this frame when it runs, else the rest distance) -- and x, y scale by the same ratio, because the
+        // face's image position measures an ANGLE: the eye stays on the ray the viewer is actually on. The ratio is
+        // held to the dolly's own range (dollyMin/MaxDistance, the 18-144 mm lens range) so the eye never reaches
+        // the glass.
+        if (window._headByAngle && window._shotD > 0 && !dollyZoomActive) camera.position.z = subjectFocalPlaneWorldZ + window._shotD;
+        const _hz = window._headZState;
+        if (bgHeadZWanted() && _hz && _hz.ratio > 0) {
+            const zBase = bgShotDistance();
+            const r = Math.min(dollyMaxDistance / zBase, Math.max(dollyMinDistance / zBase, _hz.ratio));
+            window._headZBase = zBase; _hz.applied = r;
+            camera.position.x *= r; camera.position.y *= r;
+            camera.position.z = subjectFocalPlaneWorldZ + zBase * r;
+        }
         // a130 / A8: record where the head ACTUALLY goes. The simulated viewer
         // answers "what does an off-axis viewer see?"; this answers "does
         // anyone ever go there?" — the other half of the cone question, and the

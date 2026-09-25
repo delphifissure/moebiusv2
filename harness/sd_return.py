@@ -26,6 +26,9 @@ ap.add_argument('--steps', type=int, default=20); ap.add_argument('--long', type
 ap.add_argument('--prompt', default='the background behind, continuous surfaces, natural texture'); ap.add_argument('--negative', default='person, figure, object, text')
 ap.add_argument('--depth', action='store_true')
 ap.add_argument('--grow', default='auto', help="'auto' (default): the mask SD paints is widened evenly by the picture's silhouette colour fringe (its 90th percentile run, measured); N: widen by N texels; 0: the bundle mask as is. The app reads the bundle mask only")
+ap.add_argument('--painter', default='sd', choices=['sd', 'lama', 'lama+sd', 'wash+sd'], help="sd: SD 1.5 inpainting from noise over the hole; lama: LaMa (continues the surroundings, invents nothing); lama+sd: LaMa's fill refined by SD at --refine strength; wash+sd: SD started from the bundle's own wash in the hole, noised to --refine strength (DiffuEraser's prior injection, with our wash as the prior)")
+ap.add_argument('--sdmask', default='asis', choices=['asis', 'hull', 'blob'], help="asis: SD is shown the hole as it is; hull: each hole component's convex hull; blob: the hole widened by its own largest inscribed radius (the half-width of its thickest part), which turns a figure-shaped hole into a blob. hull and blob: the mask SD sees no longer has the occluder's outline (MiniMax-Remover: a mask in an object's shape makes a diffusion model regrow that object). Colour is still written on the hole only")
+ap.add_argument('--refine', type=float, default=0.5, help='lama+sd / wash+sd: the strength of the SD refinement over the LaMa fill (0 = LaMa as is, 1 = SD from scratch)')
 ap.add_argument('--image', default='occluder_removed', choices=['occluder_removed', 'plate'], help='occluder_removed: PACO arm A (S52); plate: the source with only the hole washed (plane_plate_color.png)'); A = ap.parse_args()
 os.makedirs(A.out, exist_ok=True); z = zipfile.ZipFile(A.bundle); names = z.namelist()
 rd = lambda n: Image.open(io.BytesIO(z.read(n)))
@@ -90,10 +93,56 @@ def grown(m):
         from scipy.ndimage import binary_dilation
         return binary_dilation(m, iterations=g)
     return m
+_lama = None
+def lama_fill(image, m):
+    global _lama
+    if _lama is None:
+        from simple_lama_inpainting import SimpleLama
+        _lama = SimpleLama()
+    out = np.asarray(_lama(Image.fromarray(image), Image.fromarray((m * 255).astype(np.uint8))))
+    return out[:image.shape[0], :image.shape[1]].astype(np.uint8)
+# PAINTER (S62 §12): SD 1.5 invents -- an object where a figure-shaped blank sits in a plain (the starwatcher's far pass painted
+# a boat where he stood), lace along a silhouette. LaMa continues what surrounds the mask and invents nothing: clean on the
+# troll's forest and the starwatcher's plain, a dark ghost of the Vermeer's woman where the hole is the whole figure and the
+# table. lama+sd: LaMa's fill, then SD over it at --refine strength -- SD adds texture to a coherent fill instead of
+# inventing into a blank.
 def paint(image, m, depth, seed):
+    if A.painter == 'lama': return lama_fill(image, m)
+    if A.painter == 'lama+sd':
+        base = image.copy(); lf = lama_fill(image, m); base[m] = lf[m]
+        return paint_sd(base, m, depth, seed, A.refine)
+    if A.painter == 'wash+sd': return paint_sd(image, m, depth, seed, A.refine)   # the image already carries the wash in the hole
+    return paint_sd(image, m, depth, seed, 1.0)
+def blob_mask(m):
+    # widened by the hole's largest inscribed radius (the maximum distance-to-edge inside the hole, i.e. the half-width of
+    # its thickest part): a figure-shaped hole becomes a blob about as wide as the figure's trunk, so its outline no longer
+    # reads as a figure (MiniMax-Remover App. 7). The median ridge half-width (5 px on the starwatcher) left the figure intact
+    from scipy.ndimage import distance_transform_edt
+    w = float(distance_transform_edt(m).max()) if m.any() else 0.0
+    BLOBW.append(round(w, 2))
+    return m | (distance_transform_edt(~m) <= w) if w > 0 else m
+BLOBW = []
+def hull_mask(m):
+    # each connected component replaced by its convex hull (texels inside the hull polygon)
+    from scipy.ndimage import label, find_objects
+    from scipy.spatial import Delaunay
+    lab, n = label(m); out = m.copy()
+    for k, sl in enumerate(find_objects(lab), 1):
+        ys, xs = np.nonzero(lab[sl] == k)
+        if len(ys) < 3 or ys.min() == ys.max() or xs.min() == xs.max(): continue
+        pts = np.c_[xs, ys].astype(float)
+        try: tri = Delaunay(pts)
+        except Exception: continue
+        gy, gx = np.mgrid[0:lab[sl].shape[0], 0:lab[sl].shape[1]]
+        inside = tri.find_simplex(np.c_[gx.ravel(), gy.ravel()].astype(float)) >= 0
+        out[sl] |= inside.reshape(gy.shape)
+    return out
+def paint_sd(image, m, depth, seed, strength):
     ctl = Image.fromarray(np.round(np.clip(depth, 0, 1) * 255).astype(np.uint8)).convert('RGB').resize((W, H), Image.BILINEAR)
+    if A.sdmask == 'hull': m = hull_mask(m)
+    elif A.sdmask == 'blob': m = blob_mask(m)
     r = pipe(prompt=A.prompt, negative_prompt=A.negative, image=Image.fromarray(image).resize((W, H), Image.LANCZOS), mask_image=Image.fromarray((m * 255).astype(np.uint8)).resize((W, H), Image.NEAREST),
-             control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=1.0, width=W, height=H).images[0]
+             control_image=ctl, num_inference_steps=A.steps, generator=torch.Generator().manual_seed(seed), strength=strength, width=W, height=H).images[0]
     return np.asarray(r.resize((pw, ph), Image.LANCZOS)).astype(np.uint8)
 # SD paints SURFACES, not plates (S62 §12). Where the bundle carries plate 2, plate 1 is not one surface: in the dune's
 # band it holds the far plain, behind the legs the dune continued. Handed over as one picture, that is a leg-shaped island
@@ -112,14 +161,19 @@ if has2.any():
     p2c = np.asarray(rd('plane_plate2_color.png').convert('RGB')); p2d = np.asarray(rd('plane_plate2_depth16.png')).astype(np.float64); p2d /= 65535.0 if p2d.max() > 255 else 255.0
     farImg = p1c.copy(); farImg[has2] = p2c[has2]; farD = ctl16.copy(); farD[has2] = p2d[has2]
     far = paint(farImg, mask, farD, A.seed); farOut = farImg.copy(); farOut[mask] = far[mask]
-    nearImg = src_rgb2.copy(); nearImg[has2] = p1c[has2]; nearD = src_d2.copy(); nearD[has2] = ctl16[has2]; nm = grown(has2)
+    # the figure in front of the middle surface is taken out of the near picture (plane_mask_occluder): left in, SD continued
+    # the legs it saw above the region down into it (new boots at the starwatcher's feet). Its texels take plate 1's wash,
+    # the dune continued below the ridge and the plain above, and plate 1's depth
+    occ = (np.asarray(rd('plane_mask_occluder.png').convert('L')) > 127) & mask_app if 'plane_mask_occluder.png' in names else np.zeros_like(has2)
+    nearImg = src_rgb2.copy(); nearD = src_d2.copy(); fig = occ | has2
+    nearImg[fig] = p1c[fig]; nearD[fig] = ctl16[fig]; nm = grown(has2)
     near = paint(nearImg, nm, nearD, A.seed + 1)
     out = farOut.copy(); out[has2] = near[has2]; out2 = farOut
 else:
     sd_full = paint(p1c, mask, ctl16, A.seed); out = p1c.copy(); out[mask] = sd_full[mask]   # colour on the mask only (the app enforces it too)
 Image.fromarray(out).save(os.path.join(A.out, 'return_band_color.png'))
 if out2 is not None: Image.fromarray(out2).save(os.path.join(A.out, 'return_band2_color.png'))
-info = {'bundle': A.bundle, 'image': img_name, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
+info = {'bundle': A.bundle, 'image': img_name, 'painter': A.painter, 'refine': A.refine if A.painter in ('lama+sd', 'wash+sd') else None, 'sdmask': A.sdmask, 'blobHalfWidth': BLOBW, 'grid': [pw, ph], 'work': [W, H], 'steps': A.steps, 'seed': A.seed, 'prompt': A.prompt,
         'maskTexels': int(mask.sum()), 'appMaskTexels': int(mask_app.sum()), 'grow': GROW, 'sdSecs': round(time.time() - t0)}
 if A.depth:
     t1 = time.time(); B = '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff'
@@ -152,5 +206,5 @@ if A.depth:
     for nm, g in (('return_band_gradx16.png', gx), ('return_band_grady16.png', gy)):
         Image.fromarray(np.round(np.clip(g + 0.5, 0, 1) * 65535).astype(np.uint16)).save(os.path.join(A.out, nm))
     info['depth'] = {'model': 'DA3-Mono-Large', 'fit': {'form': form, 'a': float(a), 'b': float(b)}, 'visibleMedianAbsResidual': resid, 'secs': round(time.time() - t1)}
-if has2.any(): info['layers'] = {'plate2Texels': int(has2.sum()), 'passes': ['far (plate 1 outside plate 2, and plate 2)', 'near (plate 1 on plate 2\'s texels, on the source picture)']}
+if has2.any(): info['layers'] = {'plate2Texels': int(has2.sum()), 'occluderTexels': int(occ.sum()), 'passes': ['far (plate 1 outside plate 2, and plate 2)', 'near (plate 1 on plate 2\'s texels, on the source picture)']}
 json.dump(info, open(os.path.join(A.out, 'sd_return.json'), 'w'), indent=1); print(json.dumps(info))
