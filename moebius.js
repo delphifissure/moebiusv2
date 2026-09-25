@@ -12636,6 +12636,71 @@ window.renderQuilt = function (opt) {
     } finally { camera.position.copy(saved); isSweeping = wasSweeping; updateCameraAndProjection(); render(); }
     return cv;
 };
+// S71 §1: FIND OBJECTS, no clicks. The picture (at the plate grid) goes to the paint server's /segment (the chosen
+// no-click pipeline, harness/segment/seg_models.py), and the masks come back. They are kept and ordered by the depth
+// (S30's rule): a mask is an object only if it hides something inside the envelope (band demand > 0); a mask lying mostly
+// (> 1/2) inside one already kept is a part of it and is dropped; the rest are ranked by band demand as the export ranks;
+// where two overlap, the nearer (higher mean disparity) is on top. The result becomes the object map through
+// _setObjectIds, the path the SAM click tool and Import object masks use.
+async function bgEnsurePlate(say) {
+    if (bgPlateReady()) return;
+    say('baking the plate…'); document.getElementById('bgLayerBuildBtn').click();
+    for (let t = 0; !bgPlateReady(); t++) { if (t > 2400) throw new Error('the bake did not finish in 20 min'); await new Promise(r => setTimeout(r, 500)); }
+    if (window._qbSourceHoleBusy) { say('waiting for the hole solve…'); await window._qbSourceHoleBusy; }
+}
+window.findObjects = async function (opt) {
+    opt = opt || {};
+    const el = document.getElementById('findStatus'), say = (m, bad) => { if (el) { el.textContent = m; el.style.color = bad ? '#ff6b6b' : ''; } console.log('[S71] ' + m); };
+    if (window._findBusy) { say('already finding objects'); return null; }
+    window._findBusy = true; const t0 = Date.now(), secs = () => Math.round((Date.now() - t0) / 1000) + ' s';
+    try {
+        const base = opt.base || bgPaintBase(), method = opt.method || (document.getElementById('findMethodSel') || {}).value || 'owl_sam';
+        let health = null; try { health = await (await fetch(base + '/health', { cache: 'no-store' })).json(); } catch (e) { health = null; }
+        if (!health || !health.ok) throw new Error('no server at ' + base + ' — run  python3 harness/paint_server.py');
+        await bgEnsurePlate(say);
+        const { pw, ph } = window._qbSize, N = pw * ph, L = mediaLayers[0], img = L.textures.color.image;
+        const cv = document.createElement('canvas'); cv.width = pw; cv.height = ph; cv.getContext('2d').drawImage(img, 0, 0, pw, ph);
+        const png = await new Promise(r => cv.toBlob(r, 'image/png'));
+        say('finding objects (' + method + ')…');
+        const r0 = await fetch(base + '/segment?method=' + encodeURIComponent(method), { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: png });
+        const j0 = await r0.json(); if (!r0.ok || !j0.job) throw new Error('server refused: ' + (j0.error || r0.status));
+        let st = null;
+        for (;;) { await new Promise(r => setTimeout(r, 2000)); st = await (await fetch(base + '/job/' + j0.job, { cache: 'no-store' })).json();
+            if (st.state === 'queued') say('queued behind ' + st.queuedAhead + ' job(s)… ' + secs()); else if (st.state === 'running') say(method + ' running… ' + secs()); else break; }
+        if (st.state !== 'done') throw new Error('segmentation failed: ' + (st.log || []).slice(-2).join(' | '));
+        say('reading the masks…');
+        const got = await (await fetch(base + '/job/' + j0.job + '/files', { cache: 'no-store' })).json();
+        const info = JSON.parse(atob(got['masks.json']));
+        // every mask decoded at once (8-bit grey PNGs at the plate grid, no canvas); a mask of another size goes through the canvas
+        const masks = await Promise.all(info.masks.map(async (m) => {
+            const bs = atob(got[m.file]), a = new Uint8Array(bs.length); for (let i = 0; i < bs.length; i++) a[i] = bs.charCodeAt(i);
+            const mk = new Uint8Array(N); let g = null; try { g = await _png16Decode(a); } catch (e) { g = null; }
+            if (g && g.w === pw && g.h === ph) { const t = g.max >> 1; for (let i = 0; i < N; i++) mk[i] = g.data[i] > t ? 1 : 0; }
+            else { const rgba = await _pngToRgba(new File([a], m.file, { type: 'image/png' }), pw, ph); for (let i = 0; i < N; i++) mk[i] = rgba[4 * i] > 127 ? 1 : 0; }
+            return mk; }));
+        say('keeping ' + masks.length + ' masks by depth…'); await new Promise(r => setTimeout(r, 0));
+        const kept = bgKeepMasksByDepth(masks);
+        say('setting the object map (' + kept.length + ' objects)…'); await new Promise(r => setTimeout(r, 0));
+        const ids = new Uint8Array(N); kept.slice().sort((a, b) => a.front - b.front).forEach((k, n) => { const id = kept.indexOf(k) + 1; for (let i = 0; i < N; i++) if (k.mask[i]) ids[i] = id; });   // far first, nearer on top
+        const r = window._setObjectIds(ids, null, 'Find objects (' + method + ')');
+        window._findLast = { method, masks: masks.length, kept: kept.length, seconds: (Date.now() - t0) / 1000, dropped: masks.length - kept.length };
+        say(kept.length + ' objects kept of ' + masks.length + ' masks (' + method + ', ' + secs() + ')');
+        return Object.assign({ objects: r ? r.objects : null }, window._findLast);
+    } catch (e) { say('Find objects: ' + (e && e.message || e), true); console.error('[S71]', e); return null; }
+    finally { window._findBusy = false; }
+};
+function bgKeepMasksByDepth(masks) {
+    const { pw, ph } = window._qbSize, N = pw * ph, dQ = window._qbDQ, dis = window._qbDisocc, pF = window._qbPlateF;
+    const q = (typeof window._qbSrcQuantum === 'number' && window._qbSrcQuantum > 0) ? window._qbSrcQuantum : 1 / 255;
+    const cand = masks.map((mask) => { let px = 0, band = 0, d = 0;
+        for (let i = 0; i < N; i++) { if (!mask[i]) continue; px++; d += dQ[i]; const x = i % pw, y = (i - x) / pw; if (dis && dis[i] && pF[(ph - 1 - y) * pw + x] < dQ[i] - q) band++; }
+        return { mask, px, band, front: px ? d / px : 0 }; }).filter(c => c.px > 0 && c.band > 0);
+    cand.sort((a, b) => (b.band - a.band) || (b.px - a.px));
+    const kept = [], union = new Uint8Array(N);
+    for (const c of cand) { if (kept.length >= 254) break; let inside = 0; for (let i = 0; i < N; i++) if (c.mask[i] && union[i]) inside++;
+        if (inside > 0.5 * c.px) continue; kept.push(c); for (let i = 0; i < N; i++) if (c.mask[i]) union[i] = 1; }
+    return kept;
+}
 function bgSaveQuilt() {
     const o = { cols: +(document.getElementById('quiltCols') || {}).value || 8, rows: +(document.getElementById('quiltRows') || {}).value || 6,
                 coneDeg: +(document.getElementById('quiltCone') || {}).value || 40 };
@@ -12703,6 +12768,7 @@ window.paintHoles = async function (opt) {
         }
         if (st.state !== 'done') throw new Error('the painter failed (exit ' + st.rc + '): ' + (st.log || []).slice(-2).join(' | '));
         bgPaintStatus('importing ' + st.files.length + ' file(s)…');
+        say('reading the masks…');
         const got = await (await fetch(base + '/job/' + j0.job + '/files', { cache: 'no-store' })).json();
         const files = Object.entries(got).map(([n, b]) => { const bs = atob(b), a = new Uint8Array(bs.length); for (let i = 0; i < bs.length; i++) a[i] = bs.charCodeAt(i); return new File([a], n, { type: 'image/png' }); });
         const rep = await window._importPlaneReturnFiles(files);
@@ -29519,6 +29585,7 @@ function setupStaticControlListeners() {
     const importPlaneRetBtn = document.getElementById('importPlaneReturnButton'); if (importPlaneRetBtn) importPlaneRetBtn.addEventListener('click', importPlaneReturn);   // Sprint 25
     document.getElementById('paintHolesBtn')?.addEventListener('click', () => window.paintHoles());   // S70
     document.getElementById('quiltBtn')?.addEventListener('click', bgSaveQuilt);   // S71: light-field quilt
+    document.getElementById('findObjectsBtn')?.addEventListener('click', () => window.findObjects());   // S71: Find objects
     { const u = document.getElementById('paintServerUrl');   // S70: the server URL is remembered per browser
       if (u) { try { u.value = localStorage.getItem('paintServerUrl') || ''; } catch (e) {}
                u.addEventListener('change', () => { try { localStorage.setItem('paintServerUrl', u.value.trim()); } catch (e) {} }); } }

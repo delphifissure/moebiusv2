@@ -12,6 +12,8 @@ One job at a time: SD + ControlNet + DA3 on CPU is about 7 GB, and two at once w
   POST /paint?painter=sd&depth=1[&sdmask=blob][&refine=0.5][&steps=20]   body: the bundle zip  -> {"job": id}
   GET  /job/<id>        -> {"state": queued|running|done|failed, "elapsed": s, "log": last lines, "files": [...]}
   GET  /job/<id>/files  -> {"<name>.png": base64, ...}   (return_band*_*.png only)
+  POST /segment?method=owl_sam   body: the picture (PNG)  -> {"job": id}   (Find objects: segment/seg_run.py)
+  GET  /job/<id>/files  -> for a segment job: masks.json and mask_*.png
   GET  /health          -> {"ok": true, "busy": bool, "queue": n}
 
 The app's own server (server.js) forwards /paint, /job and /health here (PAINT_URL), so the page reaches it same-origin
@@ -24,6 +26,7 @@ from urllib.parse import urlparse, parse_qs
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAINTERS = ('sd', 'lama', 'lama+sd', 'wash+sd')          # sd_return.py --painter choices
 SDMASKS = ('asis', 'hull', 'blob')
+SEG_METHODS = ('owl_sam', 'gdino_sam', 'birefnet', 'sam3')   # segment/seg_models.py
 JOBS, Q = {}, queue.Queue()
 
 
@@ -50,13 +53,18 @@ def worker():
     while True:
         jid = Q.get(); j = JOBS[jid]
         j['state'] = 'running'; j['t0'] = time.time()
-        cmd = [sys.executable, '-u', os.path.join(HERE, 'sd_return.py'), j['bundle'], j['out']] + j['args']
+        if j.get('kind') == 'segment': cmd = [sys.executable, '-u', os.path.join(HERE, 'segment', 'seg_run.py'), j['bundle'], j['out']] + j['args']
+        else: cmd = [sys.executable, '-u', os.path.join(HERE, 'sd_return.py'), j['bundle'], j['out']] + j['args']
         j['cmd'] = cmd
         with open(j['logf'], 'w') as lf:
             r = subprocess.run(cmd, cwd=os.path.dirname(HERE), stdout=lf, stderr=subprocess.STDOUT)
         j['rc'] = r.returncode; j['t1'] = time.time()
-        j['files'] = sorted(f for f in os.listdir(j['out']) if f.startswith('return_band') and f.endswith('.png'))
-        j['state'] = 'done' if (r.returncode == 0 and any(f.startswith('return_band_colo') for f in j['files'])) else 'failed'
+        if j.get('kind') == 'segment':
+            j['files'] = sorted(f for f in (os.listdir(j['out']) if os.path.isdir(j['out']) else []) if f == 'masks.json' or (f.startswith('mask_') and f.endswith('.png')))
+            j['state'] = 'done' if (r.returncode == 0 and 'masks.json' in j['files']) else 'failed'
+        else:
+            j['files'] = sorted(f for f in (os.listdir(j['out']) if os.path.isdir(j['out']) else []) if f.startswith('return_band') and f.endswith('.png'))
+            j['state'] = 'done' if (r.returncode == 0 and any(f.startswith('return_band_colo') for f in j['files'])) else 'failed'
         Q.task_done()
 
 
@@ -86,7 +94,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path); parts = [p for p in u.path.split('/') if p]
         if parts == ['health']:
-            return self._send(200, {'ok': True, 'busy': any(j['state'] == 'running' for j in JOBS.values()), 'queue': Q.qsize(), 'painters': PAINTERS})
+            return self._send(200, {'ok': True, 'busy': any(j['state'] == 'running' for j in JOBS.values()), 'queue': Q.qsize(), 'painters': PAINTERS, 'segment': SEG_METHODS})
         if len(parts) >= 2 and parts[0] == 'job' and parts[1] in JOBS:
             j = JOBS[parts[1]]
             if len(parts) == 3 and parts[2] == 'files':
@@ -103,6 +111,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path.rstrip('/') == '/segment': return self._segment(u)
         if u.path.rstrip('/') != '/paint': return self._send(404, {'error': 'not found'})
         try: a = args_for(parse_qs(u.query))
         except ValueError as e: return self._send(400, {'error': str(e)})
@@ -116,6 +125,19 @@ class H(BaseHTTPRequestHandler):
                      'logf': os.path.join(d, 'paint.log'), 'args': a}
         Q.put(jid)
         self._send(200, {'job': jid, 'args': a})
+
+    def _segment(self, u):
+        m = parse_qs(u.query).get('method', ['owl_sam'])[0]
+        if m not in SEG_METHODS: return self._send(400, {'error': 'method must be one of ' + ', '.join(SEG_METHODS)})
+        n = int(self.headers.get('Content-Length') or 0)
+        if n <= 0 or n > 64 * 1024 * 1024: return self._send(400, {'error': 'body must be the picture (PNG)'})
+        body = self.rfile.read(n)
+        if body[:8] != b'\x89PNG\r\n\x1a\n': return self._send(400, {'error': 'body is not a PNG'})
+        jid = uuid.uuid4().hex[:12]; d = tempfile.mkdtemp(prefix='seg_' + jid + '_')
+        with open(os.path.join(d, 'picture.png'), 'wb') as f: f.write(body)
+        JOBS[jid] = {'state': 'queued', 'n': len(JOBS), 'kind': 'segment', 'bundle': os.path.join(d, 'picture.png'), 'out': os.path.join(d, 'masks'),
+                     'logf': os.path.join(d, 'seg.log'), 'args': ['--method', m]}
+        Q.put(jid); self._send(200, {'job': jid, 'args': ['--method', m]})
 
     def log_message(self, fmt, *args):                    # the app polls every 2 s: keep the console to POSTs
         if self.command == 'POST': sys.stderr.write('[paint] ' + (fmt % args) + '\n')
