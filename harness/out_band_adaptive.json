@@ -1,0 +1,59 @@
+{
+ "arms": [
+  {
+   "tag": "45x30 adaptive",
+   "ms": 8175262,
+   "err": null,
+   "band": 282429,
+   "sweepStats": {
+    "gridPerimeter": 40,
+    "poses": 5092,
+    "added": 2510,
+    "evals": 5101,
+    "guardHits": 2542,
+    "maxDepth": 6
+   },
+   "N": 870573,
+   "margin": {
+    "M": 570,
+    "Mx": 1054,
+    "My": 570,
+    "clip": "picture"
+   },
+   "mem": 521,
+   "vsRef": {
+    "ref": "45x30 65x17 offset",
+    "recall": 0.8937218372154399,
+    "precision": 0.9712246263662726,
+    "onlyHere": 8127,
+    "onlyRef": 32619
+   }
+  },
+  {
+   "tag": "45x30 65x17 offset",
+   "ms": 974755,
+   "err": null,
+   "band": 306921,
+   "sweepStats": null,
+   "N": 870573,
+   "margin": {
+    "M": 570,
+    "Mx": 1054,
+    "My": 570,
+    "clip": "picture"
+   },
+   "mem": 521
+  }
+ ],
+ "logs": [
+  "%c[BUILD] FG-SUB rimdepth v3.13.63-a228 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, det",
+  "Error starting video stream or Face Mesh: NotFoundError: Requested device not found",
+  "[RUNG-A] bake regularized: 314px plateau-restored, 944px skin-binarized, 0px NaN",
+  "[QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint",
+  "[S5] self-occlusion: 4 objects (components with a far side); 442051 texels whose first layer is their own object, with a mirror sample",
+  "[QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint",
+  "[QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint",
+  "[S5] self-occlusion: 4 objects (components with a far side); 442051 texels whose first layer is their own object, with a mirror sample",
+  "[QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint"
+ ]
+}

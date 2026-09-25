@@ -1,0 +1,12 @@
+  [page] %c[BUILD] FG-SUB rimdepth v3.13.63-a228 | a76 value-wins + a77 smear snap + a78 prominence bound + a79 viewpoint scan + a80-a83 stretch cuts + a84 contact-rubber exemption + a85 cone fill + a86 dequantize + a87 plate tear + a88 resolution-correct cone slope + a89 invariance pass (euclidean cone, det
+  [page] Error starting video stream or Face Mesh: NotFoundError: Requested device not found
+  [page] [RUNG-A] bake regularized: 314px plateau-restored, 944px skin-binarized, 0px NaN
+  [page] [QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint
+  [page] [S5] self-occlusion: 4 objects (components with a far side); 442051 texels whose first layer is their own object, with a mirror sample
+  [page] [QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint
+45x30 adaptive         {"gridPerimeter":40,"poses":5092,"added":2510,"evals":5101,"guardHits":2542,"maxDepth":6} bake 8175.3s band 282429 (32.44% of plate) margin {"M":570,"Mx":1054,"My":570,"clip":"picture"} heap 521 MB 
+  [page] [QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint
+  [page] [S5] self-occlusion: 4 objects (components with a far side); 442051 texels whose first layer is their own object, with a mirror sample
+  [page] [QUICK-BAKE] A245 plug margin: M = 570 texels (largest border rim shift 568.3; with the bars Mx 1054, My 570); four strips, 7496 vertices; clip rest footprint
+45x30 65x17 offset      bake 974.8s band 306921 (35.26% of plate) margin {"M":570,"Mx":1054,"My":570,"clip":"picture"} heap 521 MB 
+  45x30 adaptive vs 45x30 65x17 offset: recall 89.37%, precision 97.12%, only here 8127, only in ref 32619
