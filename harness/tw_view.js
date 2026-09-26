@@ -19,10 +19,10 @@ const T42 = Math.tan(42 * Math.PI / 180), T30 = Math.tan(30 * Math.PI / 180);
     page.on('pageerror', e => logs.push('PAGEERR ' + e.message.slice(0, 300)));
     await page.goto('http://localhost:' + PORT + '/scratch_moebius.html', { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { if (await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth && mediaLayers[0]._depth16); } catch (e) { return false; } }).catch(() => false)) break; await new Promise(r => setTimeout(r, 1000)); }
-    await page.evaluate((tw) => { try { localStorage.clear(); } catch (e) {} for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, tw ? { bgPlateSkySel: 'on' } : {}))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } } }, TW);   // the true window puts MoGe's sky (d = 0) at infinity
+    await page.evaluate((tw) => { try { localStorage.clear(); } catch (e) {} for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, tw ? { bgPlateSkySel: tw.skyAtInfinity === false ? 'off' : 'on' } : {}))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } } }, TW);   // the true window puts MoGe's sky (d = 0) at infinity
     const Deye = TW ? TW.D_ref : 0.2;
     const applied = await page.evaluate(([tw, D]) => {
-        if (tw) { outerVolumeDepth = tw.outer; innerVolumeDepth = tw.inner; currentNormPortalPlane = tw.pn; window._skyInf = 1; }
+        if (tw) { outerVolumeDepth = tw.outer; innerVolumeDepth = tw.inner; currentNormPortalPlane = tw.pn; window._skyInf = (tw.skyAtInfinity === false) ? 0 : 1; }
         camera.position.set(0, 0, D); updateCameraAndProjection();
         return { outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, camZ: camera.position.z, refZ: bgRefEyeZNow() };
     }, [TW, Deye]);
