@@ -78,10 +78,16 @@ def da3_sky(img):
 
 
 def sky_from_da3(valid, Z, sky):
-    """MoGe's validity with DA3's sky: DA3 sky is sky (even where MoGe gave a depth); a pixel MoGe dropped that DA3 does not
+    """MoGe's validity with DA3's sky: DA3 sky (in regions MoGe also sees sky in) is sky, even where MoGe gave a depth; a pixel MoGe dropped that DA3 does not
     call sky is an object MoGe missed -- each such component takes the median depth of the valid ring around it."""
     from scipy import ndimage as ndi
-    st = np.ones((3, 3), bool); fixes = {'skyRule': 'DA3METRIC-LARGE sky head', 'mogeSolidToSky': int((valid & sky).sum()), 'mogeDroppedFilled': 0, 'mogeDroppedUnfilled': 0}
+    st = np.ones((3, 3), bool)
+    # a DA3 sky region counts only where MoGe also sees sky somewhere inside it: on paintings DA3's head is patchy (271 specks
+    # across Hunters' sky, 588 across Starwatcher's, where MoGe sees none) and each speck would tear to infinity; on the
+    # photographs every region with real sky contains MoGe sky, and Caillebotte's whole sky is one region seeded by MoGe's
+    lab, nreg = ndi.label(sky, st); seeds = np.unique(lab[sky & ~valid]); seeds = seeds[seeds > 0]
+    sky = np.isin(lab, seeds)
+    fixes = {'skyRule': 'DA3METRIC-LARGE sky head, regions seeded by MoGe sky', 'da3Regions': int(nreg), 'da3RegionsKept': int(len(seeds)), 'mogeSolidToSky': int((valid & sky).sum()), 'mogeDroppedFilled': 0, 'mogeDroppedUnfilled': 0}
     v = valid & ~sky; miss = ~valid & ~sky; li, ni = ndi.label(miss, st)
     for k in range(1, ni + 1):
         mk = li == k; ring = ndi.binary_dilation(mk, st, iterations=2) & ~mk & v
