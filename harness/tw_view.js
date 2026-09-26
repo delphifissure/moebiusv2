@@ -2,7 +2,7 @@
 // stylised portal law on the given depth) or under true-window parameters from harness/truewindow.py (TW=<*_tw.json>:
 // the law's outer / inner / pn set so the depth file decodes to real distances, the eye at D_ref, the photograph's centre
 // of projection). Poses are the same ANGLES in both arms (42 deg at the eye's own distance), before painting.
-//   COLOR= DEPTH= TAG= LABEL= [TW=] [ROOT=<private served tree>] [PORT=8232] node harness/tw_view.js
+//   COLOR= DEPTH= TAG= LABEL= [TW=] [APERTURE=1 (S73: the picture is the window, window._pictureAperture)] [ROOT=<private served tree>] [PORT=8232] node harness/tw_view.js
 //   -> harness/shots/tw/<TAG>/<LABEL>_<pose>.png, <LABEL>.json
 'use strict';
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
@@ -21,11 +21,11 @@ const T42 = Math.tan(42 * Math.PI / 180), T30 = Math.tan(30 * Math.PI / 180);
     for (let t = 0; t < 45; t++) { if (await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth && mediaLayers[0]._depth16); } catch (e) { return false; } }).catch(() => false)) break; await new Promise(r => setTimeout(r, 1000)); }
     await page.evaluate((tw) => { try { localStorage.clear(); } catch (e) {} for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, tw ? { bgPlateSkySel: tw.skyAtInfinity === false ? 'off' : 'on' } : {}))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } } }, TW);   // the true window puts MoGe's sky (d = 0) at infinity
     const Deye = TW ? TW.D_ref : 0.2;
-    const applied = await page.evaluate(([tw, D]) => {
-        if (tw) { outerVolumeDepth = tw.outer; innerVolumeDepth = tw.inner; currentNormPortalPlane = tw.pn; window._skyInf = (tw.skyAtInfinity === false) ? 0 : 1; }
+    const applied = await page.evaluate(([tw, D, ap]) => {
+        window._pictureAperture = !!ap; if (tw) { outerVolumeDepth = tw.outer; innerVolumeDepth = tw.inner; currentNormPortalPlane = tw.pn; window._skyInf = (tw.skyAtInfinity === false) ? 0 : 1; }
         camera.position.set(0, 0, D); updateCameraAndProjection();
         return { outer: outerVolumeDepth, inner: innerVolumeDepth, pn: currentNormPortalPlane, camZ: camera.position.z, refZ: bgRefEyeZNow() };
-    }, [TW, Deye]);
+    }, [TW, Deye, process.env.APERTURE === '1']);
     const t0 = Date.now(); await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 2400; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF && !!window._qbSourceHole)) break; await new Promise(r => setTimeout(r, 500)); }
     const after = await page.evaluate(() => { const u = mediaLayers[0].mesh.material.uniforms; return { outer: outerVolumeDepth, pn: currentNormPortalPlane, uOuter: u.u_worldOuterVolumeDepth && u.u_worldOuterVolumeDepth.value, uPn: u.u_portalPlaneDepthNorm && u.u_portalPlaneDepthNorm.value, hole: window._qbSourceHole && window._qbSourceHole.hole, sky: bgSkyInfOn() }; });
