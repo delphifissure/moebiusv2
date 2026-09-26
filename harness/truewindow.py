@@ -13,7 +13,7 @@ part of the app (shader, bake, band, rim law, LUTs, worker) sees the same geomet
   Sky pixels get d = 0 and are handled by the app's sky-at-infinity law (_skyInf). The sky is DA3-Metric's sky head
   (da3_sky; --sky moge falls back to MoGe's invalid mask cleaned by clean_valid's island rules, which the probe showed wrong).
 
-  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)] [--sky da3|moge]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
+  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)] [--sky da3|moge] [--depth moge|da3metric|depthpro (the distances from another model; the mask from MoGe-3 + DA3, the lens from MoGe-3 or Depth Pro's own)]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
 
 DEPTH BUDGET (--slide f): one picture of a deep scene cannot support a 42 deg swing -- the far background slides by the
 whole head offset t = D_ref tan 42 and the window fills with what the picture never saw. A budget compresses depth
@@ -74,6 +74,7 @@ def da3_sky(img):
     m = DepthAnything3.from_pretrained('depth-anything/DA3METRIC-LARGE').to(device='cpu').eval()
     with torch.no_grad(): p = m.inference([img], process_res=1008, process_res_method='upper_bound_resize')
     s = Image.fromarray((p.sky[0] > 0.5).astype(np.uint8) * 255).resize(img.size, Image.NEAREST)
+    da3_sky.depth = np.asarray(Image.fromarray(p.depth[0].astype(np.float32)).resize(img.size, Image.BILINEAR))   # canonical depth (metric x 300 / focal): up to one scale
     return np.asarray(s) > 127
 
 
@@ -120,7 +121,18 @@ def load_moge3(refine=True):
     m = MoGeModel(**cfg); m.load_state_dict(ck['model'], strict=False); return m.eval()
 
 
-def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3'):
+def depth_pro(img):
+    """Apple Depth Pro (ml-depth-pro; weights ckpt/depth_pro.pt): metric depth and its own focal length."""
+    B = os.environ.get('DEPTHPRO_DIR', '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff')
+    import depth_pro as dp
+    from depth_pro.depth_pro import DEFAULT_MONODEPTH_CONFIG_DICT as C
+    C.checkpoint_uri = B + '/ckpt/depth_pro.pt'
+    model, transform = dp.create_model_and_transforms(config=C, device=torch.device('cpu'), precision=torch.float32); model.eval()
+    with torch.no_grad(): pr = model.infer(transform(img), f_px=None)
+    return pr['depth'].cpu().numpy().astype(np.float32), float(pr['focallength_px'])
+
+
+def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3', depth_src='moge'):
     img = np.asarray(Image.open(color).convert('RGB')); H, W = img.shape[:2]
     x = torch.tensor(img / 255., dtype=torch.float32).permute(2, 0, 1)
     if model in ('moge3', 'moge3base'):
@@ -135,6 +147,14 @@ def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3'):
     if sky_rule == 'da3': valid, fixes = sky_from_da3(valid, P[..., 2], da3_sky(Image.fromarray(img)))
     else: valid, fixes = clean_valid(valid, P[..., 2])
     fx, fy = K[0, 0] * W, K[1, 1] * H
+    # --depth: the distances from another model, the sky mask and (for DA3-Metric) the lens still MoGe-3's; scale is irrelevant
+    # (the true window uses Z / Z_near only). DA3-Metric has no lens of its own; Depth Pro brings its own focal length.
+    if depth_src == 'da3metric':
+        if not hasattr(da3_sky, 'depth'): da3_sky(Image.fromarray(img))
+        P = P.copy(); P[..., 2] = np.where(valid, da3_sky.depth, P[..., 2])
+    elif depth_src == 'depthpro':
+        Zp, fpx = depth_pro(img); P = P.copy(); P[..., 2] = np.where(valid, Zp, P[..., 2]); fx = fy = fpx
+    valid = valid & np.isfinite(P[..., 2]) & (P[..., 2] > 0)
     hfov, vfov = 2 * np.arctan(W / 2 / fx), 2 * np.arctan(H / 2 / fy)
     # the portal picture: the app fits the layer so the longer relative side fills the terrarium
     layerW = TW if W / H > TW / TH else TH * W / H; layerH = layerW * H / W
@@ -148,7 +168,7 @@ def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3'):
     outer = float(D_ref * (1.0 / beta - 1.0)) if beta > 0 else float(np.percentile(zb[valid], 99.9))
     d = np.where(valid | (beta > 0), PN * inv_smoothstep(1.0 - np.minimum(zb, outer) / outer), 0.0)
     Image.fromarray(np.round(d * 65535).astype(np.uint16)).save(prefix + '_depth16.png')
-    p = {'model': {'moge3': 'MoGe-3 ViT-L, refine_steps=%d (CPU sparse ops)' % refine, 'moge3base': 'MoGe-3 ViT-L base (refine_steps=0)'}.get(model, 'MoGe-2 ViT-B'), 'slide': slide, 'beta': float(beta), 'skyAtInfinity': bool(beta == 0), 'pn': PN, 'outer': outer, 'inner': 1e-4, 'D_ref': float(D_ref), 'hfovDeg': float(np.degrees(hfov)), 'vfovDeg': float(np.degrees(vfov)),
+    p = {'depthSource': depth_src, 'model': {'moge3': 'MoGe-3 ViT-L, refine_steps=%d (CPU sparse ops)' % refine, 'moge3base': 'MoGe-3 ViT-L base (refine_steps=0)'}.get(model, 'MoGe-2 ViT-B'), 'slide': slide, 'beta': float(beta), 'skyAtInfinity': bool(beta == 0), 'pn': PN, 'outer': outer, 'inner': 1e-4, 'D_ref': float(D_ref), 'hfovDeg': float(np.degrees(hfov)), 'vfovDeg': float(np.degrees(vfov)),
          'Z_near_m': float(Z_near), 'Z_far_m': float(Z_near * (1 + outer / D_ref)), 'skyFraction': float(1 - valid.mean()), 'size': [W, H],
          'layerWH': [layerW, layerH], 'maskFixes': fixes, 'secs': round(time.time() - t0, 1)}
     json.dump(p, open(prefix + '_tw.json', 'w'), indent=1); print(json.dumps(p))
@@ -159,4 +179,5 @@ if __name__ == '__main__':
     md = a[a.index('--model') + 1] if '--model' in a else 'moge3'
     rf = int(a[a.index('--refine') + 1]) if '--refine' in a else 3
     sk = a[a.index('--sky') + 1] if '--sky' in a else 'da3'
-    main(a[0], a[1], sl, md, rf, sk)
+    ds = a[a.index('--depth') + 1] if '--depth' in a else 'moge'
+    main(a[0], a[1], sl, md, rf, sk, ds)
