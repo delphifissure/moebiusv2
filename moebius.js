@@ -26827,6 +26827,27 @@ window.simViewer = {
     poses: svPoseStats
 };
 
+// S73 THE PICTURE IS THE WINDOW (window._pictureAperture). Under the true window (harness/truewindow.py) the reference eye
+// sees the picture's rectangle on the glass at exactly the photograph's field of view: the camera saw nothing outside it.
+// The portal is wider than a portrait or 4:3 picture, and from any other eye the scene's content projects past the
+// rectangle's edges into those side bars, where it hangs over nothing (the user, 2026-09-26: "layers (hard vert / hor
+// boundaries) visible without anything behind them"). A real window's frame hides that. Every mesh drawn here lies on or
+// behind the glass (inner ~ 0 under the true window), and the off-axis frustum pins the glass rectangle to fixed NDC at
+// every pose, so the aperture is a fixed screen rectangle: one scissor for every layer (plates, margin strips, sky, the
+// foreground), no shader change. Outside it the page shows. Returns a function restoring the previous scissor, or null.
+function bgPictureApertureScissor() {
+    if (!window._pictureAperture || typeof mediaLayers === 'undefined') return null;
+    const L = mediaLayers[0]; const gp = L && L.mesh && L.mesh.geometry && L.mesh.geometry.parameters;
+    if (!gp || !(gp.width > 0) || !(gp.height > 0)) return null;
+    const fx = Math.min(1, gp.width * (L.mesh.scale.x || 1) / terrariumWidth), fy = Math.min(1, gp.height * (L.mesh.scale.y || 1) / terrariumHeight);
+    const cx = L.mesh.position.x / (terrariumWidth / 2), cy = L.mesh.position.y / (terrariumHeight / 2);
+    const vp = new THREE.Vector4(); renderer.getViewport(vp);
+    const prevTest = renderer.getScissorTest(), prev = new THREE.Vector4(); renderer.getScissor(prev);
+    const x0 = vp.x + vp.z * (1 + cx - fx) / 2, y0 = vp.y + vp.w * (1 + cy - fy) / 2;
+    renderer.setScissor(Math.round(x0), Math.round(y0), Math.round(vp.z * fx), Math.round(vp.w * fy)); renderer.setScissorTest(true);
+    return () => { renderer.setScissor(prev.x, prev.y, prev.z, prev.w); renderer.setScissorTest(prevTest); };
+}
+
 function render() {
     requestAnimationFrame(render);
     // a130: the simulated viewer owns the frame when it is on. Pass 1 is
@@ -27358,8 +27379,10 @@ function renderPortalFrame() {
         window._framePath = 'BAKED-DIRECT';   // A220b: the stamp reports which composite path drew this frame
         renderer.setRenderTarget(null);
         renderer.clear();
+        const _apRestore = bgPictureApertureScissor();   // S73: the picture is the window (off unless window._pictureAperture)
         renderer.render(scene, camera);
-        
+        if (_apRestore) _apRestore();
+
         setAllLayerUniforms('u_useDepthGrad', false);
         setAllLayerUniforms('u_useSobel', false);
         setAllLayerUniforms('u_useLuma', false);
