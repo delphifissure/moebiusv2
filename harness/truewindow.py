@@ -10,10 +10,10 @@ part of the app (shader, bake, band, rim law, LUTs, worker) sees the same geomet
   The nearest content (99.9th percentile of 1/Z) sits on the glass: z_behind(Z) = D_ref (Z / Z_near - 1).
   The app's law behind the glass is z = -outer (1 - smoothstep(0, pn, d)); with pn -> 1 and outer = the farthest finite
   z_behind, d = pn * smoothstep^-1(1 - z_behind / outer) reproduces z_behind exactly (smoothstep is monotone on [0, 1]).
-  Pixels MoGe marks invalid (sky) get d = 0 and are handled by the app's sky-at-infinity law (_skyInf); the mask is cleaned
-  first (clean_valid: valid islands enclosed by sky are sky, invalid islands off the border take the depth around them).
+  Sky pixels get d = 0 and are handled by the app's sky-at-infinity law (_skyInf). The sky is DA3-Metric's sky head
+  (da3_sky; --sky moge falls back to MoGe's invalid mask cleaned by clean_valid's island rules, which the probe showed wrong).
 
-  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
+  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)] [--sky da3|moge]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
 
 DEPTH BUDGET (--slide f): one picture of a deep scene cannot support a 42 deg swing -- the far background slides by the
 whole head offset t = D_ref tan 42 and the window fills with what the picture never saw. A budget compresses depth
@@ -61,6 +61,35 @@ def clean_valid(valid, Z):
     return valid, fixes
 
 
+def da3_sky(img):
+    """The sky, from DA3-Metric's own sky head (depth-anything/DA3METRIC-LARGE, Apache-2.0), at the picture's resolution.
+    Replaces clean_valid's island rules (2026-09-26), which were wrong both ways on the probe (harness/sky_islands_probe.py):
+    sky seen through a fence's gaps and through foliage is enclosed by the foreground and was given the foreground's depth;
+    a twig or bird alone in the sky was turned into sky and lost its parallax; on Caillebotte the enclosed "holes" were sky
+    and MoGe's solid patches in them were sky too. DA3's head calls the fence and foliage gaps sky (0.85-0.99 of their
+    pixels), the Lamppost twig not sky (0.33), all of Caillebotte's patches sky, and agrees with MoGe's mask on the
+    photographs (IoU 0.97-0.99)."""
+    B = os.environ.get('DA3_SRC', '/tmp/claude-0/-home-user-moebius/989b3965-28fd-58c7-96b5-b4b22c709919/scratchpad/bakeoff/Depth-Anything-3/src')
+    sys.path.insert(0, B); from depth_anything_3.api import DepthAnything3
+    m = DepthAnything3.from_pretrained('depth-anything/DA3METRIC-LARGE').to(device='cpu').eval()
+    with torch.no_grad(): p = m.inference([img], process_res=1008, process_res_method='upper_bound_resize')
+    s = Image.fromarray((p.sky[0] > 0.5).astype(np.uint8) * 255).resize(img.size, Image.NEAREST)
+    return np.asarray(s) > 127
+
+
+def sky_from_da3(valid, Z, sky):
+    """MoGe's validity with DA3's sky: DA3 sky is sky (even where MoGe gave a depth); a pixel MoGe dropped that DA3 does not
+    call sky is an object MoGe missed -- each such component takes the median depth of the valid ring around it."""
+    from scipy import ndimage as ndi
+    st = np.ones((3, 3), bool); fixes = {'skyRule': 'DA3METRIC-LARGE sky head', 'mogeSolidToSky': int((valid & sky).sum()), 'mogeDroppedFilled': 0, 'mogeDroppedUnfilled': 0}
+    v = valid & ~sky; miss = ~valid & ~sky; li, ni = ndi.label(miss, st)
+    for k in range(1, ni + 1):
+        mk = li == k; ring = ndi.binary_dilation(mk, st, iterations=2) & ~mk & v
+        if ring.any(): Z[mk] = np.median(Z[ring]); v |= mk; fixes['mogeDroppedFilled'] += int(mk.sum())
+        else: fixes['mogeDroppedUnfilled'] += int(mk.sum())
+    return v, fixes
+
+
 def load_moge3(refine=True):
     """MoGe-3 ViT-L (MIT). Its sparse 3D refiner (refine_steps, default 3) is written against FlexGEMM (CUDA/Triton). With
     refine=True the four FlexGEMM pieces come from harness/cpu_flex_gemm.py (FlexGEMM's own PyTorch reference arithmetic,
@@ -85,7 +114,7 @@ def load_moge3(refine=True):
     m = MoGeModel(**cfg); m.load_state_dict(ck['model'], strict=False); return m.eval()
 
 
-def main(color, prefix, slide=None, model='moge3', refine=3):
+def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3'):
     img = np.asarray(Image.open(color).convert('RGB')); H, W = img.shape[:2]
     x = torch.tensor(img / 255., dtype=torch.float32).permute(2, 0, 1)
     if model in ('moge3', 'moge3base'):
@@ -97,7 +126,8 @@ def main(color, prefix, slide=None, model='moge3', refine=3):
         m = MoGeModel.from_pretrained('Ruicheng/moge-2-vitb-normal').eval(); t0 = time.time()
         with torch.no_grad(): o = m.infer(x, use_fp16=False)
     K = o['intrinsics'].numpy(); P = o['points'].numpy(); valid = o['mask'].numpy() & np.isfinite(P[..., 2]) & (P[..., 2] > 0)
-    valid, fixes = clean_valid(valid, P[..., 2])
+    if sky_rule == 'da3': valid, fixes = sky_from_da3(valid, P[..., 2], da3_sky(Image.fromarray(img)))
+    else: valid, fixes = clean_valid(valid, P[..., 2])
     fx, fy = K[0, 0] * W, K[1, 1] * H
     hfov, vfov = 2 * np.arctan(W / 2 / fx), 2 * np.arctan(H / 2 / fy)
     # the portal picture: the app fits the layer so the longer relative side fills the terrarium
@@ -122,4 +152,5 @@ if __name__ == '__main__':
     a = sys.argv[1:]; sl = float(a[a.index('--slide') + 1]) if '--slide' in a else None
     md = a[a.index('--model') + 1] if '--model' in a else 'moge3'
     rf = int(a[a.index('--refine') + 1]) if '--refine' in a else 3
-    main(a[0], a[1], sl, md, rf)
+    sk = a[a.index('--sky') + 1] if '--sky' in a else 'da3'
+    main(a[0], a[1], sl, md, rf, sk)
