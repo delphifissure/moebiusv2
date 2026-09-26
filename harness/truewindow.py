@@ -143,6 +143,7 @@ def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3', dep
         from moge.model.v2 import MoGeModel
         m = MoGeModel.from_pretrained('Ruicheng/moge-2-vitb-normal').eval(); t0 = time.time()
         with torch.no_grad(): o = m.infer(x, use_fp16=False)
+    del m; import gc; gc.collect()   # Depth Pro alone needs ~10 GB on CPU: free MoGe before the other models load
     K = o['intrinsics'].numpy(); P = o['points'].numpy(); valid = o['mask'].numpy() & np.isfinite(P[..., 2]) & (P[..., 2] > 0)
     if sky_rule == 'da3': valid, fixes = sky_from_da3(valid, P[..., 2], da3_sky(Image.fromarray(img)))
     else: valid, fixes = clean_valid(valid, P[..., 2])
