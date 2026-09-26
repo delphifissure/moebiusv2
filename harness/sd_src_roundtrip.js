@@ -3,7 +3,7 @@
 //   MODE=view    [RET=<return dir name, default 'return'>] bake again, render the wide poses (before), import <out>/return/return_band_*.png through the app's own
 //                _importPlaneReturnFiles (the "Import plane return" button's path), render the same poses (after)
 // Between the two: python3 harness/sd_return.py <out>/bundle.zip <out>/return [--depth]
-//   COLOR= DEPTH= TAG= MODE=export|view [PORT=8099] [MB=<variant moebius.js>] [SEL=...] [NOBEFORE=1] node harness/sd_src_roundtrip.js
+//   COLOR= DEPTH= TAG= MODE=export|view [TW=<*_tw.json>] [PORT=8099] [MB=<variant moebius.js>] [SEL=...] [NOBEFORE=1] node harness/sd_src_roundtrip.js
 // Output: harness/shots/sd_src/<TAG>/{bundle.zip, before_<pose>.png, after_<pose>.png, view.json}
 'use strict';
 const { chromium } = require('playwright-core'); const { spawn } = require('child_process'); const fs = require('fs'); const path = require('path');
@@ -11,7 +11,9 @@ const H = __dirname, PORT = +(process.env.PORT || 8099), MODE = process.env.MODE
 const OUT = path.join(H, 'shots', 'sd_src', process.env.TAG || 'x'); fs.mkdirSync(OUT, { recursive: true });
 const WT = path.resolve(H, '..');
 // the wide poses: head at the envelope's horizontal edge (the S59 L42/R42, eye 0.2 m from the window), the corners, pitch
-const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], ['LU', -0.18, 0.1], ['RD', 0.18, -0.1], ['up30', 0, 0.115]];
+// TW=<*_tw.json> (S72, harness/truewindow.py): the true-window law parameters, the eye at D_ref and the same pose ANGLES
+const TW = process.env.TW ? JSON.parse(fs.readFileSync(process.env.TW, 'utf8')) : null, DEYE = TW ? TW.D_ref : 0.2, KP = DEYE / 0.2;
+const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], ['LU', -0.18, 0.1], ['RD', 0.18, -0.1], ['up30', 0, 0.115]].map(([n, x, y]) => [n, x * KP, n === 'rest' ? y : y * KP]);
 (async () => {
     fs.copyFileSync(path.resolve(WT, process.env.COLOR || 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); fs.copyFileSync(path.resolve(WT, process.env.DEPTH || 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png'));
     process.on('exit', () => { try { fs.copyFileSync(path.join(WT, 'defaultImgDepth.png'), path.join(H, 'defaultImgDepth.png')); fs.copyFileSync(path.join(WT, 'defaultImgColor.png'), path.join(H, 'defaultImgColor.png')); } catch (e) {} });
@@ -26,14 +28,16 @@ const POSES = [['rest', 0, 0.008], ['L42', -0.18, 0.008], ['R42', 0.18, 0.008], 
     page.on('pageerror', e => logs.push('PAGEERR ' + e.message.slice(0, 300)));
     await page.goto('http://localhost:' + PORT + '/' + PAGE, { waitUntil: 'load', timeout: 90000 });
     for (let t = 0; t < 45; t++) { const ok = await page.evaluate(() => { try { return !!(mediaLayers[0]?.mesh && mediaLayers[0]?.textures?.depth && mediaLayers[0]._depth16); } catch (e) { return false; } }).catch(() => false); if (ok) break; await new Promise(r => setTimeout(r, 1000)); }
-    await page.evaluate((sel) => {
+    await page.evaluate(([sel, tw, D]) => {
         try { localStorage.clear(); } catch (e) {}
-        for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, sel))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } }
-    }, JSON.parse(process.env.SEL || '{}'));
+        for (const [id, v] of Object.entries(Object.assign({ bgPlateHoleSel: 'source', bgPlateRampSel: 'off' }, tw ? { bgPlateSkySel: tw.skyAtInfinity === false ? 'off' : 'on' } : {}, sel))) { const el = document.getElementById(id); if (el) { el.value = v; el.dispatchEvent(new Event('change')); } }
+        if (tw) { outerVolumeDepth = tw.outer; innerVolumeDepth = tw.inner; currentNormPortalPlane = tw.pn; window._skyInf = (tw.skyAtInfinity === false) ? 0 : 1; }
+        camera.position.set(0, 0, D); updateCameraAndProjection();   // S72: the eye at D_ref for the bake (the LUTs read the camera distance)
+    }, [JSON.parse(process.env.SEL || '{}'), TW, DEYE]);
     const t0 = Date.now(); await page.evaluate(() => document.getElementById('bgLayerBuildBtn').click());
     for (let t = 0; t < 2400; t++) { if (await page.evaluate(() => !!window._bgQuickBaked && !!window._qbPlateF && !!window._qbSourceHole)) break; await new Promise(r => setTimeout(r, 500)); }
     const bakeMs = Date.now() - t0; const stats = await page.evaluate(() => window._qbSourceHole);
-    const grab = async (x, y) => page.evaluate(([x, y]) => { isSweeping = true; camera.position.set(x, y, 0.2); updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }, [x, y]);
+    const grab = async (x, y) => page.evaluate(([x, y, DEYE_]) => { isSweeping = true; camera.position.set(x, y, DEYE_); updateCameraAndProjection(); render(); updateCameraAndProjection(); render(); return renderer.domElement.toDataURL('image/png').split(',')[1]; }, [x, y, DEYE]);
     if (MODE === 'export') {
         const zb = await page.evaluate(async () => {
             let href = null; const rc = HTMLAnchorElement.prototype.click, ra = window.alert; HTMLAnchorElement.prototype.click = function () { href = this.href; }; window.alert = () => {};
