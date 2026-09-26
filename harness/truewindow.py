@@ -13,7 +13,7 @@ part of the app (shader, bake, band, rim law, LUTs, worker) sees the same geomet
   Sky pixels get d = 0 and are handled by the app's sky-at-infinity law (_skyInf). The sky is DA3-Metric's sky head
   (da3_sky; --sky moge falls back to MoGe's invalid mask cleaned by clean_valid's island rules, which the probe showed wrong).
 
-  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)] [--sky da3|moge] [--depth moge|da3metric|depthpro (the distances from another model; the mask from MoGe-3 + DA3, the lens from MoGe-3 or Depth Pro's own)]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
+  python3 truewindow.py color.png out_prefix [--slide f] [--model moge3|moge3base|moge2] [--refine N (MoGe-3 refiner steps, default 3)] [--sky da3|moge] [--style truewindow|diorama|emmersive] [--eye k] [--pop p] [--depth moge|da3metric|depthpro (the distances from another model; the mask from MoGe-3 + DA3, the lens from MoGe-3 or Depth Pro's own)]  -> out_prefix_depth16.png, out_prefix_tw.json (the app parameters)
 
 DEPTH BUDGET (--slide f): one picture of a deep scene cannot support a 42 deg swing -- the far background slides by the
 whole head offset t = D_ref tan 42 and the window fills with what the picture never saw. A budget compresses depth
@@ -132,7 +132,12 @@ def depth_pro(img):
     return pr['depth'].cpu().numpy().astype(np.float32), float(pr['focallength_px'])
 
 
-def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3', depth_src='moge'):
+STYLES = {'truewindow': (1.0, 0.0),   # (eye, pop): the lens's own eye, nearest content on the glass
+          'diorama': (None, 0.2),     # the old portal's eye (dollyRestDistance 0.2 m) and pop (innerVolumeDepth 0.04 / 0.2)
+          'emmersive': (None, 0.4)}   # the same eye, twice the pop (a style choice, like the budget)
+
+
+def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3', depth_src='moge', style='truewindow', eye=None, pop=None):
     img = np.asarray(Image.open(color).convert('RGB')); H, W = img.shape[:2]
     x = torch.tensor(img / 255., dtype=torch.float32).permute(2, 0, 1)
     if model in ('moge3', 'moge3base'):
@@ -160,16 +165,36 @@ def main(color, prefix, slide=None, model='moge3', refine=3, sky_rule='da3', dep
     # the portal picture: the app fits the layer so the longer relative side fills the terrarium
     layerW = TW if W / H > TW / TH else TH * W / H; layerH = layerW * H / W
     D_ref = (layerH / 2) / np.tan(vfov / 2)
+    e0, p0 = STYLES[style]; eye = eye if eye is not None else (e0 if e0 is not None else max(1.0, 0.2 / D_ref)); pop = pop if pop is not None else p0
     Z = P[..., 2]; inv = np.where(valid, 1.0 / np.maximum(Z, 1e-6), 0.0)
     Z_near = 1.0 / np.percentile(inv[valid], 99.9)
-    t = D_ref * np.tan(np.radians(42.0)); beta = 0.0 if slide is None else max(0.0, 1.0 - slide * layerW / t)
+    # STYLE (the user, 2026-09-26: "emmersive pop out / true window / diorama style, but in every case the geometry must
+    # feel right"). One family: the displayed inverse depth, in units of the eye's distance, is AFFINE in the true one,
+    #   D_eye / Z' = a q + b      (q = Z_near / Z: 1 for the nearest content, 0 at infinity),
+    # reconstructed along rays from the eye at D_eye = eye * D_ref. Any member is a projective map of the true scene fixing
+    # the eye: straight lines stay straight, planes stay planar, the rest view is exactly the picture. Three knobs:
+    #   eye  -- D_eye / D_ref: 1 = the lens's own centre of projection (true proportions); > 1 = the viewer sits farther
+    #           than the lens (the old portal's 0.2 m eye): depth stretches by that factor relative to width (the diorama)
+    #   pop  -- the nearest content sits pop * D_eye in FRONT of the glass (0 = on the glass)
+    #   slide (the budget) -- infinity slides slide * picture width at 42 deg: b = 1 - slide W / (D_eye tan 42)
+    # a follows from pop: q = 1 -> Z' = (1 - pop) D_eye, so a = 1 / (1 - pop) - b. pop = 0, eye = 1 is the true window.
+    D_eye = eye * D_ref
+    t = D_eye * np.tan(np.radians(42.0)); beta = 0.0 if slide is None else max(0.0, 1.0 - slide * layerW / t)
     q = np.where(valid, np.minimum(1.0, Z_near / np.maximum(Z, 1e-6)), 0.0)
-    qp = beta + (1.0 - beta) * q                                     # the budget (beta = 0: the true window)
-    zb = np.where(valid | (beta > 0), D_ref * (1.0 / np.maximum(qp, 1e-9) - 1.0), np.inf)
-    outer = float(D_ref * (1.0 / beta - 1.0)) if beta > 0 else float(np.percentile(zb[valid], 99.9))
-    d = np.where(valid | (beta > 0), PN * inv_smoothstep(1.0 - np.minimum(zb, outer) / outer), 0.0)
+    a_ = 1.0 / (1.0 - pop) - beta
+    qp = beta + a_ * q                                               # = D_eye / Z' (the budget and the pop)
+    zs = np.where(valid | (beta > 0), D_eye * (1.0 / np.maximum(qp, 1e-9) - 1.0), np.inf)   # signed: + behind the glass, - in front
+    outer = float(D_eye * (1.0 / beta - 1.0)) if beta > 0 else float(np.percentile(zs[valid & (zs > 0)], 99.9)) if (valid & (zs > 0)).any() else 1e-4
+    if pop <= 0:
+        pn, inner = PN, 1e-4
+        d = np.where(valid | (beta > 0), pn * inv_smoothstep(1.0 - np.minimum(np.maximum(zs, 0), outer) / outer), 0.0)
+    else:                                                            # both branches of the app law: behind below pn, in front above
+        pn, inner = 0.5, float(pop * D_eye)
+        behind = pn * inv_smoothstep(1.0 - np.minimum(np.maximum(zs, 0), outer) / outer)
+        front = pn + (1.0 - pn) * inv_smoothstep(np.minimum(np.maximum(-zs, 0), inner) / inner)
+        d = np.where(valid | (beta > 0), np.where(zs >= 0, behind, front), 0.0)
     Image.fromarray(np.round(d * 65535).astype(np.uint16)).save(prefix + '_depth16.png')
-    p = {'depthSource': depth_src, 'model': {'moge3': 'MoGe-3 ViT-L, refine_steps=%d (CPU sparse ops)' % refine, 'moge3base': 'MoGe-3 ViT-L base (refine_steps=0)'}.get(model, 'MoGe-2 ViT-B'), 'slide': slide, 'beta': float(beta), 'skyAtInfinity': bool(beta == 0), 'pn': PN, 'outer': outer, 'inner': 1e-4, 'D_ref': float(D_ref), 'hfovDeg': float(np.degrees(hfov)), 'vfovDeg': float(np.degrees(vfov)),
+    p = {'depthSource': depth_src, 'model': {'moge3': 'MoGe-3 ViT-L, refine_steps=%d (CPU sparse ops)' % refine, 'moge3base': 'MoGe-3 ViT-L base (refine_steps=0)'}.get(model, 'MoGe-2 ViT-B'), 'slide': slide, 'beta': float(beta), 'skyAtInfinity': bool(beta == 0), 'pn': pn, 'outer': outer, 'inner': inner, 'D_ref': float(D_ref), 'D_eye': float(D_eye), 'eye': eye, 'pop': pop, 'style': style, 'hfovDeg': float(np.degrees(hfov)), 'vfovDeg': float(np.degrees(vfov)),
          'Z_near_m': float(Z_near), 'Z_far_m': float(Z_near * (1 + outer / D_ref)), 'skyFraction': float(1 - valid.mean()), 'size': [W, H],
          'layerWH': [layerW, layerH], 'maskFixes': fixes, 'secs': round(time.time() - t0, 1)}
     json.dump(p, open(prefix + '_tw.json', 'w'), indent=1); print(json.dumps(p))
@@ -181,4 +206,6 @@ if __name__ == '__main__':
     rf = int(a[a.index('--refine') + 1]) if '--refine' in a else 3
     sk = a[a.index('--sky') + 1] if '--sky' in a else 'da3'
     ds = a[a.index('--depth') + 1] if '--depth' in a else 'moge'
-    main(a[0], a[1], sl, md, rf, sk, ds)
+    st = a[a.index('--style') + 1] if '--style' in a else 'truewindow'
+    ey = float(a[a.index('--eye') + 1]) if '--eye' in a else None; po = float(a[a.index('--pop') + 1]) if '--pop' in a else None
+    main(a[0], a[1], sl, md, rf, sk, ds, st, ey, po)
